@@ -74,3 +74,19 @@ caratToRange = \case
   Three 0 0 n -> Eq (0, 0, n)
   Three 0 n m -> And (Geq (0, n, m)) (Lt (0, n + 1, 0))
   Three n m o -> And (Geq (n, m, o)) (Lt (n+1, 0, 0))
+
+-- | Translates two hyphenated wildcards to an actual range.
+-- Ex: 1.2.3 - 2.3.4 := >=1.2.3 <=2.3.4
+-- Ex: 1.2 - 2.3.4 := >=1.2.0 <=2.3.4
+-- Ex: 1.2.3 - 2 := >=1.2.3 <3.0.0
+hyphenatedRange :: Wildcard -> Wildcard -> SemVerRange
+hyphenatedRange wc1 wc2 = And sv1 sv2 where
+  sv1 = case wc1 of Any -> Geq (0, 0, 0)
+                    One n -> Geq (n, 0, 0)
+                    Two n m -> Geq (n, m, 0)
+                    Three n m o -> Geq (n, m, o)
+  sv2 = case wc2 of Any -> Geq (0, 0, 0) -- Refers to "any version"
+                    One n -> Lt (n+1, 0, 0)
+                    Two n m -> Lt (n, m + 1, 0)
+                    Three n m o -> Leq (n, m, o)
+

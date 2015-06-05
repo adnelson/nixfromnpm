@@ -60,27 +60,9 @@ pJoinedSemVerRange = do
       "||" -> Or first <$> (sym "||" *> pJoinedSemVerRange)
       _ -> And first <$> pJoinedSemVerRange
 
--- | Translates a hyphenated range to an actual range.
--- Ex: 1.2.3 - 2.3.4 := >=1.2.3 <=2.3.4
--- Ex: 1.2 - 2.3.4 := >=1.2.0 <=2.3.4
--- Ex: 1.2.3 - 2 := >=1.2.3 <3.0.0
+-- | Parses a hyphenated range.
 pHyphen :: Parser SemVerRange
-pHyphen = do
-  wc1 <- pWildCard
-  sym "-"
-  wc2 <- pWildCard
-  let sv1 = case wc1 of
-              Any -> Geq (0, 0, 0)
-              One n -> Geq (n, 0, 0)
-              Two n m -> Geq (n, m, 0)
-              Three n m o -> Geq (n, m, o)
-  let sv2 = case wc2 of
-              Any -> Geq (0, 0, 0) -- Refers to "any version"
-              One n -> Lt (n+1, 0, 0)
-              Two n m -> Lt (n, m + 1, 0)
-              Three n m o -> Leq (n, m, o)
-  return $ And sv1 sv2
-
+pHyphen = hyphenatedRange <$> pWildCard <*> (sym "-" *> pWildCard)
 
 -- | Parses a "wildcard" (which is a possibly partial semantic version).
 pWildCard :: Parser Wildcard
@@ -102,4 +84,4 @@ pCaratRange :: Parser Wildcard
 pCaratRange = sym "^" *> pWildCard
 
 pSemVerRange :: Parser SemVerRange
-pSemVerRange = pJoinedSemVerRange <|> pHyphen
+pSemVerRange = try pHyphen <|> pJoinedSemVerRange
