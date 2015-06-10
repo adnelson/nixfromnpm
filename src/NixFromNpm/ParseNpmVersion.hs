@@ -13,12 +13,14 @@ import NixFromNpm.Common hiding (try)
 import NixFromNpm.SemVer
 import NixFromNpm.ParseSemVer
 
+data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
+
 data NpmVersionRange
   = SemVerRange SemVerRange
   | Latest -- latest stable version
   | Unstable -- latest unstable version
   | NpmUri URI
-  | GithubId Name Name
+  | GitId GitSource Name Name
   | LocalPath FilePath
   deriving (Show, Eq)
 
@@ -29,16 +31,29 @@ pLatestUnstable = choice (map sstring ["latest", "unstable"]) >>= \case
 
 pUri :: Parser NpmVersionRange
 pUri = try $ fmap NpmUri $ do
-  parseAbsoluteURI <$> many anyChar >>= \case
+  parseURI <$> many anyChar >>= \case
     Nothing -> unexpected "Not a valid URI"
-    Just uri -> return uri
+    Just uri -> case uriScheme uri of
+      "git:" -> return uri
+      "http:" -> return uri
+      "https:" -> return uri
+      scheme -> unexpected ("Unknown URI scheme " <> scheme)
 
-pGithubId :: Parser NpmVersionRange
-pGithubId = do
-  account <- many1 $ noneOf "/"
+pGitId :: Parser NpmVersionRange
+pGitId = do
+  let sources = choice $ map sstring ["github", "gitlab", "gist",
+                                      "bitbucket"]
+  source <- optionMaybe sources >>= \case
+    Just "github" -> return Github
+    Just "gitlab" -> return GitLab
+    Just "bitbucket" -> return Bitbucket
+    Just "gist" -> return Gist
+    Nothing -> return Github
+  account <- many1 $ noneOf ":/"
   char '/'
   repo <- many1 anyChar
-  return $ GithubId (pack account) (pack repo)
+  let urlBase = fromJust (parseURI "https://github.com/")
+  return $ GitId source (pack account) (pack repo)
 
 pLocalPath :: Parser NpmVersionRange
 pLocalPath = LocalPath . fromText . pack <$> do
@@ -56,7 +71,7 @@ pNpmVersionRange :: Parser NpmVersionRange
 pNpmVersionRange = choice [pEmptyString,
                            SemVerRange <$> pSemVerRange,
                            pLatestUnstable, pUri,
-                           pGithubId, pLocalPath]
+                           pGitId, pLocalPath]
 
 parseNpmVersionRange :: Text -> Either ParseError NpmVersionRange
 parseNpmVersionRange = parse pNpmVersionRange

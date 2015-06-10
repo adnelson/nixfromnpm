@@ -156,15 +156,25 @@ bestMatchFromRecord range rec = do
   case filter (\(k, _) -> isRight k) pairs of
     [] -> Left "No correctly-formatted versions strings found"
     okPairs -> do
-      -- Filter to the ones which satisfy the range.
+      -- Filter to the ones which satisfy the range, and which are not
+      -- currently being resolved.
       let pairs' = map (\(Right k, v) -> (k, v)) okPairs
       case filter (matches range . fst) pairs' of
         [] -> Left "No versions satisfy given range"
         matches -> Right $ L.maximumBy (compare `on` fst) matches
 
+fetchGit = undefined
+fetchHttp = undefined
+fetchHttps = undefined
+
 resolveNpmVersionRange :: Name -> NpmVersionRange -> MyStateIO SemVer
 resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDepCached name svr
+  NpmUri uri -> case uriScheme uri of
+    "git:" -> fetchGit uri
+    "http:" -> fetchHttp uri
+    "https:" -> fetchHttps uri
+    scheme -> cerror ["Invalid uri scheme ", scheme]
   vr -> cerror ["Don't know how to resolve dependency '", show vr, "'"]
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
@@ -190,39 +200,39 @@ resolveDep name range = do
   let oops err = cerror ["When resolving dependency ", unpack name, " (",
                          show range, "): ", err]
   PackageInfo versions <- getPackageInfoCached name
+  current <- gets currentlyResolving
   case bestMatchFromRecord range versions of
     Left err -> oops err
     Right (version, versionInfo) -> do
       putStrsLn ["Resolving version ", renderSV version]
       HS.member (name, version) <$> gets currentlyResolving >>= \case
-        True -> oops "cycle detected"
-        False -> return ()
-      let recurOn deptype deps = fmap H.fromList $ do
-            let depList = H.toList $ deps versionInfo
-            putStrsLn ["Found ", deptype, ": ", pack (show depList)]
-            forM depList $ \(depName, depRange) -> do
-              putStrsLn ["Resolving ", name, " dependency ", depName]
-              depVersion <- resolveNpmVersionRange depName depRange
-              return (depName, depVersion)
-      -- We need to recur into the package's dependencies.
-      -- This leads to a potential for cycles: if we attempt to download
-      -- the same package at the same version twice, then we will wind up
-      -- in an infinite loop. So we keep track of packages we're currently
-      -- resolving so that we can be smart about loops.
-      startResolving name version
-      deps <- recurOn "Dependencies" viDependencies
-      --devDeps <- recurOn "Dev dependencies" viDevDependencies
-      finishResolving name version
-      let rpkg = ResolvedPkg {
-            rpName = name,
-            rpVersion = version,
-            rpDistInfo = viDist versionInfo,
-            rpDependencies = deps,
-            rpDevDependencies = mempty
-          }
-      -- Store this version's dist info
-      addResolvedPkg name version rpkg
-      return version
+        True -> do putStrsLn ["Warning: cycle detected"]
+                   return version
+        False -> do
+          let recurOn deptype deps = fmap H.fromList $ do
+                let depList = H.toList $ deps versionInfo
+                putStrsLn ["Found ", deptype, ": ", pack (show depList)]
+                forM depList $ \(depName, depRange) -> do
+                  putStrsLn ["Resolving ", name, " dependency ", depName]
+                  depVersion <- resolveNpmVersionRange depName depRange
+                  return (depName, depVersion)
+          -- We need to recur into the package's dependencies.
+          -- To prevent the cycles, we store which packages we're currently
+          -- resolving.
+          startResolving name version
+          deps <- recurOn "Dependencies" viDependencies
+          devDeps <- recurOn "Dev dependencies" viDevDependencies
+          finishResolving name version
+          let rpkg = ResolvedPkg {
+                rpName = name,
+                rpVersion = version,
+                rpDistInfo = viDist versionInfo,
+                rpDependencies = deps,
+                rpDevDependencies = mempty
+              }
+          -- Store this version's dist info
+          addResolvedPkg name version rpkg
+          return version
 
 startState :: String -> MyState
 startState uriStr = case parseURI uriStr of

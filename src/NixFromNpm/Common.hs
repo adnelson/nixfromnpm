@@ -40,7 +40,7 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
                                    evalState, evalStateT)
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
 import Control.Monad.Identity (Identity(..))
-import Control.Applicative hiding (empty)
+import Control.Applicative hiding (empty, optional)
 import Data.Char (isDigit)
 import Data.Default
 import Data.HashMap.Strict (HashMap, (!))
@@ -91,6 +91,8 @@ slash :: URI -> Text -> URI
 slash uri txt = case parseRelativeReference (unpack txt) of
   Nothing -> error ("Invalid appending URI: " <> show txt)
   Just uri' -> uri' `relativeTo` uri
+
+infixl 6 `slash`
 
 putStrsLn :: MonadIO m => [Text] -> m ()
 putStrsLn = putStrLn . concat
