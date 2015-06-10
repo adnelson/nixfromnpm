@@ -1,9 +1,17 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module SemVer where
+module NixFromNpm.SemVer where
 
 import ClassyPrelude hiding (try)
+import qualified Prelude as P
+import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Aeson.Parser
+import Data.Aeson
+import Data.Aeson.Types (typeMismatch)
+
+import NixFromNpm.Common
 
 type SemVer = (Int, Int, Int)
 
@@ -23,8 +31,23 @@ data SemVerRange
   | Leq SemVer
   | And SemVerRange SemVerRange
   | Or SemVerRange SemVerRange
-  deriving (Show, Eq)
+  deriving (Eq)
 
+renderSV :: SemVer -> Text
+renderSV (x, y, z) = pack (renderSV' (x, y, z))
+
+renderSV' :: SemVer -> String
+renderSV' (x, y, z) = show x <> "." <> show y <> "." <> show z
+
+instance Show SemVerRange where
+  show = \case
+    Eq sv -> "=" <> renderSV' sv
+    Gt sv -> ">" <> renderSV' sv
+    Lt sv -> "<" <> renderSV' sv
+    Geq sv -> ">=" <> renderSV' sv
+    Leq sv -> "<=" <> renderSV' sv
+    And svr1 svr2 -> show svr1 <> " " <> show svr2
+    Or svr1 svr2 -> show svr1 <> " || " <> show svr2
 
 -- | Returns whether a given semantic version matches a range.
 matches :: SemVerRange -> SemVer -> Bool
@@ -37,13 +60,18 @@ matches range ver = case range of
   And sv1 sv2 -> matches sv1 ver && matches sv2 ver
   Or sv1 sv2 -> matches sv1 ver || matches sv2 ver
 
+-- | Gets the highest-matching semver in a range.
+bestMatch :: SemVerRange -> [SemVer] -> Either String SemVer
+bestMatch range vs = case filter (matches range) vs of
+  [] -> Left "No matching versions"
+  vs -> Right $ P.maximum vs
+
 -- | Fills in zeros in a wildcard.
 wildcardToSemver :: Wildcard -> SemVer
 wildcardToSemver Any = (0, 0, 0)
 wildcardToSemver (One n) = (n, 0, 0)
 wildcardToSemver (Two n m) = (n, m, 0)
 wildcardToSemver (Three n m o) = (n, m, o)
-
 
 -- | Translates a wildcard (partially specified version) to a range.
 -- Ex: 2 := >=2.0.0 <3.0.0
@@ -63,7 +91,6 @@ tildeToRange = \case
   One n -> tildeToRange (Three n 0 0)
   Two n m -> tildeToRange (Three n m 0)
   Three n m o -> And (Geq (n, m, o)) (Lt (n, m + 1, 0))
-
 
 -- | Translates a ^wildcard to a range.
 -- Ex: ^1.2.x := >=1.2.0 <2.0.0
@@ -89,4 +116,3 @@ hyphenatedRange wc1 wc2 = And sv1 sv2 where
                     One n -> Lt (n+1, 0, 0)
                     Two n m -> Lt (n, m + 1, 0)
                     Three n m o -> Leq (n, m, o)
-
