@@ -27,8 +27,9 @@ import qualified Text.Parsec as Parsec
 
 import NixFromNpm.Common
 import NixFromNpm.SemVer
-import NixFromNpm.ParseSemVer hiding (Parser)
-import NixFromNpm.ParseNpmVersion hiding (Parser)
+import NixFromNpm.Parsers.Common hiding (Parser, Error)
+import NixFromNpm.Parsers.SemVer
+import NixFromNpm.Parsers.NpmVersion
 --------------------------------------------------------------------------
 
 newtype PackageInfo = PackageInfo {

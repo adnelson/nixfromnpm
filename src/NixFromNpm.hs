@@ -1,11 +1,16 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 module NixFromNpm (module NixFromNpm.Common,
                    module NixFromNpm.SemVer,
-                   module NixFromNpm.ParseSemVer,
+                   module NixFromNpm.Parsers.Common,
+                   module NixFromNpm.Parsers.SemVer,
+                   module NixFromNpm.Parsers.NpmVersion,
+                   module NixFromNpm.Parsers.Nix,
                    module NixFromNpm.NpmLookup) where
 
 import NixFromNpm.Common
 import NixFromNpm.SemVer
-import NixFromNpm.ParseSemVer
-import NixFromNpm.ParseNpmVersion
+import NixFromNpm.Parsers.Common (parse, parseFull)
+import NixFromNpm.Parsers.SemVer
+import NixFromNpm.Parsers.NpmVersion
+import NixFromNpm.Parsers.Nix hiding (Eq)
 import NixFromNpm.NpmLookup

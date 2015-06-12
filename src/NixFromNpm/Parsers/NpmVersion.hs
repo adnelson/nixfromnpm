@@ -2,16 +2,14 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Tools for parsing NPM version range indicators.
-module NixFromNpm.ParseNpmVersion where
+module NixFromNpm.Parsers.NpmVersion where
 
-import Text.Parsec hiding (many, (<|>), spaces, parse)
-import qualified Text.Parsec as Parsec
 import Data.Aeson
 import qualified Data.Aeson.Types as DAT
 
-import NixFromNpm.Common hiding (try)
 import NixFromNpm.SemVer
-import NixFromNpm.ParseSemVer
+import NixFromNpm.Parsers.Common
+import NixFromNpm.Parsers.SemVer
 
 data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
 

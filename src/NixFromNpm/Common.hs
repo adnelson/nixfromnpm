@@ -24,7 +24,8 @@ module NixFromNpm.Common (
     module GHC.Exts,
     module Filesystem.Path.CurrentOS,
     module Network.URI,
-    Name, Record, tuple, tuple3, fromRight, cerror, uriToText, slash,
+    Name, Record,
+    tuple, tuple3, fromRight, cerror, uriToText, slash,
     putStrsLn
   ) where
 
