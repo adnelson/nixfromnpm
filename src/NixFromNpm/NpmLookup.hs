@@ -116,7 +116,7 @@ resolveNpmVersionRange name range = case range of
   NpmUri uri -> case uriScheme uri of
     "git:" -> fetchGit uri
     "http:" -> fetchHttp uri
-    "https:" -> fetchHttps uri
+    "https:" -> fetchHttp uri
     scheme -> cerror ["Invalid uri scheme ", scheme]
   vr -> cerror ["Don't know how to resolve dependency '", show vr, "'"]
 
