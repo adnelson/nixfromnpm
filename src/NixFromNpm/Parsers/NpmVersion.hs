@@ -10,17 +10,7 @@ import qualified Data.Aeson.Types as DAT
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.Common
 import NixFromNpm.Parsers.SemVer
-
-data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
-
-data NpmVersionRange
-  = SemVerRange SemVerRange
-  | Latest -- latest stable version
-  | Unstable -- latest unstable version
-  | NpmUri URI
-  | GitId GitSource Name Name
-  | LocalPath FilePath
-  deriving (Show, Eq)
+import NixFromNpm.NpmVersion
 
 pLatestUnstable :: Parser NpmVersionRange
 pLatestUnstable = choice (map sstring ["latest", "unstable"]) >>= \case
