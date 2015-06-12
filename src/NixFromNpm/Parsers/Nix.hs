@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeFamilies #-}
 module NixFromNpm.Parsers.Nix where
 
 import qualified Prelude as P
@@ -76,25 +77,6 @@ operators = S.fromList ["+", "-", "*", "/", "++", "&&", "||", "//", "?",
 -- | Characters found in operators.
 opChars :: [Char]
 opChars = "+-*/&|?=><!$"
-
--- | Parses a string constant, without interpolation.
-pBasicString :: Parser Text
-pBasicString = lexeme $ char '"' >> loop []
-  where
-    loop acc = do
-      anyChar >>= \case
-        '"' -> return $ pack $ P.reverse acc
-        '\\' -> anyChar >>= \case
-          'n' -> escape '\n'
-          'r' -> escape '\r'
-          't' -> escape '\r'
-          'b' -> escape '\r'
-          '\\' -> escape '\\'
-          '"' -> escape '"'
-          c -> unexpected $ "Unrecognized escape sequence: \\" <> [c]
-        c -> escape c
-      <|> return (pack $ P.reverse acc)
-      where escape c = loop (c : acc)
 
 addLeft :: Text -> NixString -> NixString
 addLeft txt (Plain p) = Plain (txt <> p)
