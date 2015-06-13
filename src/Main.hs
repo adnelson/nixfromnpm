@@ -5,11 +5,10 @@
 module Main where
 
 ----------------------------------------------------------------------------
-import ClassyPrelude
+import ClassyPrelude hiding (FilePath)
 import qualified Prelude as P
 
 import System.IO.Streams (InputStream, OutputStream)
-import System.IO.Streams
 import System.IO.Streams.Attoparsec
 import System.IO.Streams.HTTP
 import Data.Aeson.Parser

@@ -5,7 +5,6 @@
 module NixFromNpm.NpmLookup where
 
 --------------------------------------------------------------------------
-import ClassyPrelude
 import qualified Prelude as P
 import qualified Data.List as L
 import Data.Text (Text)
@@ -16,7 +15,7 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 
 import System.IO.Streams (InputStream, OutputStream)
-import System.IO.Streams hiding (mapM, map, filter)
+import System.IO.Streams hiding (mapM, map, filter, lines)
 import System.IO.Streams.Attoparsec
 import System.IO.Streams.HTTP
 import qualified Data.ByteString.Lazy.Char8 as BL8
@@ -24,11 +23,12 @@ import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
+import Shelly hiding (get)
 
 import NixFromNpm.Common
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
-import NixFromNpm.Parsers.Common hiding (Parser, Error)
+import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
@@ -59,7 +59,7 @@ getPackageInfo registryUri pkgName = do
   let uri = registryUri `slash` pkgName
   putStr ("Querying NPM for package " <> pkgName <> "...")
   j <- withOpenSSL $ do
-    req <- parseUrl $ uriToString id uri ""
+    req <- parseUrl $ uriToString uri
     withManager (opensslManagerSettings context) $ \mgr ->
       withHTTP req mgr $ \response -> do
         let body = responseBody response
@@ -96,19 +96,48 @@ bestMatchFromRecord range rec = do
 
 fetchGit = undefined
 
+silentShell :: MonadIO m => Sh a -> m a
+silentShell = shelly . silently
+
+-- | Returns the SHA1 hash of the result of fetching the URI.
+nixPrefetchSha1 :: MonadIO m => URI -> m (Text, FilePath)
+nixPrefetchSha1 uri = silentShell $ do
+  setenv "PRINT_PATH" "1"
+  out <- run "nix-prefetch-url" ["--type", "sha1", uriToText uri]
+  if length (lines out) /= 2
+  then error "Expected two lines from nix-prefetch-url"
+  else do
+    let [hashBase32, path] = T.lines out
+    hash <- run "nix-hash" ["--type", "sha1", "--to-base16", hashBase32]
+    return (T.strip hash, fromString $ unpack path)
+
+extractTempdir :: MonadIO m => FilePath -> m Text
+extractTempdir tarballPath = silentShell $ do
+  tmpdir <- T.strip <$> run "mktemp" ["-d", "/tmp/nixfromnpm-XXXX"]
+  chdir (fromText tmpdir) $ do
+    putStrLn $ "Extracting " <> pathToText tarballPath <> " to " <> tmpdir
+    run_ "tar" ["-xf", pathToText tarballPath]
+  return tmpdir
+
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
 fetchHttp :: URI -> MyStateIO SemVer
-fetchHttp = do
-  -- Download the address to a tempfile.
-  -- Compute the hash of the tarball.
+fetchHttp uri = do
+  -- Use nix-fetch to download and hash the tarball.
+  (hash, tarballPath) <- nixPrefetchSha1 uri
+  -- Create the DistInfo.
+  let dist = DistInfo {tiUrl = uriToText uri, tiShasum = hash}
   -- Extract the tarball to a temp directory.
-  -- Open the package.json file, and parse it as a VersionInfo (no dist).
-  -- Create a DistInfo using the URI and hash we computed.
-  -- Recur on the dependencies of the version info.
-  -- Store the resolved package object.
-  -- Get the version from the version info and return it.
-  undefined
+  tmpdir <- extractTempdir tarballPath
+  -- Parse the package.json as a VersionInfo (no dist).
+  pkjJson <- liftIO (BL8.readFile $ unpack tmpdir <> "/package/package.json")
+  case eitherDecode pkjJson :: Either String VersionInfo of
+    Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
+    Right infoNoDist -> do
+      putStrLn $ "Removing " <> tmpdir
+      silentShell $ run_ "rm" ["-r", tmpdir]
+      let info = infoNoDist {viDist = Just dist}
+      resolveVersionInfo info
 
 resolveNpmVersionRange :: Name -> NpmVersionRange -> MyStateIO SemVer
 resolveNpmVersionRange name range = case range of
@@ -137,6 +166,46 @@ finishResolving :: Name -> SemVer -> MyStateIO ()
 finishResolving name ver = modify $ \s ->
   s {currentlyResolving = HS.delete (name, ver) $ currentlyResolving s}
 
+resolveVersionInfo :: VersionInfo -> MyStateIO SemVer
+resolveVersionInfo versionInfo = do
+  let name = viName versionInfo
+      version = case parseSemVer $ viVersion versionInfo of
+        Left err -> cerror ["Invalid semver in versionInfo object ",
+                            unpack $ viVersion versionInfo,
+                            " Due to: ", show err]
+        Right v -> v
+  putStrsLn ["Resolving ", name, " version ", renderSV version]
+  HS.member (name, version) <$> gets currentlyResolving >>= \case
+    True -> do putStrsLn ["Warning: cycle detected"]
+               return version
+    False -> do
+      let recurOn deptype deps = fmap H.fromList $ do
+            let depList = H.toList $ deps versionInfo
+            putStrsLn ["Found ", deptype, ": ", pack (show depList)]
+            forM depList $ \(depName, depRange) -> do
+              putStrsLn ["Resolving ", name, " dependency ", depName]
+              depVersion <- resolveNpmVersionRange depName depRange
+              return (depName, depVersion)
+      -- We need to recur into the package's dependencies.
+      -- To prevent the cycles, we store which packages we're currently
+      -- resolving.
+      startResolving name version
+      deps <- recurOn "Dependencies" viDependencies
+      devDeps <- recurOn "Dev dependencies" viDevDependencies
+      finishResolving name version
+      let dist = case viDist versionInfo of
+            Nothing -> error "Version information did not include dist"
+            Just d -> d
+      -- Store this version's info.
+      addResolvedPkg name version $ ResolvedPkg {
+          rpName = name,
+          rpVersion = version,
+          rpDistInfo = dist,
+          rpDependencies = deps,
+          rpDevDependencies = devDeps
+        }
+      return version
+
 -- | Resolves a dependency given a name and version range.
 resolveDep :: Name -> SemVerRange -> MyStateIO SemVer
 resolveDep name range = do
@@ -146,35 +215,8 @@ resolveDep name range = do
   current <- gets currentlyResolving
   case bestMatchFromRecord range versions of
     Left err -> oops err
-    Right (version, versionInfo) -> do
-      putStrsLn ["Resolving version ", renderSV version]
-      HS.member (name, version) <$> gets currentlyResolving >>= \case
-        True -> do putStrsLn ["Warning: cycle detected"]
-                   return version
-        False -> do
-          let recurOn deptype deps = fmap H.fromList $ do
-                let depList = H.toList $ deps versionInfo
-                putStrsLn ["Found ", deptype, ": ", pack (show depList)]
-                forM depList $ \(depName, depRange) -> do
-                  putStrsLn ["Resolving ", name, " dependency ", depName]
-                  depVersion <- resolveNpmVersionRange depName depRange
-                  return (depName, depVersion)
-          -- We need to recur into the package's dependencies.
-          -- To prevent the cycles, we store which packages we're currently
-          -- resolving.
-          startResolving name version
-          deps <- recurOn "Dependencies" viDependencies
-          devDeps <- recurOn "Dev dependencies" viDevDependencies
-          finishResolving name version
-          -- Store this version's info.
-          addResolvedPkg name version $ ResolvedPkg {
-              rpName = name,
-              rpVersion = version,
-              rpDistInfo = viDist versionInfo,
-              rpDependencies = deps,
-              rpDevDependencies = devDeps
-            }
-          return version
+    Right (version, versionInfo) -> resolveVersionInfo versionInfo
+
 
 startState :: String -> MyState
 startState uriStr = case parseURI uriStr of
@@ -185,6 +227,8 @@ startState uriStr = case parseURI uriStr of
       pkgInfos = mempty,
       currentlyResolving = mempty
     }
+
+runIt x = runStateT x $ startState "https://registry.npmjs.org/"
 
 getPkg :: Name -> IO (Record (HashMap SemVer ResolvedPkg))
 getPkg name = do

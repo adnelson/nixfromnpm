@@ -19,7 +19,7 @@ newtype PackageInfo = PackageInfo {
 data VersionInfo = VersionInfo {
   viDependencies :: Record NpmVersionRange,
   viDevDependencies :: Record NpmVersionRange,
-  viDist :: DistInfo,
+  viDist :: Maybe DistInfo, -- not present if in a package.json file.
   viMain :: Maybe Text,
   viName :: Text,
   viVersion :: Text
@@ -43,7 +43,7 @@ instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
     dependencies <- getDict "dependencies" o
     devDependencies <- getDict "devDependencies" o
-    dist <- o .: "dist"
+    dist <- o .:? "dist"
     name <- o .: "name"
     main <- o .:? "main"
     version <- o .: "version"

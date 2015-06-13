@@ -21,12 +21,14 @@ module NixFromNpm.Common (
     module Data.HashMap.Strict,
     module Data.Either,
     module Data.Maybe,
+    module Data.String.Utils,
     module GHC.Exts,
     module Filesystem.Path.CurrentOS,
     module Network.URI,
+    module GHC.IO.Exception,
     Name, Record,
-    tuple, tuple3, fromRight, cerror, uriToText, slash,
-    putStrsLn
+    tuple, tuple3, fromRight, cerror, uriToText, uriToString, slash,
+    putStrsLn, pathToText
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath)
@@ -48,11 +50,14 @@ import Data.HashMap.Strict (HashMap, (!))
 import qualified Data.HashMap.Strict as H
 import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
+import Data.String.Utils hiding (join)
 import qualified Data.Text as T
-import Filesystem.Path.CurrentOS (FilePath, fromText)
+import Filesystem.Path.CurrentOS (FilePath, fromText, toText)
 import GHC.Exts (IsList)
+import GHC.IO.Exception
 import Network.URI (URI(..), parseURI, parseAbsoluteURI,
-                    parseRelativeReference, uriToString, relativeTo)
+                    parseRelativeReference, relativeTo)
+import qualified Network.URI as NU
 
 -- | Indicates that the text is some identifier.
 type Name = Text
@@ -85,7 +90,10 @@ fromRight (Right x) = x
 fromRight (Left err) = error "Expected `Right` value"
 
 uriToText :: URI -> Text
-uriToText uri = pack $ uriToString id uri ""
+uriToText = pack . uriToString
+
+uriToString :: URI -> String
+uriToString uri = NU.uriToString id uri ""
 
 -- | Appends text to URI with a slash. Ex: foo.com `slash` bar == foo.com/bar.
 slash :: URI -> Text -> URI
@@ -97,3 +105,8 @@ infixl 6 `slash`
 
 putStrsLn :: MonadIO m => [Text] -> m ()
 putStrsLn = putStrLn . concat
+
+pathToText :: FilePath -> Text
+pathToText pth = case toText pth of
+  Left p -> p
+  Right p -> p
