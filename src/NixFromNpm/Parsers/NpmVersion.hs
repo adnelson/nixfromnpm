@@ -28,10 +28,10 @@ pUri = try $ fmap NpmUri $ do
       scheme -> unexpected ("Unknown URI scheme " <> scheme)
 
 pGitId :: Parser NpmVersionRange
-pGitId = do
-  let sources = choice $ map sstring ["github", "gitlab", "gist",
-                                      "bitbucket"]
-  source <- optionMaybe sources >>= \case
+pGitId = try $ do
+  let sources = choice $ map (try . sstring) ["github", "gitlab", "gist",
+                                              "bitbucket"]
+  source <- optionMaybe (sources <* char ':') >>= \case
     Just "github" -> return Github
     Just "gitlab" -> return GitLab
     Just "bitbucket" -> return Bitbucket
@@ -39,9 +39,9 @@ pGitId = do
     Nothing -> return Github
   account <- many1 $ noneOf ":/"
   char '/'
-  repo <- many1 anyChar
-  let urlBase = fromJust (parseURI "https://github.com/")
-  return $ GitId source (pack account) (pack repo)
+  repo <- many1 $ noneOf "#"
+  ref <- optionMaybe $ char '#' *> (pack <$> many1 anyChar)
+  return $ GitId source (pack account) (pack repo) ref
 
 pLocalPath :: Parser NpmVersionRange
 pLocalPath = LocalPath . fromText . pack <$> do

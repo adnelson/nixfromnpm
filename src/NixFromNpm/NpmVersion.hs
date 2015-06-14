@@ -13,6 +13,6 @@ data NpmVersionRange
   | Latest -- latest stable version
   | Unstable -- latest unstable version
   | NpmUri URI
-  | GitId GitSource Name Name
+  | GitId GitSource Name Name (Maybe Name)
   | LocalPath FilePath
   deriving (Show, Eq)

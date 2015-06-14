@@ -29,8 +29,8 @@ executable nixfromnpm
                      , http-client-streams
                      , aeson
                      , data-default
-                     , process
                      , shelly
+                     , github
                      , MissingH
   hs-source-dirs:      src
   default-language:    Haskell2010
@@ -52,8 +52,8 @@ Test-Suite spec
                      , http-client-streams
                      , aeson
                      , data-default
-                     , process
                      , shelly
                      , MissingH
+                     , github
                      , hspec
                      , hspec-expectations

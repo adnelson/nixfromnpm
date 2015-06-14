@@ -28,7 +28,7 @@ module NixFromNpm.Common (
     module GHC.IO.Exception,
     Name, Record,
     tuple, tuple3, fromRight, cerror, uriToText, uriToString, slash,
-    putStrsLn, pathToText
+    putStrsLn, pathToText, putStrs
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath)
@@ -105,6 +105,9 @@ infixl 6 `slash`
 
 putStrsLn :: MonadIO m => [Text] -> m ()
 putStrsLn = putStrLn . concat
+
+putStrs :: MonadIO m => [Text] -> m ()
+putStrs = putStr . concat
 
 pathToText :: FilePath -> Text
 pathToText pth = case toText pth of

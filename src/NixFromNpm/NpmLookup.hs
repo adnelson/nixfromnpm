@@ -9,6 +9,7 @@ import qualified Prelude as P
 import qualified Data.List as L
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 import Data.HashSet (HashSet)
@@ -34,17 +35,18 @@ import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 --------------------------------------------------------------------------
 
-data MyState = MyState {
+data NpmFetcherState = NpmFetcherState {
   registry :: URI,
+  githubAuthToken :: Maybe Text,
   resolved :: Record (HashMap SemVer ResolvedPkg),
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer)
 } deriving (Show, Eq)
 
-type MyStateIO = StateT MyState IO
+type NpmFetcher = StateT NpmFetcherState IO
 
-addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> MyStateIO ()
+addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version rpkg = do
   pkgSet <- H.lookupDefault mempty name <$> gets resolved
   modify $ \s -> s {
@@ -70,7 +72,7 @@ getPackageInfo registryUri pkgName = do
     Success s -> putStrLn "OK" >> return s
 
 -- | Same as getPackageInfo, but caches results for speed.
-getPackageInfoCached :: Name -> MyStateIO PackageInfo
+getPackageInfoCached :: Name -> NpmFetcher PackageInfo
 getPackageInfoCached name = lookup name . pkgInfos <$> get >>= \case
   Just info -> return info
   Nothing -> do
@@ -94,79 +96,140 @@ bestMatchFromRecord range rec = do
         [] -> Left "No versions satisfy given range"
         matches -> Right $ L.maximumBy (compare `on` fst) matches
 
-fetchGit = undefined
-
 silentShell :: MonadIO m => Sh a -> m a
 silentShell = shelly . silently
 
--- | Returns the SHA1 hash of the result of fetching the URI.
-nixPrefetchSha1 :: MonadIO m => URI -> m (Text, FilePath)
+-- | Returns the SHA1 hash of the result of fetching the URI, and the path
+-- in which the tarball is stored.
+nixPrefetchSha1 :: URI -> NpmFetcher (Text, FilePath)
 nixPrefetchSha1 uri = silentShell $ do
-  setenv "PRINT_PATH" "1"
-  out <- run "nix-prefetch-url" ["--type", "sha1", uriToText uri]
-  if length (lines out) /= 2
+  hashAndPath <- sub $ setenv "PRINT_PATH" "1" >> do
+    run "nix-prefetch-url" ["--type", "sha1", uriToText uri]
+  if length (lines hashAndPath) /= 2
   then error "Expected two lines from nix-prefetch-url"
   else do
-    let [hashBase32, path] = T.lines out
+    let [hashBase32, path] = lines hashAndPath
+    -- Convert the hash to base16, which is the format NPM uses.
     hash <- run "nix-hash" ["--type", "sha1", "--to-base16", hashBase32]
     return (T.strip hash, fromString $ unpack path)
 
-extractTempdir :: MonadIO m => FilePath -> m Text
-extractTempdir tarballPath = silentShell $ do
-  tmpdir <- T.strip <$> run "mktemp" ["-d", "/tmp/nixfromnpm-XXXX"]
-  chdir (fromText tmpdir) $ do
-    putStrLn $ "Extracting " <> pathToText tarballPath <> " to " <> tmpdir
+extractVersionInfo :: FilePath -> Maybe Text -> NpmFetcher VersionInfo
+extractVersionInfo tarballPath subpath = silentShell $ withTmpDir $ \dir -> do
+  chdir dir $ do
+    putStrsLn ["Extracting ", pathToText tarballPath, " to tempdir"]
     run_ "tar" ["-xf", pathToText tarballPath]
-  return tmpdir
+    let subpath' = maybe "" (<> "/") subpath <> "package.json"
+    pkJson <- readBinary $ fromString $ unpack subpath'
+    case eitherDecode $ BL8.fromChunks [pkJson] of
+      Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
+      Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
-fetchHttp :: URI -> MyStateIO SemVer
-fetchHttp uri = do
+fetchHttp :: Maybe Text -- | Subpath in which to find the package.json.
+          -> URI -- | The URI to fetch.
+          -> NpmFetcher SemVer -- | The version of the package at that URI.
+fetchHttp subpath uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- nixPrefetchSha1 uri
+  -- Extract the tarball to a temp directory and parse the package.json.
+  versionInfo <- extractVersionInfo tarballPath subpath
   -- Create the DistInfo.
   let dist = DistInfo {tiUrl = uriToText uri, tiShasum = hash}
-  -- Extract the tarball to a temp directory.
-  tmpdir <- extractTempdir tarballPath
-  -- Parse the package.json as a VersionInfo (no dist).
-  pkjJson <- liftIO (BL8.readFile $ unpack tmpdir <> "/package/package.json")
-  case eitherDecode pkjJson :: Either String VersionInfo of
-    Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
-    Right infoNoDist -> do
-      putStrLn $ "Removing " <> tmpdir
-      silentShell $ run_ "rm" ["-r", tmpdir]
-      let info = infoNoDist {viDist = Just dist}
-      resolveVersionInfo info
+  -- Add the dist information to the version info and resolve it.
+  resolveVersionInfo $ versionInfo {viDist = Just dist}
 
-resolveNpmVersionRange :: Name -> NpmVersionRange -> MyStateIO SemVer
+githubCurl :: Text -> NpmFetcher Value
+githubCurl uri = do
+  curlArgs <- gets githubAuthToken >>= \case
+    Nothing -> return []
+    Just token -> return ["-H", "Authorization: token " <> token]
+  jsonStr <- silentShell $ run "curl" $ curlArgs <> [uri]
+  case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
+    Left err -> cerror ["couldn't parse JSON from github: ", err]
+    Right info -> return info
+
+type RepoPath = String
+
+-- | Queries NPM for package information.
+getDefaultBranch :: RepoPath -- | Repo path
+                 -> NpmFetcher Name -- | The default branch
+getDefaultBranch repoPath = do
+  let rpath = pack repoPath
+  let uri = concat ["https://api.github.com/repos/", rpath]
+  putStrs ["Querying github for default branch of ", rpath]
+  githubCurl uri >>= \case
+    Object o -> case H.lookup "default_branch" o of
+      Just (String b) -> putStrLn "OK." >> return b
+      Nothing -> putStrLn "" >> error "No default branch, or not a string"
+    _ -> error "Expected an object back from github"
+
+getShaOfBranch :: RepoPath -- | Repo path
+               -> Name -- | Name of the branch to get
+               -> NpmFetcher Text -- | The hash of the default branch
+getShaOfBranch repoPath branchName = do
+  let rpath = pack repoPath
+  let uri = T.intercalate "/" ["https://api.github.com/repos", rpath,
+                               "branches", branchName]
+  putStrs ["Querying github for sha of ", rpath, "/", branchName]
+  githubCurl uri >>= \case
+    Object o -> case H.lookup "commit" o of
+      Just (Object o') -> case H.lookup "sha" o' of
+        Just (String sha) -> return sha
+        Nothing -> error "No sha in commit info"
+      Nothing -> error "No commit info"
+    _ -> error "Didn't get an object back"
+
+-- | Fetch a package from git.
+fetchGithub :: URI -> NpmFetcher SemVer
+fetchGithub uri = do
+  let repoPath = uriPath uri
+  hash <- case uriFragment uri of
+    -- if there isn't a ref or a tag, use the default branch.
+    "" -> getShaOfBranch repoPath =<< getDefaultBranch repoPath
+    -- otherwise, use that as a tag.
+    frag -> error "Can't yet fetch tags"
+  -- Use the hash to pull down a zip.
+  let uri = concat ["https://github.com/", repoPath, "/archive/",
+                    unpack hash, ".tar.gz"]
+  fetchHttp Nothing (fromJust $ parseURI uri)
+
+resolveNpmVersionRange :: Name -> NpmVersionRange -> NpmFetcher SemVer
 resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDepCached name svr
   NpmUri uri -> case uriScheme uri of
-    "git:" -> fetchGit uri
-    "http:" -> fetchHttp uri
-    "https:" -> fetchHttp uri
-    scheme -> cerror ["Invalid uri scheme ", scheme]
+    "git:" -> fetchGithub uri
+    "http:" -> fetchHttp (Just "package") uri
+    "https:" -> fetchHttp  (Just "package") uri
+    scheme -> cerror ["Unknown uri scheme ", scheme]
+  GitId src owner repo rev -> case src of
+    Github -> do
+      let frag = case rev of
+            Nothing -> ""
+            Just r -> "#" <> r
+      let uri = concat ["https://github.com/", owner, "/", repo, frag]
+      fetchGithub $ fromJust $ parseURI $ unpack uri
+    _ -> cerror ["Can't handle git source ", show src]
   vr -> cerror ["Don't know how to resolve dependency '", show vr, "'"]
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
-resolveDepCached :: Name -> SemVerRange -> MyStateIO SemVer
+resolveDepCached :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDepCached name range = H.lookup name <$> gets resolved >>= \case
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> resolveDep name range -- No matching versions, need to fetch.
     vs -> return $ L.maximum vs
   Nothing -> resolveDep name range
 
-startResolving :: Name -> SemVer -> MyStateIO ()
+startResolving :: Name -> SemVer -> NpmFetcher ()
 startResolving name ver = modify $ \s ->
   s {currentlyResolving = HS.insert (name, ver) $ currentlyResolving s}
 
-finishResolving :: Name -> SemVer -> MyStateIO ()
+finishResolving :: Name -> SemVer -> NpmFetcher ()
 finishResolving name ver = modify $ \s ->
   s {currentlyResolving = HS.delete (name, ver) $ currentlyResolving s}
 
-resolveVersionInfo :: VersionInfo -> MyStateIO SemVer
+resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
 resolveVersionInfo versionInfo = do
   let name = viName versionInfo
       version = case parseSemVer $ viVersion versionInfo of
@@ -207,7 +270,7 @@ resolveVersionInfo versionInfo = do
       return version
 
 -- | Resolves a dependency given a name and version range.
-resolveDep :: Name -> SemVerRange -> MyStateIO SemVer
+resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = do
   let oops err = cerror ["When resolving dependency ", unpack name, " (",
                          show range, "): ", err]
@@ -218,21 +281,34 @@ resolveDep name range = do
     Right (version, versionInfo) -> resolveVersionInfo versionInfo
 
 
-startState :: String -> MyState
-startState uriStr = case parseURI uriStr of
-  Nothing -> cerror ["Invalid URI: ", uriStr]
-  Just uri -> MyState {
+startState :: Text -> Maybe Text -> NpmFetcherState
+startState uriStr token = case parseURI $ unpack uriStr of
+  Nothing -> cerror ["Invalid URI: ", unpack uriStr]
+  Just uri -> NpmFetcherState {
       registry = uri,
+      githubAuthToken = token,
       resolved = mempty,
       pkgInfos = mempty,
       currentlyResolving = mempty
     }
 
-runIt x = runStateT x $ startState "https://registry.npmjs.org/"
+-- | Read NPM registry from env or use default.
+getRegistry :: MonadIO m => m Text
+getRegistry = do
+  let npmreg = "https://registry.npmjs.org/"
+  silentShell $ fromMaybe npmreg <$> get_env "NPM_REGISTRY"
+
+-- | Read github auth token from env or use none.
+getToken :: MonadIO m => m (Maybe Text)
+getToken = silentShell $ get_env "GITHUB_TOKEN"
+
+runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
+runIt x = do
+  state <- startState <$> getRegistry <*> getToken
+  runStateT x state
 
 getPkg :: Name -> IO (Record (HashMap SemVer ResolvedPkg))
 getPkg name = do
-  let npmreg = "https://registry.npmjs.org/"
-      range = Gt (0, 0, 0)
-  (_, finalState) <- runStateT (resolveDep name range) (startState npmreg)
+  let range = Gt (0, 0, 0)
+  (_, finalState) <- runIt (resolveDep name range)
   return (resolved finalState)
