@@ -71,7 +71,12 @@ pWildCard = try $ do
 
 -- | Parses a tilde range (~1.2.3).
 pTildeRange :: Parser Wildcard
-pTildeRange = sstring "~" *> pWildCard
+pTildeRange = do
+  sstring "~"
+  -- For some reason, including the following operators after
+  -- a tilde is valid, but seems to have no effect.
+  optional $ choice [try $ sstring ">=", sstring ">", sstring "="]
+  pWildCard
 
 -- | Parses a carat range (^1.2.3).
 pCaratRange :: Parser Wildcard

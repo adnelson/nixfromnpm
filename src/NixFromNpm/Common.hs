@@ -27,8 +27,8 @@ module NixFromNpm.Common (
     module Network.URI,
     module GHC.IO.Exception,
     Name, Record,
-    tuple, tuple3, fromRight, cerror, uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs
+    tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
+    putStrsLn, pathToText, putStrs, dropSuffix
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath)
@@ -52,7 +52,7 @@ import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
 import qualified Data.Text as T
-import Filesystem.Path.CurrentOS (FilePath, fromText, toText)
+import Filesystem.Path.CurrentOS (FilePath, fromText, toText, collapse)
 import GHC.Exts (IsList)
 import GHC.IO.Exception
 import Network.URI (URI(..), parseURI, parseAbsoluteURI,
@@ -85,6 +85,9 @@ alterKeys f mp = do
 cerror :: [String] -> a
 cerror = error . concat
 
+cerror' :: [Text] -> a
+cerror' = cerror . map unpack
+
 fromRight :: Either a b -> b
 fromRight (Right x) = x
 fromRight (Left err) = error "Expected `Right` value"
@@ -113,3 +116,8 @@ pathToText :: FilePath -> Text
 pathToText pth = case toText pth of
   Left p -> p
   Right p -> p
+
+dropSuffix :: String -> String -> String
+dropSuffix suffix s | s == suffix = ""
+dropSuffix suffix (c:cs) = c : dropSuffix suffix cs
+dropSuffix suffix "" = ""

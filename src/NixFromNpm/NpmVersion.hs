@@ -10,8 +10,7 @@ data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
 
 data NpmVersionRange
   = SemVerRange SemVerRange
-  | Latest -- latest stable version
-  | Unstable -- latest unstable version
+  | Tag Name
   | NpmUri URI
   | GitId GitSource Name Name (Maybe Name)
   | LocalPath FilePath

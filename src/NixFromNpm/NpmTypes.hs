@@ -1,10 +1,13 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module NixFromNpm.NpmTypes where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as H
 
 import NixFromNpm.Common
 import NixFromNpm.SemVer
@@ -12,8 +15,9 @@ import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.SemVer
 
-newtype PackageInfo = PackageInfo {
-  piVersions :: Record VersionInfo
+data PackageInfo = PackageInfo {
+  piVersions :: Record VersionInfo,
+  piTags :: Record Name
 } deriving (Show, Eq)
 
 data VersionInfo = VersionInfo {
@@ -22,6 +26,7 @@ data VersionInfo = VersionInfo {
   viDist :: Maybe DistInfo, -- not present if in a package.json file.
   viMain :: Maybe Text,
   viName :: Text,
+  viIsStable :: Bool,
   viVersion :: Text
 } deriving (Show, Eq)
 
@@ -47,13 +52,15 @@ instance FromJSON VersionInfo where
     name <- o .: "name"
     main <- o .:? "main"
     version <- o .: "version"
+    pubCfg :: HashMap Name Value <- getDict "publishConfig" o
     return $ VersionInfo {
       viDependencies = dependencies,
       viDevDependencies = devDependencies,
       viDist = dist,
       viMain = main,
       viName = name,
-      viVersion = version
+      viVersion = version,
+      viIsStable = H.lookup "tag" pubCfg /= Just "unstable"
     }
 
 instance FromJSON SemVerRange where
@@ -66,7 +73,8 @@ instance FromJSON SemVerRange where
 instance FromJSON PackageInfo where
   parseJSON = getObject "package info" >=> \o -> do
     vs <- getDict "versions" o
-    return $ PackageInfo vs
+    tags <- getDict "dist-tags" o
+    return $ PackageInfo vs tags
 
 instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do

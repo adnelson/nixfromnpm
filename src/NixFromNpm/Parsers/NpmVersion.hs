@@ -12,17 +12,14 @@ import NixFromNpm.Parsers.Common
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 
-pLatestUnstable :: Parser NpmVersionRange
-pLatestUnstable = choice (map sstring ["latest", "unstable"]) >>= \case
-  "latest" -> return Latest
-  "unstable" -> return Unstable
-
 pUri :: Parser NpmVersionRange
 pUri = try $ fmap NpmUri $ do
   parseURI <$> many anyChar >>= \case
     Nothing -> unexpected "Not a valid URI"
     Just uri -> case uriScheme uri of
       "git:" -> return uri
+      "git+http:" -> return uri
+      "git+https:" -> return uri
       "http:" -> return uri
       "https:" -> return uri
       scheme -> unexpected ("Unknown URI scheme " <> scheme)
@@ -55,11 +52,19 @@ pEmptyString = try $ do
     [] -> return $ SemVerRange $ Geq (0, 0, 0)
     _ -> unexpected "Not an empty string"
 
+pTag :: Parser NpmVersionRange
+pTag = do
+  filter (/= ' ') <$> many anyChar >>= \case
+    [] -> unexpected "empty string, not a tag"
+    tag -> return $ Tag $ pack tag
+
 pNpmVersionRange :: Parser NpmVersionRange
 pNpmVersionRange = choice [pEmptyString,
                            SemVerRange <$> pSemVerRange,
-                           pLatestUnstable, pUri,
-                           pGitId, pLocalPath]
+                           pUri,
+                           pGitId,
+                           pLocalPath,
+                           pTag]
 
 parseNpmVersionRange :: Text -> Either ParseError NpmVersionRange
 parseNpmVersionRange = parse pNpmVersionRange
@@ -68,6 +73,7 @@ instance FromJSON NpmVersionRange where
   parseJSON v = case v of
     String s -> case parseNpmVersionRange s of
       Left err -> DAT.typeMismatch
-                    ("valid NPM version (got " <> show v <> ")") v
+                    ("valid NPM version (got " <> show v <> ")"
+                     <> " Error: " <> show err) v
       Right range -> return range
     _ -> DAT.typeMismatch "string" v
