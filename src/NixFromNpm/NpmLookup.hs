@@ -43,7 +43,7 @@ data NpmFetcherState = NpmFetcherState {
   getDevDeps :: Bool
 } deriving (Show, Eq)
 
-type NpmFetcher = ExceptT ErrorList (StateT NpmFetcherState IO)
+type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
 
 indent :: Text -> NpmFetcher Text
 indent txt = do
@@ -69,15 +69,15 @@ addResolvedPkg name version rpkg = do
     resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
     }
 
-
+curl :: [Text] -> NpmFetcher Text
+curl args = shell $ print_stdout False $ run "curl" args
 
 -- | Queries NPM for package information.
 _getPackageInfo :: URI -> Name -> NpmFetcher PackageInfo
 _getPackageInfo registryUri pkgName = do
   let uri = uriToText $ registryUri `slash` pkgName
   putStrsLn ["Querying NPM for package ", pkgName, "..."]
-  putStrsLn ["Curling uri: ", uri]
-  jsonStr <- silentShell $ run "curl" [uri]
+  jsonStr <- curl [uri]
   case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
     Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
     Right info -> return info
@@ -86,7 +86,7 @@ _getPackageInfo registryUri pkgName = do
 getPackageInfo :: Name -> NpmFetcher PackageInfo
 getPackageInfo name = lookup name . pkgInfos <$> get >>= \case
   Just info -> return info
-  Nothing -> inFrontContext ctx $ do
+  Nothing -> inContext ctx $ do
     reg <- gets registry
     info <- _getPackageInfo reg name
     storePackageInfo name info
@@ -195,7 +195,7 @@ githubCurl uri = do
         uri
         ]
   -- putStrsLn $ ["calling curl with args: ", T.intercalate " " curlArgs]
-  jsonStr <- silentShell $ run "curl" curlArgs
+  jsonStr <- curl curlArgs
   case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
     Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
     Right info -> return info
@@ -282,25 +282,28 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
   Nothing -> _resolveDep name range
 
 startResolving :: Name -> SemVer -> NpmFetcher ()
-startResolving name ver = modify $ \s ->
-  s {currentlyResolving = HS.insert (name, ver) $ currentlyResolving s}
+startResolving name ver = do
+  putStrsLn ["Resolving ", name, " version ", renderSV ver]
+  modify $ \s ->
+    s {currentlyResolving = HS.insert (name, ver) $ currentlyResolving s}
 
 finishResolving :: Name -> SemVer -> NpmFetcher ()
-finishResolving name ver = modify $ \s ->
-  s {currentlyResolving = HS.delete (name, ver) $ currentlyResolving s}
+finishResolving name ver = do
+  modify $ \s ->
+    s {currentlyResolving = HS.delete (name, ver) $ currentlyResolving s}
+  putStrsLn ["Finished resolving ", name, " ", renderSV ver]
 
 resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
 resolveVersionInfo versionInfo = do
   let name = viName versionInfo
       version = viVersion versionInfo
       ctx = concat ["When resolving package ", name, ", version ", version]
-  inFrontContext ctx $ do
+  inContext ctx $ do
     version <- case parseSemVer $ viVersion versionInfo of
       Left err -> throwErrorC ["Invalid semver in versionInfo object ",
                                    viVersion versionInfo,
                                    " Due to: ", pack $ show err]
       Right v -> return v
-    putStrsLn ["Resolving ", name, " version ", renderSV version]
     HS.member (name, version) <$> gets currentlyResolving >>= \case
       True -> do putStrsLn ["Warning: cycle detected"]
                  return version
@@ -315,7 +318,6 @@ resolveVersionInfo versionInfo = do
                     putStrsLn ["WARNING: ", name, " is a broken package"]
                     return Nothing
                   False -> do
-                    putStrsLn ["Resolving ", name, " dependency ", depName]
                     depVersion <- resolveNpmVersionRange depName depRange
                     return $ Just (depName, depVersion)
               return res
@@ -346,7 +348,7 @@ _resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 _resolveDep name range = do
   let ctx = concat ["When resolving dependency ", name, " (",
                     pack $ show range, ")"]
-  inFrontContext ctx $ do
+  inContext ctx $ do
     pInfo <- getPackageInfo name
     versionInfo <- bestMatchFromRecord range $ piVersions pInfo
     resolveVersionInfo versionInfo
