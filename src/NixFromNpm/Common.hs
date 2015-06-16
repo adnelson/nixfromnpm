@@ -10,6 +10,7 @@
 module NixFromNpm.Common (
     module ClassyPrelude,
     module Control.Applicative,
+    module Control.Exception,
     module Control.Monad,
     module Control.Monad.Except,
     module Control.Monad.Identity,
@@ -26,12 +27,14 @@ module NixFromNpm.Common (
     module Filesystem.Path.CurrentOS,
     module Network.URI,
     module GHC.IO.Exception,
+    module System.Directory,
     Name, Record,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf
+    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
+    pathToString
   ) where
 
-import ClassyPrelude hiding (assert, asList, find, FilePath)
+import ClassyPrelude hiding (assert, asList, find, FilePath, bracket)
 import qualified Prelude as P
 import Control.Monad (when)
 import Control.Monad.Trans (MonadIO(..), lift)
@@ -44,7 +47,7 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
 import Control.Monad.Identity (Identity(..))
 import Control.Applicative hiding (empty, optional)
-import Data.Char (isDigit)
+import Data.Char (isDigit, isAlpha)
 import Data.Default
 import Data.HashMap.Strict (HashMap, (!))
 import qualified Data.HashMap.Strict as H
@@ -55,9 +58,11 @@ import qualified Data.Text as T
 import Filesystem.Path.CurrentOS (FilePath, fromText, toText, collapse)
 import GHC.Exts (IsList)
 import GHC.IO.Exception
+import Control.Exception (bracket)
 import Network.URI (URI(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
+import System.Directory
 
 -- | Indicates that the text is some identifier.
 type Name = Text
@@ -125,3 +130,17 @@ dropSuffix suffix "" = ""
 maybeIf :: Bool -> a -> Maybe a
 maybeIf True x = Just x
 maybeIf False _ = Nothing
+
+grab :: (Hashable k, Eq k) => k -> HashMap k v -> v
+grab k = fromJust . H.lookup k
+
+withDir :: String -> IO a -> IO a
+withDir d action = do
+  cur <- getCurrentDirectory
+  result <- bracket (setCurrentDirectory d)
+                    (\_ -> setCurrentDirectory cur)
+                    (\_ -> action)
+  return result
+
+pathToString :: FilePath -> String
+pathToString = unpack . pathToText

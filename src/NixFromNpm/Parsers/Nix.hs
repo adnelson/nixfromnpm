@@ -7,7 +7,7 @@ module NixFromNpm.Parsers.Nix where
 import qualified Prelude as P
 import NixFromNpm.Parsers.Common hiding (spaces, spaces1, sstring, lexeme,
                                          schar, pInt)
-import qualified Data.Set as S
+import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as H
 
 import NixFromNpm.NixExpr
@@ -65,14 +65,14 @@ notKeyword p = try $ do
   else return ident
 
 -- | Set of keywords.
-keywords :: Set Text
-keywords = S.fromList ["if", "then", "else", "null", "inherit",
-                       "true", "false", "let", "in", "with", "assert"]
+keywords :: HashSet Text
+keywords = HS.fromList ["if", "then", "else", "null", "inherit",
+                        "true", "false", "let", "in", "with", "assert"]
 
 -- | Set of operators.
-operators :: Set String
-operators = S.fromList ["+", "-", "*", "/", "++", "&&", "||", "//", "?",
-                        "==", "!=", ">=", "<=", ">", "<"]
+operators :: HashSet String
+operators = HS.fromList ["+", "-", "*", "/", "++", "&&", "||", "//", "?",
+                         "==", "!=", ">=", "<=", ">", "<"]
 
 -- | Characters found in operators.
 opChars :: [Char]
@@ -182,7 +182,7 @@ pNixAssign :: Parser NixAssign
 pNixAssign = choice [inherit, assign] <* schar ';' where
   inherit = keyword "inherit" >> do
     from <- optionMaybe pParens
-    names <- S.fromList <$> many pIdentifier
+    names <- HS.fromList <$> many pIdentifier
     return $ Inherit from names
   assign = do
     assignee <- pKeyPath
@@ -241,7 +241,7 @@ pBinary :: Parser NixExpr
 pBinary = pNot `chainl1` fmap (flip BinOp) op where
   op = try $ do
     oper <- lexeme $ many1 (oneOf opChars)
-    if not $ S.member oper operators
+    if not $ HS.member oper operators
     then unexpected $ "Invalid operator " <> show oper
     else return $ pack oper
 

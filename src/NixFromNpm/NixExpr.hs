@@ -6,6 +6,7 @@ module NixFromNpm.NixExpr where
 import NixFromNpm.Common
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
+import qualified Data.HashSet as HS
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -37,7 +38,7 @@ data NixExpr
 
 data NixAssign
   = Assign [NixString] NixExpr
-  | Inherit (Maybe NixExpr) (Set Name)
+  | Inherit (Maybe NixExpr) (HashSet Name)
   deriving (Show, Eq)
 
 data NixString
@@ -57,16 +58,35 @@ k =$= v = Assign [Plain k] v
 toKwargs :: [(Name, Maybe NixExpr)] -> FuncArgs
 toKwargs stuff = Kwargs (H.fromList stuff) False Nothing
 
-renderPth = undefined
+isValidIdentifier :: Name -> Bool
+isValidIdentifier s = case unpack s of
+  [c] -> validFirst c
+  (c:cs) -> validFirst c && validRest cs
+  ""  -> False
+  where validFirst c = isAlpha c || c == '-' || c == '_'
+        validRest (c:cs) = (validFirst c || isDigit c) && validRest cs
+        validRest "" = True
+
+renderPth :: [NixString] -> Text
+renderPth = T.intercalate "." . map ren where
+  ren (Plain txt) | isValidIdentifier txt = txt
+  ren (Plain txt) = pack $ show txt
+  ren (Antiquote _ _ _) = error "can't do antiquoted strings yet"
 
 renderAssign :: NixAssign -> Text
 renderAssign (Assign p e) = renderPth p <> " = " <> renderNixExpr e <> ";"
+renderAssign (Inherit maybE names) = do
+  let ns = T.intercalate " " $ HS.toList names
+      e = maybe "" (\e -> " " <> renderParens e <> " ") maybE
+  "inherit " <> e <> ns <> ";"
 
 renderOneLineString :: NixString -> Text
 renderOneLineString (Plain s) = pack $ show s
 renderOneLineString _ = undefined
 
 renderMultiLineString = undefined
+
+renderParens e = "(" <> renderNixExpr e <> ")"
 
 renderKwargs :: [(Name, Maybe NixExpr)] -> Bool -> Text
 renderKwargs ks dotdots = case (ks, dotdots) of
@@ -96,8 +116,8 @@ renderNixExpr = \case
   Null -> "null"
   OneLineString s -> renderOneLineString s
   MultiLineString s -> renderMultiLineString s
-  Path pth -> pack $ show pth
-  List es -> T.intercalate " " $ map renderNixExpr es
+  Path pth -> pathToText pth
+  List es -> "[" <> T.intercalate " " (map renderNixExpr es) <> "]"
   Set asns -> "{" <> concatMap renderAssign asns <> "}"
   Let asns e -> concat ["let ", concatMap renderAssign asns, " in ",
                         renderNixExpr e]
@@ -110,6 +130,8 @@ renderNixExpr = \case
   If e1 e2 e3 -> "if " <> renderNixExpr e1 <> " then "
                        <> renderNixExpr e2 <> " else " <> renderNixExpr e3
   Dot e pth alt -> renderDot e pth alt
-  BinOp e1 op e2 -> "(" <> renderNixExpr e1 <> ")" <> op <>
-                    "(" <> renderNixExpr e2 <> ")"
+  BinOp e1 op e2 -> renderParens e1 <> " " <> op <> " " <> renderParens e2
   Not e -> "! " <> renderNixExpr e
+
+callPackage :: NixExpr -> NixExpr
+callPackage e = Apply (Apply (Var "callPackage") e) (Set [])
