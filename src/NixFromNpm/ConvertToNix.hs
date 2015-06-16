@@ -117,9 +117,7 @@ findExisting :: String -> IO (Record (HashMap SemVer NixExpr))
 findExisting path = do
   putStrLn "Searching for existing expressions..."
   doesDirectoryExist path >>= \case
-    False -> do
-      putStrLn "not a directory"
-      return mempty
+    False -> return mempty
     True -> withDir path $ do
       contents <- getDirectoryContents "."
       verMaps <- forM contents $ \dir -> do
@@ -139,7 +137,7 @@ findExisting path = do
       return $ H.fromList $ catMaybes verMaps
 
 
-dumpPkgNamed :: Text -> Text -> IO ()
-dumpPkgNamed name path = do
-  existing <- findExisting $ unpack path
+dumpPkgNamed :: Bool -> Text -> Text -> IO ()
+dumpPkgNamed noExistCheck name path = do
+  existing <- if noExistCheck then pure mempty else findExisting $ unpack path
   getPkg name existing >>= dumpPkgs (unpack path)

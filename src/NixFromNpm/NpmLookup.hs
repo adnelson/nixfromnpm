@@ -33,7 +33,7 @@ import NixFromNpm.NixExpr
 --------------------------------------------------------------------------
 
 data NpmFetcherState = NpmFetcherState {
-  registry :: URI,
+  registries :: [URI],
   githubAuthToken :: Maybe Text,
   resolved :: Record (HashMap SemVer (Either NixExpr ResolvedPkg)),
   pkgInfos :: Record PackageInfo,
@@ -71,14 +71,18 @@ addResolvedPkg name version _rpkg = do
     resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
     }
 
+_defaultCurlArgs :: [Text]
+_defaultCurlArgs = ["-L", "--fail"]
+
 curl :: [Text] -> NpmFetcher Text
-curl args = shell $ print_stdout False $ run "curl" args
+curl args = shell $ print_stdout False $ run "curl" (_defaultCurlArgs <> args)
 
 -- | Queries NPM for package information.
-_getPackageInfo :: URI -> Name -> NpmFetcher PackageInfo
-_getPackageInfo registryUri pkgName = do
+_getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
+_getPackageInfo pkgName registryUri = do
   let uri = uriToText $ registryUri `slash` pkgName
-  putStrsLn ["Querying NPM for package ", pkgName, "..."]
+  putStrsLn ["Querying ", uriToText registryUri,
+             " for package ", pkgName, "..."]
   jsonStr <- curl [uri]
   case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
     Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
@@ -89,8 +93,9 @@ getPackageInfo :: Name -> NpmFetcher PackageInfo
 getPackageInfo name = lookup name . pkgInfos <$> get >>= \case
   Just info -> return info
   Nothing -> inContext ctx $ do
-    reg <- gets registry
-    info <- _getPackageInfo reg name
+    regs <- gets registries
+    info <- firstSuccess "No repos contained package" $
+              map (_getPackageInfo name) regs
     storePackageInfo name info
     return info
   where ctx = pack $ "When querying NPM registry for package " <> show name
@@ -191,7 +196,6 @@ githubCurl uri = do
     Nothing -> return []
     Just token -> return ["-H", "Authorization: token " <> token]
   let curlArgs = extraCurlArgs <> [
-        "--fail", "-L",
         -- This accept header tells github to allow redirects.
         "-H", "Accept: application/vnd.github.quicksilver-preview+json",
         uri
@@ -366,14 +370,19 @@ resolveByTag tag pkgName = do
                               pack $ show pkgName]
       Just versionInfo -> resolveVersionInfo versionInfo
 
+parseURIs :: [Text] -> [URI]
+parseURIs rawUris = map p $! rawUris where
+  p txt = case parseURI $ unpack txt of
+            Nothing -> errorC ["Invalid URI: ", txt]
+            Just uri -> uri
+
 startState :: Record (HashMap SemVer NixExpr)
-           -> Text
+           -> [Text]
            -> Maybe Text
            -> NpmFetcherState
-startState existing uriStr token = case parseURI $ unpack uriStr of
-  Nothing -> errorC ["Invalid URI: ", uriStr]
-  Just uri -> NpmFetcherState {
-      registry = uri,
+startState existing registries token = do
+  NpmFetcherState {
+      registries = parseURIs registries,
       githubAuthToken = token,
       resolved = map (map Left) existing,
       pkgInfos = mempty,
@@ -384,10 +393,14 @@ startState existing uriStr token = case parseURI $ unpack uriStr of
     }
 
 -- | Read NPM registry from env or use default.
-getRegistry :: IO Text
-getRegistry = do
+getRegistries :: IO [Text]
+getRegistries = do
   let npmreg = "https://registry.npmjs.org/"
-  shelly $ silently $ fromMaybe npmreg <$> get_env "NPM_REGISTRY"
+  others <- shelly $ silently $ do
+    get_env "ADDITIONAL_NPM_REGISTRIES" >>= \case
+      Nothing -> return []
+      Just regs -> return $ T.words regs
+  return (others `snoc` npmreg)
 
 -- | Read github auth token from env or use none.
 getToken :: IO (Maybe Text)
@@ -395,7 +408,7 @@ getToken = shelly $ silently $ get_env "GITHUB_TOKEN"
 
 runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
 runIt x = do
-  state <- startState mempty <$> getRegistry <*> getToken
+  state <- startState mempty <$> getRegistries <*> getToken
   runItWith state x
 
 runItWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
@@ -409,6 +422,6 @@ getPkg :: Name
        -> IO (Record (HashMap SemVer (Either NixExpr ResolvedPkg)))
 getPkg name existing = do
   let range = Gt (0, 0, 0)
-  state <- startState existing <$> getRegistry <*> getToken
+  state <- startState existing <$> getRegistries <*> getToken
   (_, finalState) <- runItWith state (_resolveDep name range)
   return (resolved finalState)
