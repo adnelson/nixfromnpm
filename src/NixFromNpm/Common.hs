@@ -11,6 +11,7 @@ module NixFromNpm.Common (
     module ClassyPrelude,
     module Control.Applicative,
     module Control.Exception,
+    module Control.Exception.ErrorList,
     module Control.Monad,
     module Control.Monad.Except,
     module Control.Monad.Identity,
@@ -22,6 +23,7 @@ module NixFromNpm.Common (
     module Data.HashMap.Strict,
     module Data.Either,
     module Data.Maybe,
+    module Data.List,
     module Data.String.Utils,
     module GHC.Exts,
     module Filesystem.Path.CurrentOS,
@@ -34,7 +36,8 @@ module NixFromNpm.Common (
     pathToString, joinBy, mapJoinBy
   ) where
 
-import ClassyPrelude hiding (assert, asList, find, FilePath, bracket)
+import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
+                             maximum, maximumBy, try)
 import qualified Prelude as P
 import Control.Monad (when)
 import Control.Monad.Trans (MonadIO(..), lift)
@@ -45,10 +48,12 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
                                    runStateT, execState, execStateT,
                                    evalState, evalStateT)
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
+import Control.Exception.ErrorList
 import Control.Monad.Identity (Identity(..))
 import Control.Applicative hiding (empty, optional)
 import Data.Char (isDigit, isAlpha)
 import Data.Default
+import Data.List (maximum, maximumBy)
 import Data.HashMap.Strict (HashMap, (!))
 import qualified Data.HashMap.Strict as H
 import Data.Maybe (fromJust, isJust, isNothing)

@@ -52,7 +52,10 @@ keyword = try . sstring
 
 -- | Parses an identifier
 pIdentifier :: Parser Text
-pIdentifier = notKeyword $ lexeme $ do
+pIdentifier = lexeme pIdentifier'
+
+pIdentifier' :: Parser Text
+pIdentifier' = notKeyword $ do
   first <- letter <|> char '_'
   rest <- many $ letter <|> digit <|> char '_' <|> char '-'
   return $ pack $ first : rest
@@ -206,6 +209,9 @@ pLet :: Parser NixExpr
 pLet = liftA2 Let (between (keyword "let") (keyword "in") $ many pNixAssign)
                   pNixExpr
 
+pNixPathVar :: Parser Name
+pNixPathVar = try $ between (char '<') (schar '>') pIdentifier'
+
 pNixAssign :: Parser NixAssign
 pNixAssign = choice [inherit, assign] <* schar ';' where
   inherit = keyword "inherit" >> do
@@ -222,7 +228,7 @@ pPath :: Parser NixExpr
 pPath = lexeme $ try $ do
   dots <- option "" $ try (string "..") <|> string "."
   rest <- try $ do
-    char '/' <* notFollowedBy (char '*')
+    char '/' <* notFollowedBy (oneOf "*/")
     path <- many1 (noneOf "\n\t ;#(){}")
     return $ '/' : path
   return $ Path $ fromString $ dots <> rest
@@ -235,6 +241,7 @@ pParens = between (schar '(') (schar ')') pNixExpr
 
 pNixTerm :: Parser NixExpr
 pNixTerm = choice [pString, pUriString, pVar, Num <$> pInt,
+                   NixPathVar <$> pNixPathVar,
                    pBool, pNull, pList, pParens, pSet, pPath]
 
 pKeyPath :: Parser [NixString]
@@ -286,7 +293,7 @@ pIf = liftA3 If (keyword "if" *> pNixExpr)
 
 pUriString :: Parser NixExpr
 pUriString = lexeme $ try $ do
-  scheme <- many1 $ noneOf "\n\t :;"
+  scheme <- (:) <$> letter <*> many (letter <|> digit <|> char '+')
   string ":"
   rest <- many1 $ noneOf "\n\t ;"
   return $ OneLineString $ Plain $ pack $ scheme <> ":" <> rest
@@ -300,6 +307,7 @@ parseFile = parseFileWith pTopLevel
 parseFileWith :: Parser a -> String -> IO (Either ParseError a)
 parseFileWith p path = parseFull (spaces >> p) <$> readFile path
 
+parseNix :: Text -> Either ParseError NixExpr
 parseNix = parseFull pTopLevel
 
 parseNixA = parseFull pNixAssign

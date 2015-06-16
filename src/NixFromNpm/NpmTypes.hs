@@ -32,8 +32,8 @@ data VersionInfo = VersionInfo {
 
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
-  tiUrl :: Text,
-  tiShasum :: Text
+  diUrl :: Text,
+  diShasum :: Text
 } deriving (Show, Eq)
 
 data ResolvedPkg = ResolvedPkg {

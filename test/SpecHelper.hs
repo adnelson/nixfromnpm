@@ -9,7 +9,7 @@ module SpecHelper
 import Data.Maybe
 import Test.Hspec
 import Test.Hspec.Expectations.Contrib
-import NixFromNpm
+import NixFromNpm hiding (isRight, isLeft)
 
 -- | Runs `shouldBe` on the result of an IO action.
 shouldBeM :: (Show a, Eq a) => IO a -> a -> IO ()

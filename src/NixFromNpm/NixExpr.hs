@@ -21,6 +21,7 @@ data FuncArgs
 
 data NixExpr
   = Var Name
+  | NixPathVar Name
   | Num Int
   | Bool Bool
   | Null
@@ -59,6 +60,13 @@ instance IsString NixExpr where
 (=$=) :: Name -> NixExpr -> NixAssign
 k =$= v = Assign [Plain k] v
 
+str :: Text -> NixExpr
+str = OneLineString . Plain
+
+--assignsToMap :: [NixAssign] -> Record NixExpr
+--assignsToMap asns = H.fromList $ map totuple asns where
+--  totuple (Assign [])
+
 toKwargs :: [(Name, Maybe NixExpr)] -> FuncArgs
 toKwargs stuff = Kwargs (H.fromList stuff) False Nothing
 
@@ -78,7 +86,7 @@ renderAssign :: NixAssign -> Text
 renderAssign (Assign p e) = renderPath p <> " = " <> renderNixExpr e <> ";"
 renderAssign (Inherit maybE names) = do
   let ns = joinBy " " $ HS.toList names
-      e = maybe "" (\e -> " " <> renderParens e <> " ") maybE
+      e = maybe "" (\e -> " (" <> renderNixExpr e <> ") ") maybE
   "inherit " <> e <> ns <> ";"
 
 renderOneLineString :: NixString -> Text
@@ -111,6 +119,8 @@ renderDot e pth alt = renderParens e <> rpth <> ralt where
   rpth = case pth of {[] -> ""; _ -> "." <> renderPath pth}
   ralt = case alt of {Nothing -> ""; Just e' -> " or " <> renderNixExpr e'}
 
+-- | A "term" is something which does not need to be enclosed in
+-- parentheses.
 isTerm :: NixExpr -> Bool
 isTerm (Var _) = True
 isTerm (Num _) = True
@@ -122,6 +132,7 @@ isTerm (MultiLineString _) = True
 isTerm (List _) = True
 isTerm (Set _ _) = True
 isTerm (Dot _ _ Nothing) = True
+isTerm (NixPathVar _) = True
 isTerm _ = False
 
 renderNixExpr :: NixExpr -> Text
@@ -131,6 +142,7 @@ renderNixExpr = \case
   Bool True -> "true"
   Bool False -> "false"
   Null -> "null"
+  NixPathVar v -> "<" <> v <> ">"
   OneLineString s -> renderOneLineString s
   MultiLineString s -> renderMultiLineString s
   Path pth -> pathToText pth

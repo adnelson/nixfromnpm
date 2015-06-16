@@ -15,10 +15,6 @@ import qualified Data.HashMap.Strict as H
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 
-import System.IO.Streams (InputStream, OutputStream)
-import System.IO.Streams hiding (mapM, map, filter, lines)
-import System.IO.Streams.Attoparsec
-import System.IO.Streams.HTTP
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Aeson.Parser
 import Data.Aeson
@@ -47,7 +43,7 @@ data NpmFetcherState = NpmFetcherState {
   getDevDeps :: Bool
 } deriving (Show, Eq)
 
-type NpmFetcher = StateT NpmFetcherState IO
+type NpmFetcher = ExceptT ErrorList (StateT NpmFetcherState IO)
 
 indent :: Text -> NpmFetcher Text
 indent txt = do
@@ -110,7 +106,7 @@ bestMatchFromRecord range rec = do
   pairs <- toSemVerList rec
   case filter (matches range . fst) pairs of
     [] -> Left "No versions satisfy given range"
-    matches -> Right $ snd $ L.maximumBy (compare `on` fst) matches
+    matches -> Right $ snd $ maximumBy (compare `on` fst) matches
 
 silentShell :: MonadIO m => Sh a -> m a
 silentShell = shelly . silently
@@ -157,7 +153,7 @@ fetchHttp subpath uri = do
   -- Extract the tarball to a temp directory and parse the package.json.
   versionInfo <- extractVersionInfo tarballPath subpath
   -- Create the DistInfo.
-  let dist = DistInfo {tiUrl = uriToText uri, tiShasum = hash}
+  let dist = DistInfo {diUrl = uriToText uri, diShasum = hash}
   -- Add the dist information to the version info and resolve it.
   resolveVersionInfo $ versionInfo {viDist = Just dist}
 
@@ -177,8 +173,6 @@ githubCurl uri = do
   case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
     Left err -> cerror ["couldn't parse JSON from github: ", err]
     Right info -> return info
-
-type RepoPath = String
 
 -- | Queries NPM for package information.
 getDefaultBranch :: Name -> Name -> NpmFetcher Name
@@ -258,7 +252,7 @@ resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
-    vs -> return $ L.maximum vs
+    vs -> return $ maximum vs
   Nothing -> _resolveDep name range
 
 startResolving :: Name -> SemVer -> NpmFetcher ()
@@ -362,10 +356,10 @@ getRegistry = do
 getToken :: MonadIO m => m (Maybe Text)
 getToken = silentShell $ get_env "GITHUB_TOKEN"
 
-runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
+runIt :: NpmFetcher a -> IO (Either ErrorList a, NpmFetcherState)
 runIt x = do
   state <- startState <$> getRegistry <*> getToken
-  runStateT x state
+  runStateT (runExceptT x) state
 
 getPkg :: Name -> IO (Record (HashMap SemVer ResolvedPkg))
 getPkg name = do

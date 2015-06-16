@@ -3,7 +3,6 @@
 {-# LANGUAGE LambdaCase #-}
 module NixFromNpm.SemVer where
 
-import ClassyPrelude hiding (try)
 import qualified Prelude as P
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -64,7 +63,7 @@ matches range ver = case range of
 bestMatch :: SemVerRange -> [SemVer] -> Either String SemVer
 bestMatch range vs = case filter (matches range) vs of
   [] -> Left "No matching versions"
-  vs -> Right $ P.maximum vs
+  vs -> Right $ maximum vs
 
 -- | Fills in zeros in a wildcard.
 wildcardToSemver :: Wildcard -> SemVer
