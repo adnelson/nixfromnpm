@@ -28,7 +28,7 @@ module NixFromNpm.Common (
     module GHC.IO.Exception,
     Name, Record,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs, dropSuffix
+    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath)
@@ -121,3 +121,7 @@ dropSuffix :: String -> String -> String
 dropSuffix suffix s | s == suffix = ""
 dropSuffix suffix (c:cs) = c : dropSuffix suffix cs
 dropSuffix suffix "" = ""
+
+maybeIf :: Bool -> a -> Maybe a
+maybeIf True x = Just x
+maybeIf False _ = Nothing

@@ -43,7 +43,8 @@ data NpmFetcherState = NpmFetcherState {
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
   indentLevel :: Int,
-  knownProblematicPackages :: HashSet Name
+  knownProblematicPackages :: HashSet Name,
+  getDevDeps :: Bool
 } deriving (Show, Eq)
 
 type NpmFetcher = StateT NpmFetcherState IO
@@ -301,7 +302,9 @@ resolveVersionInfo versionInfo = do
       -- resolving.
       startResolving name version
       deps <- recurOn "Dependencies" viDependencies
-      devDeps <- recurOn "Dev dependencies" viDevDependencies
+      devDeps <- gets getDevDeps >>= \case
+        True -> recurOn "Dev dependencies" viDevDependencies
+        False -> return mempty
       finishResolving name version
       let dist = case viDist versionInfo of
             Nothing -> error "Version information did not include dist"
@@ -345,7 +348,8 @@ startState uriStr token = case parseURI $ unpack uriStr of
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
-      indentLevel = 0
+      indentLevel = 0,
+      getDevDeps = False
     }
 
 -- | Read NPM registry from env or use default.

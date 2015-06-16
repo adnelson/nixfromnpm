@@ -18,3 +18,4 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.Nix hiding (Eq)
 import NixFromNpm.NpmLookup
+import NixFromNpm.ConvertToNix
