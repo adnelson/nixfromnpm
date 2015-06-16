@@ -30,6 +30,7 @@ module NixFromNpm.Common (
     module Network.URI,
     module GHC.IO.Exception,
     module System.Directory,
+    module Text.Render,
     Name, Record,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
@@ -64,6 +65,7 @@ import Filesystem.Path.CurrentOS (FilePath, fromText, toText, collapse)
 import GHC.Exts (IsList)
 import GHC.IO.Exception
 import Control.Exception (bracket)
+import Text.Render hiding (renderParens)
 import Network.URI (URI(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU

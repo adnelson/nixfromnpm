@@ -100,5 +100,5 @@ dumpPkgs path rPkgs = liftIO $ do
       let nixexpr = resolvedPkgToNix rpkg
       writeFile (unpack $ toDotNix ver) $ renderNixExpr nixexpr
 
-dumpPkgNamed :: Text -> String -> IO ()
-dumpPkgNamed name path = getPkg name >>= dumpPkgs path
+dumpPkgNamed :: Text -> Text -> IO ()
+dumpPkgNamed name path = getPkg name >>= dumpPkgs (unpack path)

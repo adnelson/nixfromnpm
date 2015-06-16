@@ -44,6 +44,14 @@ data ResolvedPkg = ResolvedPkg {
   rpDevDependencies :: Record SemVer
 } deriving (Show, Eq)
 
+instance Semigroup PackageInfo where
+  PackageInfo vs ts <> PackageInfo vs' ts' =
+    PackageInfo (vs <> vs') (ts <> ts')
+
+instance Monoid PackageInfo where
+  mempty = PackageInfo mempty mempty
+  mappend = (<>)
+
 instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
     dependencies <- getDict "dependencies" o
