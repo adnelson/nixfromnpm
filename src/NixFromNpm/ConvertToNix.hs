@@ -14,6 +14,7 @@ import NixFromNpm.NixExpr
 import NixFromNpm.Parsers.Nix
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
+import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmLookup
 
 
@@ -88,7 +89,7 @@ mkDefault rec = do
 
 dumpPkgs :: MonadIO m
          => String
-         -> Record (HashMap SemVer ResolvedPkg)
+         -> Record (HashMap SemVer (Either NixExpr ResolvedPkg))
          -> m ()
 dumpPkgs path rPkgs = liftIO $ do
   createDirectoryIfMissing True path
@@ -97,8 +98,48 @@ dumpPkgs path rPkgs = liftIO $ do
     let subdir = path </> unpack pkgName
     createDirectoryIfMissing False subdir
     withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
-      let nixexpr = resolvedPkgToNix rpkg
+      let nixexpr = case rpkg of
+            Left e -> e
+            Right r -> resolvedPkgToNix r
       writeFile (unpack $ toDotNix ver) $ renderNixExpr nixexpr
 
+parseVersion :: String -> IO (Maybe (SemVer, NixExpr))
+parseVersion pth = do
+  case parseSemVer . pack $ dropSuffix ".nix" $ takeBaseName pth of
+    Left _ -> return Nothing -- not a version file
+    Right version -> parseNix . pack <$> readFile pth >>= \case
+      Left err -> do
+        putStrsLn [pack pth, " failed to parse: ", pack $ show err]
+        return Nothing -- invalid nix, should overwrite
+      Right expr -> return $ Just (version, expr)
+
+findExisting :: String -> IO (Record (HashMap SemVer NixExpr))
+findExisting path = do
+  putStrLn "Searching for existing expressions..."
+  doesDirectoryExist path >>= \case
+    False -> do
+      putStrLn "not a directory"
+      return mempty
+    True -> withDir path $ do
+      contents <- getDirectoryContents "."
+      verMaps <- forM contents $ \dir -> do
+        exprs <- doesDirectoryExist dir >>= \case
+          True -> withDir dir $ do
+            contents <- getDirectoryContents "."
+            let files = filter (endswith ".nix") contents
+            catMaybes <$> mapM parseVersion files
+          False -> do
+            putStrsLn [pack dir, " is not a directory"]
+            return mempty -- not a directory
+        case exprs of
+          [] -> return Nothing
+          vs -> return $ Just (pack dir, H.fromList exprs)
+      let total = sum $ map (H.size . snd) $ catMaybes verMaps
+      putStrsLn ["Found ", render total, " existing expressions"]
+      return $ H.fromList $ catMaybes verMaps
+
+
 dumpPkgNamed :: Text -> Text -> IO ()
-dumpPkgNamed name path = getPkg name >>= dumpPkgs (unpack path)
+dumpPkgNamed name path = do
+  existing <- findExisting $ unpack path
+  getPkg name existing >>= dumpPkgs (unpack path)

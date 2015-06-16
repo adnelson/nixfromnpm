@@ -31,6 +31,7 @@ module NixFromNpm.Common (
     module GHC.IO.Exception,
     module System.Directory,
     module Text.Render,
+    module System.FilePath.Posix,
     Name, Record,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
@@ -70,6 +71,7 @@ import Network.URI (URI(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
 import System.Directory
+import System.FilePath.Posix hiding (FilePath)
 
 -- | Indicates that the text is some identifier.
 type Name = Text

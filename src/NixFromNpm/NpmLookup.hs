@@ -29,12 +29,13 @@ import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
+import NixFromNpm.NixExpr
 --------------------------------------------------------------------------
 
 data NpmFetcherState = NpmFetcherState {
   registry :: URI,
   githubAuthToken :: Maybe Text,
-  resolved :: Record (HashMap SemVer ResolvedPkg),
+  resolved :: Record (HashMap SemVer (Either NixExpr ResolvedPkg)),
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -63,7 +64,8 @@ putStrsI :: [Text] -> NpmFetcher ()
 putStrsI = putStrI . concat
 
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
-addResolvedPkg name version rpkg = do
+addResolvedPkg name version _rpkg = do
+  let rpkg = Right _rpkg
   pkgSet <- H.lookupDefault mempty name <$> gets resolved
   modify $ \s -> s {
     resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
@@ -364,13 +366,16 @@ resolveByTag tag pkgName = do
                               pack $ show pkgName]
       Just versionInfo -> resolveVersionInfo versionInfo
 
-startState :: Text -> Maybe Text -> NpmFetcherState
-startState uriStr token = case parseURI $ unpack uriStr of
+startState :: Record (HashMap SemVer NixExpr)
+           -> Text
+           -> Maybe Text
+           -> NpmFetcherState
+startState existing uriStr token = case parseURI $ unpack uriStr of
   Nothing -> errorC ["Invalid URI: ", uriStr]
   Just uri -> NpmFetcherState {
       registry = uri,
       githubAuthToken = token,
-      resolved = mempty,
+      resolved = map (map Left) existing,
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
@@ -390,13 +395,20 @@ getToken = shelly $ silently $ get_env "GITHUB_TOKEN"
 
 runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
 runIt x = do
-  state <- startState <$> getRegistry <*> getToken
+  state <- startState mempty <$> getRegistry <*> getToken
+  runItWith state x
+
+runItWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
+runItWith state x = do
   runStateT (runExceptT x) state >>= \case
     (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
     (Right x, state) -> return (x, state)
 
-getPkg :: Name -> IO (Record (HashMap SemVer ResolvedPkg))
-getPkg name = do
+getPkg :: Name
+       -> Record (HashMap SemVer NixExpr)
+       -> IO (Record (HashMap SemVer (Either NixExpr ResolvedPkg)))
+getPkg name existing = do
   let range = Gt (0, 0, 0)
-  (_, finalState) <- runIt (_resolveDep name range)
+  state <- startState existing <$> getRegistry <*> getToken
+  (_, finalState) <- runItWith state (_resolveDep name range)
   return (resolved finalState)
