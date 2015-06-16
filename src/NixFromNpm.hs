@@ -8,7 +8,8 @@ module NixFromNpm (module NixFromNpm.Common,
                    module NixFromNpm.Parsers.NpmVersion,
                    module NixFromNpm.Parsers.Nix,
                    module NixFromNpm.NpmLookup,
-                   module NixFromNpm.ConvertToNix) where
+                   module NixFromNpm.ConvertToNix,
+                   module NixFromNpm.NixExpr) where
 
 import NixFromNpm.Common
 import NixFromNpm.SemVer
@@ -19,4 +20,5 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.Nix hiding (Eq)
 import NixFromNpm.NpmLookup
+import NixFromNpm.NixExpr
 import NixFromNpm.ConvertToNix

@@ -12,6 +12,9 @@ import NixFromNpm.NixExpr
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 
+callPackage :: NixExpr -> NixExpr
+callPackage e = Apply (Apply (Var "callPackage") e) (Set False [])
+
 toDepName :: Name -> SemVer -> Name
 toDepName name (a, b, c) = concat [name, "_", pack $
                                    intercalate "-" $ map show [a, b, c]]
@@ -25,7 +28,7 @@ rPkgToNix ResolvedPkg{..} = do
       _funcParams = map (uncurry toDepName) (H.toList rpDependencies)
                     <> ["buildNodePackage"]
       funcParams = toKwargs $ map (\x -> (x, Nothing)) _funcParams
-  let args = Set $ catMaybes [
+  let args = Set False $ catMaybes [
         Just $ "name" =$= fromString (unpack rpName),
         Just $ "version" =$= fromString (renderSV' rpVersion),
         maybeIf (length deps > 0) $ "propagatedBuildInputs" =$= List deps
@@ -43,7 +46,7 @@ mkDefault rec = do
       -- with all of the versions of that name that we have.
       versOnly :: [(Name, [SemVer])]
       versOnly = map (map (map fst)) $ H.toList $ map H.toList rec
-  Set $ concatMap (uncurry mkAssigns) versOnly
+  Set True $ concatMap (uncurry mkAssigns) versOnly
 
 
 dumpPkgs :: MonadIO m

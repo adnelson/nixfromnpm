@@ -66,7 +66,7 @@ notKeyword p = try $ do
 
 -- | Set of keywords.
 keywords :: HashSet Text
-keywords = HS.fromList ["if", "then", "else", "null", "inherit",
+keywords = HS.fromList ["if", "then", "else", "null", "inherit", "rec",
                         "true", "false", "let", "in", "with", "assert"]
 
 -- | Set of operators.
@@ -83,16 +83,50 @@ addLeft txt (Plain p) = Plain (txt <> p)
 addLeft txt (Antiquote s e s') = Antiquote (addLeft txt s) e s'
 
 -- | Parses an interpolated string, without parsing quotes.
-pInterp :: Bool -> Parser NixString
-pInterp inMultiLine = do
-  plain <- pack <$> many (noneOf "$\\\"'")
+pInterp :: Parser NixString
+pInterp = do
+  let stopChars = "$\\\""
+  plain <- pack <$> many (noneOf stopChars)
   let stop = return $ Plain plain
-      continue = pInterp inMultiLine
+      continue = pInterp
       -- Append `s` to what we're building, and keep parsing.
       continueWith s = fmap (addLeft (plain <> s)) continue
       consume c = char c >> continueWith (singleton c)
   option (Plain plain) $ do
-    lookAhead (oneOf "$\\\"'") >>= \case
+    lookAhead (oneOf stopChars) >>= \case
+      '$' -> char '$' >> lookAhead anyChar >>= \case
+        -- If it's an open parens, grab what's in the parens.
+        '{' -> Antiquote (Plain plain) <$> curlies <*> continue
+        -- If it's another dollar sign, grab both dollar signs.
+        '$' -> char '$' >> continueWith "$$"
+        -- Otherwise, just keep going.
+        c -> continueWith "$"
+      -- If there's a backslash, we're escaping whatever's next.
+      '\\' -> char '\\' >> anyChar >>= \case
+        'n' -> continueWith "\n"
+        'r' -> continueWith "\r"
+        't' -> continueWith "\t"
+        'b' -> continueWith "\b"
+        c -> continueWith $ singleton c
+      -- If it's a quote and we're not in a multi-line string, return.
+      -- Note that we're not consuming the quote;
+      -- that happens in the outer parser calling this function.
+      '"' -> stop
+  where curlies = between (schar '{') (char '}') pNixExpr
+
+-- | Parses an interpolated string, without parsing quotes. Counts spaces
+-- at beginning of lines.
+pInterpMultiLine :: Parser NixString
+pInterpMultiLine = do
+  let stopChars = "$\\'"
+  plain <- pack <$> many (noneOf stopChars)
+  let stop = return (Plain plain)
+      continue = pInterpMultiLine
+      -- Append `s` to what we're building, and keep parsing.
+      continueWith s = fmap (addLeft (plain <> s)) continue
+      consume c = char c >> continueWith (singleton c)
+  option (Plain plain) $ do
+    lookAhead (oneOf stopChars) >>= \case
       '$' -> char '$' >> lookAhead anyChar >>= \case
         -- If it's an open parens, grab what's in the parens.
         '{' -> Antiquote (Plain plain) <$> curlies <*> continue
@@ -102,25 +136,16 @@ pInterp inMultiLine = do
         c -> continueWith "$"
       -- If there's a backslash, we're escaping whatever's next.
       '\\' -> char '\\' >> singleton <$> anyChar >>= continueWith
-      -- If it's a quote and we're not in a multi-line string, return.
-      -- Note that we're not consuming the quote;
-      -- that happens in the outer parser calling this function.
-      '"' | not inMultiLine -> stop
-      -- If we're in a multiline string, we can just keep going.
-      '"' -> consume '"'
-      -- A single quote in a non multiline string is fine.
-      '\'' | not inMultiLine -> consume '\''
-      -- If we see a single quote followed by another one, and we're in
-      -- a multiline string, we stop here.
+      -- If we see a single quote followed by another one, we stop here.
       '\'' -> choice [lookAhead (string "''") >> stop,
                       consume '\'']
   where curlies = between (schar '{') (char '}') pNixExpr
 
 pOneLineString :: Parser NixString
-pOneLineString = between (char '"') (schar '"') $ pInterp False
+pOneLineString = between (char '"') (schar '"') pInterp
 
 pMultiLineString :: Parser NixString
-pMultiLineString = between (string "''") (sstring "''") $ pInterp True
+pMultiLineString = between (string "''") (sstring "''") pInterpMultiLine
 
 pString :: Parser NixExpr
 pString = choice [OneLineString <$> pOneLineString,
@@ -172,7 +197,10 @@ pFunction = try $ do
   return $ Function args body
 
 pSet :: Parser NixExpr
-pSet = try $ Set <$> between (schar '{') (schar '}') (many pNixAssign)
+pSet = try $ do
+  isRec <- isJust <$> optionMaybe (keyword "rec")
+  assigns <- between (schar '{') (schar '}') (many pNixAssign)
+  return $ Set isRec assigns
 
 pLet :: Parser NixExpr
 pLet = liftA2 Let (between (keyword "let") (keyword "in") $ many pNixAssign)
@@ -272,10 +300,6 @@ parseFile = parseFileWith pTopLevel
 parseFileWith :: Parser a -> String -> IO (Either ParseError a)
 parseFileWith p path = parseFull (spaces >> p) <$> readFile path
 
-_p = parseFull pTopLevel
+parseNix = parseFull pTopLevel
 
-_p' = parseFull pNixAssign
-
-pf' = parseFileWith pNixAssign "test1.nix"
-
-pf = parseFile "/Users/anelson/nixpkgs/pkgs/top-level/all-packages.nix"
+parseNixA = parseFull pNixAssign

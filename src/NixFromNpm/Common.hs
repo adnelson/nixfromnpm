@@ -31,7 +31,7 @@ module NixFromNpm.Common (
     Name, Record,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
-    pathToString
+    pathToString, joinBy, mapJoinBy
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket)
@@ -144,3 +144,9 @@ withDir d action = do
 
 pathToString :: FilePath -> String
 pathToString = unpack . pathToText
+
+joinBy :: Text -> [Text] -> Text
+joinBy = T.intercalate
+
+mapJoinBy :: Text -> (a -> Text) -> [a] -> Text
+mapJoinBy sep func = joinBy sep . map func

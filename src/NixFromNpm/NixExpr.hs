@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ViewPatterns #-}
 module NixFromNpm.NixExpr where
 
 import NixFromNpm.Common
@@ -15,6 +16,9 @@ data FuncArgs
   | Kwargs (HashMap Name (Maybe NixExpr)) Bool (Maybe Name)
   deriving (Show, Eq)
 
+
+---------- TODO: recursive sets
+
 data NixExpr
   = Var Name
   | Num Int
@@ -24,7 +28,7 @@ data NixExpr
   | MultiLineString NixString
   | Path FilePath
   | List [NixExpr]
-  | Set [NixAssign]
+  | Set Bool [NixAssign]
   | Let [NixAssign] NixExpr
   | Function FuncArgs NixExpr
   | Apply NixExpr NixExpr
@@ -59,33 +63,31 @@ toKwargs :: [(Name, Maybe NixExpr)] -> FuncArgs
 toKwargs stuff = Kwargs (H.fromList stuff) False Nothing
 
 isValidIdentifier :: Name -> Bool
-isValidIdentifier s = case unpack s of
-  [c] -> validFirst c
-  (c:cs) -> validFirst c && validRest cs
-  ""  -> False
+isValidIdentifier "" = False
+isValidIdentifier (unpack -> c:cs) = validFirst c && validRest cs
   where validFirst c = isAlpha c || c == '-' || c == '_'
         validRest (c:cs) = (validFirst c || isDigit c) && validRest cs
         validRest "" = True
 
-renderPth :: [NixString] -> Text
-renderPth = T.intercalate "." . map ren where
+renderPath :: [NixString] -> Text
+renderPath = mapJoinBy "." ren where
   ren (Plain txt) | isValidIdentifier txt = txt
-  ren (Plain txt) = pack $ show txt
-  ren (Antiquote _ _ _) = error "can't do antiquoted strings yet"
+  ren txt = renderOneLineString txt
 
 renderAssign :: NixAssign -> Text
-renderAssign (Assign p e) = renderPth p <> " = " <> renderNixExpr e <> ";"
+renderAssign (Assign p e) = renderPath p <> " = " <> renderNixExpr e <> ";"
 renderAssign (Inherit maybE names) = do
-  let ns = T.intercalate " " $ HS.toList names
+  let ns = joinBy " " $ HS.toList names
       e = maybe "" (\e -> " " <> renderParens e <> " ") maybE
   "inherit " <> e <> ns <> ";"
 
 renderOneLineString :: NixString -> Text
-renderOneLineString (Plain s) = pack $ show s
-renderOneLineString _ = undefined
+renderOneLineString s = "\"" <> escape escapeSingle s <> "\""
 
-renderMultiLineString = undefined
+renderMultiLineString :: NixString -> Text
+renderMultiLineString s = "''" <> escape escapeMulti s <> "''"
 
+renderParens e | isTerm e = renderNixExpr e
 renderParens e = "(" <> renderNixExpr e <> ")"
 
 renderKwargs :: [(Name, Maybe NixExpr)] -> Bool -> Text
@@ -94,7 +96,7 @@ renderKwargs ks dotdots = case (ks, dotdots) of
   ([], False) -> "{}"
   (ks, True) -> "{" <> ren ks <> ", ...}"
   (ks, False) -> "{" <> ren ks <> "}"
-  where ren ks = T.intercalate ", " $ map ren' ks
+  where ren ks = mapJoinBy ", " ren' ks
         ren' (k, Nothing) = k
         ren' (k, Just e) = k <> " ? " <> renderNixExpr e
 
@@ -105,7 +107,22 @@ renderFuncArgs (Kwargs k dotdots mname) =
   in args <> maybe "" (\n -> " @ " <> n) mname
 
 renderDot :: NixExpr -> [NixString] -> Maybe NixExpr -> Text
-renderDot = undefined
+renderDot e pth alt = renderParens e <> rpth <> ralt where
+  rpth = case pth of {[] -> ""; _ -> "." <> renderPath pth}
+  ralt = case alt of {Nothing -> ""; Just e' -> " or " <> renderNixExpr e'}
+
+isTerm :: NixExpr -> Bool
+isTerm (Var _) = True
+isTerm (Num _) = True
+isTerm (Bool _) = True
+isTerm Null = True
+isTerm (Path p) = True
+isTerm (OneLineString _) = True
+isTerm (MultiLineString _) = True
+isTerm (List _) = True
+isTerm (Set _ _) = True
+isTerm (Dot _ _ Nothing) = True
+isTerm _ = False
 
 renderNixExpr :: NixExpr -> Text
 renderNixExpr = \case
@@ -117,21 +134,39 @@ renderNixExpr = \case
   OneLineString s -> renderOneLineString s
   MultiLineString s -> renderMultiLineString s
   Path pth -> pathToText pth
-  List es -> "[" <> T.intercalate " " (map renderNixExpr es) <> "]"
-  Set asns -> "{" <> concatMap renderAssign asns <> "}"
+  List es -> "[" <> mapJoinBy " " renderNixExpr es <> "]"
+  Set True asns -> "rec " <> renderNixExpr (Set False asns)
+  Set False asns -> "{" <> concatMap renderAssign asns <> "}"
   Let asns e -> concat ["let ", concatMap renderAssign asns, " in ",
                         renderNixExpr e]
   Function arg e -> renderFuncArgs arg <> ": " <> renderNixExpr e
-  Apply e1 e2@(Apply _ _) ->
-    renderNixExpr e1 <> " (" <> renderNixExpr e2 <> ")"
-  Apply e1 e2 -> renderNixExpr e1 <> " " <> renderNixExpr e2
+  Apply e1@(Apply _ _) e2 -> renderNixExpr e1 <> " " <> renderNixExpr e2
+  Apply e1 e2 -> renderNixExpr e1 <> " " <> renderParens e2
   With e1 e2 -> "with " <> renderNixExpr e1 <> "; " <> renderNixExpr e2
   Assert e1 e2 -> "assert " <> renderNixExpr e1 <> "; " <> renderNixExpr e2
   If e1 e2 e3 -> "if " <> renderNixExpr e1 <> " then "
                        <> renderNixExpr e2 <> " else " <> renderNixExpr e3
   Dot e pth alt -> renderDot e pth alt
   BinOp e1 op e2 -> renderParens e1 <> " " <> op <> " " <> renderParens e2
-  Not e -> "! " <> renderNixExpr e
+  Not e -> "!" <> renderNixExpr e
 
-callPackage :: NixExpr -> NixExpr
-callPackage e = Apply (Apply (Var "callPackage") e) (Set [])
+escapeSingle :: String -> String
+escapeSingle s = case s of
+  '$':'{':s' -> '\\':'$':'{':escapeSingle s'
+  '\n':s' -> '\\':'n':escapeSingle s'
+  '\t':s' -> '\\':'t':escapeSingle s'
+  '\r':s' -> '\\':'r':escapeSingle s'
+  '\b':s' -> '\\':'b':escapeSingle s'
+  c:s' -> c : escapeSingle s'
+  "" -> ""
+
+escapeMulti :: String -> String
+escapeMulti s = case s of
+  '$':'{':s' -> '\\':'$':'{':escapeMulti s
+  c:s' -> c : escapeMulti s'
+  "" -> ""
+
+escape :: (String -> String) -> NixString -> Text
+escape esc (Plain s) = pack $ esc $ unpack s
+escape esc (Antiquote s e s') = concat [escape esc s, "${", renderNixExpr e,
+                                        "}", escape esc s']
