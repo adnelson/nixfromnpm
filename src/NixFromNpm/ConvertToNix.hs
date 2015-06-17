@@ -10,8 +10,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import NixFromNpm.Common
-import NixFromNpm.NixExpr
-import NixFromNpm.Parsers.Nix
+import Nix.Expr
+import Nix.Parser
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer

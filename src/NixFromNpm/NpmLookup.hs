@@ -29,7 +29,7 @@ import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.NixExpr
+import Nix.Expr
 --------------------------------------------------------------------------
 
 data NpmFetcherState = NpmFetcherState {

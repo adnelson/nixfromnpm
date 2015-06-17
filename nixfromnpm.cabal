@@ -3,7 +3,7 @@
 
 name:                nixfromnpm
 version:             0.1.0.0
--- synopsis:
+synopsis: Generate nix expressions from npm packages.
 -- description:
 license:             MIT
 author:              Allen Nelson
@@ -18,19 +18,16 @@ executable nixfromnpm
   main-is:             Main.hs
   -- other-modules:
   other-extensions:    NoImplicitPrelude, OverloadedStrings
-  build-depends:       base
+  build-depends:       base >=4.8 && <4.9
                      , classy-prelude
                      , text
                      , mtl
                      , bytestring
                      , unordered-containers
                      , parsec
-                     , io-streams
-                     , http-client-streams
                      , aeson
                      , data-default
                      , shelly
-                     , github
                      , MissingH
                      , error-list
                      , text-render
@@ -38,6 +35,7 @@ executable nixfromnpm
                      , filepath
                      , network-uri
                      , directory
+                     , simple-nix
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -47,7 +45,7 @@ Test-Suite spec
   Hs-Source-Dirs:      src
                      , test
   Main-Is:             Spec.hs
-  Build-Depends:       base
+  Build-Depends:       base >=4.8 && <4.9
                      , classy-prelude
                      , mtl
                      , text
@@ -69,3 +67,4 @@ Test-Suite spec
                      , filepath
                      , network-uri
                      , directory
+                     , simple-nix

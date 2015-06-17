@@ -1,7 +1,8 @@
 { mkDerivation, aeson, base, bytestring, classy-prelude
-, data-default, hspec, hspec-expectations, http-client-streams
-, io-streams, MissingH, mtl, parsec, shelly, stdenv, text
-, unordered-containers, pkgs, github, error-list
+, data-default, directory, error-list, filepath, github, hspec
+, hspec-expectations, http-client-streams, io-streams, MissingH
+, mtl, network-uri, parsec, shelly, simple-nix, stdenv
+, system-filepath, text, text-render, unordered-containers, pkgs
 }:
 mkDerivation {
   pname = "nixfromnpm";
@@ -10,15 +11,17 @@ mkDerivation {
   isLibrary = false;
   isExecutable = true;
   buildDepends = [
-    aeson base bytestring classy-prelude data-default
-    http-client-streams io-streams MissingH mtl parsec shelly
-    text unordered-containers pkgs.nix github pkgs.curl pkgs.cacert
-    error-list
+    aeson base bytestring classy-prelude data-default directory
+    error-list filepath MissingH mtl network-uri parsec shelly
+    simple-nix system-filepath text text-render unordered-containers
+    pkgs.curl
   ];
   testDepends = [
-    aeson base bytestring classy-prelude data-default hspec
-    hspec-expectations http-client-streams io-streams MissingH mtl
-    parsec shelly text unordered-containers github
+    aeson base bytestring classy-prelude data-default directory
+    error-list filepath github hspec hspec-expectations
+    http-client-streams io-streams MissingH mtl network-uri parsec
+    shelly simple-nix system-filepath text text-render
+    unordered-containers
   ];
   license = stdenv.lib.licenses.mit;
 }
