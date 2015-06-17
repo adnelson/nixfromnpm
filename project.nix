@@ -3,6 +3,7 @@
 , hspec-expectations, http-client-streams, io-streams, MissingH
 , mtl, network-uri, parsec, shelly, simple-nix, stdenv
 , system-filepath, text, text-render, unordered-containers, pkgs
+, docopt
 }:
 mkDerivation {
   pname = "nixfromnpm";
@@ -14,7 +15,7 @@ mkDerivation {
     aeson base bytestring classy-prelude data-default directory
     error-list filepath MissingH mtl network-uri parsec shelly
     simple-nix system-filepath text text-render unordered-containers
-    pkgs.curl
+    pkgs.curl docopt
   ];
   testDepends = [
     aeson base bytestring classy-prelude data-default directory

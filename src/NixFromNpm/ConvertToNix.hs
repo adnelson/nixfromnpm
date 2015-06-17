@@ -94,14 +94,14 @@ dumpPkgs :: MonadIO m
 dumpPkgs path rPkgs = liftIO $ do
   createDirectoryIfMissing True path
   withDir path $ forM_ (H.toList rPkgs) $ \(pkgName, pkgVers) -> do
-    writeFile "default.nix" $ renderNixExpr $ mkDefault rPkgs
+    writeFile "default.nix" $ renderIndented 2 $ mkDefault rPkgs
     let subdir = path </> unpack pkgName
     createDirectoryIfMissing False subdir
     withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
       let nixexpr = case rpkg of
             Left e -> e
             Right r -> resolvedPkgToNix r
-      writeFile (unpack $ toDotNix ver) $ renderNixExpr nixexpr
+      writeFile (unpack $ toDotNix ver) $ renderIndented 2 nixexpr
 
 parseVersion :: String -> IO (Maybe (SemVer, NixExpr))
 parseVersion pth = do
