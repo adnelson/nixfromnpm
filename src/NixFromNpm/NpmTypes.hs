@@ -20,13 +20,18 @@ data PackageInfo = PackageInfo {
   piTags :: Record Name
 } deriving (Show, Eq)
 
+data PackageMeta = PackageMeta {
+  pmDescription :: Maybe Text
+} deriving (Show, Eq)
+
 data VersionInfo = VersionInfo {
   viDependencies :: Record NpmVersionRange,
   viDevDependencies :: Record NpmVersionRange,
   viDist :: Maybe DistInfo, -- not present if in a package.json file.
   viMain :: Maybe Text,
   viName :: Text,
-  viIsStable :: Bool,
+  viHasTest :: Bool,
+  viMeta :: PackageMeta,
   viVersion :: Text
 } deriving (Show, Eq)
 
@@ -40,6 +45,7 @@ data ResolvedPkg = ResolvedPkg {
   rpName :: Name,
   rpVersion :: SemVer,
   rpDistInfo :: DistInfo,
+  rpMeta :: PackageMeta,
   rpDependencies :: Record SemVer,
   rpDevDependencies :: Record SemVer
 } deriving (Show, Eq)
@@ -60,15 +66,17 @@ instance FromJSON VersionInfo where
     name <- o .: "name"
     main <- o .:? "main"
     version <- o .: "version"
-    pubCfg :: HashMap Name Value <- getDict "publishConfig" o
+    packageMeta <- fmap PackageMeta $ o .:? "description"
+    scripts :: Record Value <- getDict "scripts" o
     return $ VersionInfo {
       viDependencies = dependencies,
       viDevDependencies = devDependencies,
       viDist = dist,
       viMain = main,
       viName = name,
-      viVersion = version,
-      viIsStable = H.lookup "tag" pubCfg /= Just "unstable"
+      viHasTest = H.member "test" scripts,
+      viMeta = packageMeta,
+      viVersion = version
     }
 
 instance FromJSON SemVerRange where

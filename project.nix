@@ -7,7 +7,7 @@
 }:
 mkDerivation {
   pname = "nixfromnpm";
-  version = "0.1.0.0";
+  version = "0.1.0.2";
   src = ./.;
   isLibrary = false;
   isExecutable = true;

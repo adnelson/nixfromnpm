@@ -55,6 +55,14 @@ distInfoToNix DistInfo{..} = Apply (Var "fetchurl") $ Set False
   [ "url" =$= str diUrl,
     "sha1" =$=  str diShasum ]
 
+metaNotEmpty :: PackageMeta -> Bool
+metaNotEmpty PackageMeta{..} = isJust pmDescription
+
+metaToNix :: PackageMeta -> NixExpr
+metaToNix PackageMeta{..} = case pmDescription of
+  Nothing -> Set False []
+  Just d -> Set False ["description" =$= str d]
+
 resolvedPkgToNix :: ResolvedPkg -> NixExpr
 resolvedPkgToNix ResolvedPkg{..} = do
   let deps = map (Var . uncurry toDepName) $ H.toList rpDependencies
@@ -65,7 +73,8 @@ resolvedPkgToNix ResolvedPkg{..} = do
         Just $ "name" =$= fromString (unpack rpName),
         Just $ "version" =$= fromString (renderSV' rpVersion),
         Just $ "src" =$= distInfoToNix rpDistInfo,
-        maybeIf (length deps > 0) $ "deps" =$= List deps
+        maybeIf (length deps > 0) $ "deps" =$= List deps,
+        maybeIf (metaNotEmpty rpMeta) $ "meta" =$= metaToNix rpMeta
         ]
   Function funcParams $ Apply (Var "buildNodePackage") args
 

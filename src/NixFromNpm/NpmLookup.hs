@@ -344,6 +344,7 @@ resolveVersionInfo versionInfo = do
             rpName = name,
             rpVersion = version,
             rpDistInfo = dist,
+            rpMeta = viMeta versionInfo,
             rpDependencies = deps,
             rpDevDependencies = devDeps
           }
