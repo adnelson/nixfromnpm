@@ -29,13 +29,13 @@ import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
-import Nix.Expr
+import Nix.Types
 --------------------------------------------------------------------------
 
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
   githubAuthToken :: Maybe Text,
-  resolved :: Record (HashMap SemVer (Either NixExpr ResolvedPkg)),
+  resolved :: Record (HashMap SemVer (Either NExpr ResolvedPkg)),
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -379,7 +379,7 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: Record (HashMap SemVer NixExpr)
+startState :: Record (HashMap SemVer NExpr)
            -> [Text]
            -> Maybe Text
            -> NpmFetcherState
@@ -421,8 +421,8 @@ runItWith state x = do
     (Right x, state) -> return (x, state)
 
 getPkg :: Name
-       -> Record (HashMap SemVer NixExpr)
-       -> IO (Record (HashMap SemVer (Either NixExpr ResolvedPkg)))
+       -> Record (HashMap SemVer NExpr)
+       -> IO (Record (HashMap SemVer (Either NExpr ResolvedPkg)))
 getPkg name existing = do
   let range = Gt (0, 0, 0)
   state <- startState existing <$> getRegistries <*> getToken

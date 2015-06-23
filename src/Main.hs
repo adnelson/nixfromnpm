@@ -23,15 +23,14 @@ usageString = "\
   \                                    package\n\
   \  --node-version VERSION            Use this version of node\n"
 
-getFlag args f = isPresent args (longOption f)
-
 main :: IO ()
 main = do
   patterns <- parseUsageOrExit usageString
   args <- parseArgsOrExit patterns =<< getArgs
-  let args ?? arg = getArgOrExitWith patterns args (argument arg)
-  pkgName <- map pack $ args ?? "packagename"
-  path <- map pack $ args ?? "outputpath"
+  let getText = map pack . getArgOrExitWith patterns args
+      getFlag = isPresent args . longOption
+  pkgName <- getText (argument "packagename")
+  path <- getText (longOption "output")
   dumpPkgFromOptions $ (defaultOptions pkgName path) {
-        nfnoNoCache = args `getFlag` "no-cache"
+        nfnoNoCache = getFlag "no-cache"
       }
