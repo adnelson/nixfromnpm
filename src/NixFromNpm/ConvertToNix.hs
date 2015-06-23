@@ -145,8 +145,34 @@ findExisting path = do
       putStrsLn ["Found ", render total, " existing expressions"]
       return $ H.fromList $ catMaybes verMaps
 
+-- | Various options we have available for nixfromnpm. As of right now,
+-- most of these are unimplemented.
+data NixFromNpmOptions = NixFromNpmOptions {
+  nfnoPkgName :: Name,
+  nfnoOutputPath :: Text,
+  nfnoNoCache :: Bool,
+  nfnoExtendPaths :: [Text],
+  nfnoTest :: Bool,
+  nfnoRegistries :: [Text],
+  nfnoTimeout :: Int
+} deriving (Show, Eq)
+
+defaultOptions :: Name -> Text -> NixFromNpmOptions
+defaultOptions pkgName outputPath = NixFromNpmOptions {
+  nfnoPkgName = pkgName,
+  nfnoOutputPath = outputPath,
+  nfnoNoCache = False,
+  nfnoExtendPaths = [],
+  nfnoTest = False,
+  nfnoTimeout = 10,
+  nfnoRegistries = []
+  }              
 
 dumpPkgNamed :: Bool -> Text -> Text -> IO ()
 dumpPkgNamed noExistCheck name path = do
   existing <- if noExistCheck then pure mempty else findExisting $ unpack path
   getPkg name existing >>= dumpPkgs (unpack path)
+
+dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
+dumpPkgFromOptions NixFromNpmOptions{..} = do
+  dumpPkgNamed nfnoNoCache nfnoPkgName nfnoOutputPath
