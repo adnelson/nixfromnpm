@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                nixfromnpm
-version:             0.1.0.5
+version:             0.1.0.6
 synopsis: Generate nix expressions from npm packages.
 -- description:
 license:             MIT

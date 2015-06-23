@@ -7,9 +7,9 @@
 }:
 mkDerivation {
   pname = "nixfromnpm";
-  version = "0.1.0.2";
+  version = "0.1.0.6";
   src = ./.;
-  isLibrary = false;
+  isLibrary = true;
   isExecutable = true;
   buildDepends = [
     aeson base bytestring classy-prelude data-default directory

@@ -177,9 +177,9 @@ extractVersionInfo tarballPath subpath = do
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
-fetchHttp :: Text -- | Subpath in which to find the package.json.
-          -> URI -- | The URI to fetch.
-          -> NpmFetcher SemVer -- | The version of the package at that URI.
+fetchHttp :: Text -- ^ Subpath in which to find the package.json.
+          -> URI -- ^ The URI to fetch.
+          -> NpmFetcher SemVer -- ^ The version of the package at that URI.
 fetchHttp subpath uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- nixPrefetchSha1 uri
@@ -218,10 +218,12 @@ getDefaultBranch owner repo = do
       Nothing -> putStrLn "" >> error "No default branch, or not a string"
     _ -> error "Expected an object back from github"
 
-getShaOfBranch :: Name -- | Repo owner
-               -> Name -- | Repo name
-               -> Name -- | Name of the branch to get
-               -> NpmFetcher Text -- | The hash of the default branch
+-- | Given a github repo and a branch, gets the SHA of the head of that
+-- branch
+getShaOfBranch :: Name -- ^ Repo owner
+               -> Name -- ^ Repo name
+               -> Name -- ^ Name of the branch to get
+               -> NpmFetcher Text -- ^ The hash of the branch
 getShaOfBranch owner repo branchName = do
   let rpath = "/" <> owner <> "/" <> repo
   let uri = concat ["https://api.github.com/repos", rpath,
