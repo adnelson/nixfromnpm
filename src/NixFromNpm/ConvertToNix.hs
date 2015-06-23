@@ -70,8 +70,8 @@ resolvedPkgToNix ResolvedPkg{..} = do
                     <> ["buildNodePackage", "fetchurl"]
       funcParams = toKwargs $ map (\x -> (x, Nothing)) _funcParams
   let args = Set False $ catMaybes [
-        Just $ "name" =$= fromString (unpack rpName),
-        Just $ "version" =$= fromString (renderSV' rpVersion),
+        Just $ "name" =$= str rpName,
+        Just $ "version" =$= (str $ renderSV rpVersion),
         Just $ "src" =$= distInfoToNix rpDistInfo,
         maybeIf (length deps > 0) $ "deps" =$= List deps,
         maybeIf (metaNotEmpty rpMeta) $ "meta" =$= metaToNix rpMeta
