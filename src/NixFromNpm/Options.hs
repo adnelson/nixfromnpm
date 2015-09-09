@@ -9,14 +9,15 @@ import NixFromNpm.Common hiding ((<>))
 -- | Various options we have available for nixfromnpm. As of right now,
 -- most of these are unimplemented.
 data NixFromNpmOptions = NixFromNpmOptions {
-  nfnoPkgName :: Name,
-  nfnoOutputPath :: Text,
-  nfnoNoCache :: Bool,
-  nfnoExtendPaths :: [Text],
-  nfnoTest :: Bool,
-  nfnoRegistries :: [Text],
-  nfnoTimeout :: Int,
-  nfnoGithubToken :: Maybe Text
+  nfnoPkgNames :: [Name],       -- ^ Names of packages to build.
+  nfnoPkgPaths :: [Text],       -- ^ Paths to package.jsons to build.
+  nfnoOutputPath :: Text,       -- ^ Path to output built expressions to.
+  nfnoNoCache :: Bool,          -- ^ Build all expressions from scratch.
+  nfnoExtendPaths :: [Text],    -- ^ Extend existing expressions.
+  nfnoTest :: Bool,             -- ^ Fetch only; don't write expressions.
+  nfnoRegistries :: [Text],     -- ^ List of registries to query.
+  nfnoTimeout :: Int,           -- ^ Number of seconds after which to timeout.
+  nfnoGithubToken :: Maybe Text -- ^ Github authentication token.
 } deriving (Show, Eq)
 
 textOption :: Mod OptionFields String -> Parser Text
@@ -24,12 +25,13 @@ textOption opts = pack <$> strOption opts
 
 pOptions :: Maybe Text -> Parser NixFromNpmOptions
 pOptions githubToken = NixFromNpmOptions
-    <$> (textOption packageName <|> textOption packageFile)
+    <$> many (textOption packageName)
+    <*> many (textOption packageFile)
     <*> textOption outputDir
     <*> noCache
     <*> extendPaths
     <*> isTest
-    <*> (fmap (:) (pure "https://registry.npmjs.org") <*> registries)
+    <*> liftA2 snoc registries (pure "https://registry.npmjs.org")
     <*> timeout
     <*> token
   where
@@ -47,14 +49,17 @@ pOptions githubToken = NixFromNpmOptions
                  <> help "Directory to output expressions to")
     noCache = switch (long "no-cache"
                       <> help "Build all expressions from scratch")
-    extendPaths = many (textOption (long "extend" <> metavar "PATH" <>
-                                    help "Use expressions existing at PATH"))
+    extendHelp = "Use expressions at PATH called NAME"
+    extendPaths = many (textOption (long "extend"
+                                    <> metavar "NAME=PATH"
+                                    <> help extendHelp))
     isTest = switch (long "test"
                      <> help "Don't write expressions; just test")
     timeout = option auto (long "timeout"
                            <> metavar "SECONDS"
                            <> help "Time requests out after SECONDS seconds"
                            <> value 10)
+    registries :: Parser [Text]
     registries = many $ textOption (long "registry"
                                   <> metavar "REGISTRY"
                                   <> help "NPM registry to query")

@@ -32,7 +32,7 @@ module NixFromNpm.Common (
     module System.Directory,
     module Text.Render,
     module System.FilePath.Posix,
-    Name, Record,
+    Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
     pathToString, joinBy, mapJoinBy, getEnv, getCwd
@@ -76,6 +76,9 @@ import System.FilePath.Posix hiding (FilePath)
 
 -- | Indicates that the text is some identifier.
 type Name = Text
+
+-- | Indicates that the text is some path.
+type Path = Text
 
 -- | A record is a lookup table with string keys.
 type Record = HashMap Name

@@ -19,22 +19,18 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
-import NixFromNpm.NpmLookup
+import NixFromNpm.NpmLookup (getPkg)
 
 
 _startingSrc :: String
 _startingSrc = "\
-  \{nixpkgs ? import <nixpkgs> {}}:\n\
-  \let\n\
-  \  allPkgs = nixpkgs // nodePkgs // {inherit (nixpkgs.nodePackages)\n\
-  \      buildNodePackage;};\n\
-  \  callPackage = pth: overrides: let\n\
-  \    f = import pth;\n\
-  \  in\n\
-  \    f ((builtins.intersectAttrs (builtins.functionArgs f) allPkgs)\n\
-  \       // overrides);\n\
-  \  nodePkgs = byVersion // defaults;\n\
-  \in\n\
+  \{nixpkgs ? import <nixpkgs> {}}:                                  \
+  \let                                                               \
+  \  allPkgs = nixpkgs // nodePkgs // extensions //                  \
+  \   {inherit (nixpkgs.nodePackages)buildNodePackage;};             \
+  \  callPackage = nixpkgs.lib.callPackageWith allPkgs;              \
+  \  nodePkgs = byVersion // defaults;                               \
+  \in                                                                \
   \nodePkgs"
 
 _startingExpr :: NExpr
@@ -109,10 +105,17 @@ resolvedPkgToNix ResolvedPkg{..} = do
 
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
-mkDefaultNix :: Record (HashMap SemVer a) -> NExpr
-mkDefaultNix rec = do
+mkDefaultNix :: Record (HashMap SemVer a)
+             -> Record Path -- ^ Map of libraries being included.
+             -> NExpr
+mkDefaultNix rec extensionMap = do
   let mkPath' = mkPath False . unpack
       toPath name ver = mkPath' $ concat ["./", name, "/", toDotNix ver]
+      -- Make a set of all of the extensions
+      extensions = mkNonRecSet $
+        -- Map over the expression map, creating a binding for each pair.
+        flip map (H.toList extensionMap) $ \(name, path) ->
+          name `bindTo` mkApp (mkSym "import") (mkPath False (unpack path))
       mkBinding name ver = toDepName name ver
                             `bindTo` callPackage (toPath name ver)
       mkBindings name vers = map (mkBinding name) vers
@@ -125,28 +128,31 @@ mkDefaultNix rec = do
       defaults = mkWith (mkSym "byVersion") $
         mkNonRecSet $ map (uncurry mkDefVer) versOnly
       newBindings = ["byVersion" `bindTo` byVersion,
-                     "defaults" `bindTo` defaults]
+                     "defaults" `bindTo` defaults,
+                     "extensions" `bindTo` extensions]
   modifyFunctionBody (appendBindings newBindings) _startingExpr
 
 dumpPkgs :: MonadIO m
          => String
          -> Record (HashMap SemVer (Either NExpr ResolvedPkg))
+         -> Record Path -- ^ Libraries being extended.
          -> m ()
-dumpPkgs path rPkgs = liftIO $ do
+dumpPkgs path rPkgs extensions = liftIO $ do
   createDirectoryIfMissing True path
   withDir path $ forM_ (H.toList rPkgs) $ \(pkgName, pkgVers) -> do
-    writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs
+    writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs extensions
     let subdir = path </> unpack pkgName
     createDirectoryIfMissing False subdir
     withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
-      let nixexpr = case rpkg of
-            -- A left value means it had already existed; we can simply
-            -- dump out the package we had before.
-            Left e -> e
-            -- A right value means it's a ResolvedPkg object; in this case
-            -- we convert it to a nix expression.
-            Right r -> resolvedPkgToNix r
-      writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
+      case rpkg of
+        -- A NixExpression value means it had already existed. We
+        -- don't need to do anything.
+        Left e -> return ()
+        -- A right value means it's a ResolvedPkg object; in this case
+        -- we convert it to a nix expression.
+        Right r -> do
+           let nixexpr = resolvedPkgToNix r
+           writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
 
 parseVersion :: String -> IO (Maybe (SemVer, NExpr))
 parseVersion pth = do
@@ -158,12 +164,21 @@ parseVersion pth = do
         return Nothing -- invalid nix, should overwrite
       Success expr -> return $ Just (version, expr)
 
-findExisting :: String -> IO (Record (HashMap SemVer NExpr))
-findExisting path = do
-  putStrLn "Searching for existing expressions..."
-  doesDirectoryExist path >>= \case
-    False -> return mempty
-    True -> withDir path $ do
+-- | Given the path to a file possibly containing nix expressions, finds all
+--   expressions findable at that path and returns a map of them.
+findExisting :: Bool -- ^ Whether to fail if the path does not exist.
+             -> Path -- ^ The path to search.
+             -> IO (Record (HashMap SemVer NExpr)) -- ^ Mapping of package
+                                                   --   names to maps of
+                                                   --   versions to nix
+                                                   --   expressions.
+findExisting failIfNotExists path = do
+  doesDirectoryExist (unpack path) >>= \case
+    False -> if failIfNotExists
+             then errorC ["Path ", path, " does not exist."]
+             else return mempty
+    True -> withDir (unpack path) $ do
+      putStrsLn ["Searching for existing expressions in ", path, "..."]
       contents <- getDirectoryContents "."
       verMaps <- forM contents $ \dir -> do
         exprs <- doesDirectoryExist dir >>= \case
@@ -172,7 +187,6 @@ findExisting path = do
             let files = filter (endswith ".nix") contents
             catMaybes <$> mapM parseVersion files
           False -> do
-            putStrsLn [pack dir, " is not a directory"]
             return mempty -- not a directory
         case exprs of
           [] -> return Nothing
@@ -181,12 +195,38 @@ findExisting path = do
       putStrsLn ["Found ", render total, " existing expressions"]
       return $ H.fromList $ catMaybes verMaps
 
-dumpPkgNamed :: Bool -> Text -> Text -> Maybe Text -> IO ()
-dumpPkgNamed noExistCheck name path token = do
-  existing <- if noExistCheck then pure mempty else findExisting $ unpack path
+-- | Given the name of a package and a place to dump expressions to, generates
+--   the expressions needed to build that package.
+dumpPkgNamed :: Bool        -- ^ Whether to skip the existence check.
+             -> Text        -- ^ The name of the package to fetch.
+             -> Text        -- ^ The path to output to.
+             -> Record Path -- ^ Mapping of names of libraries to extend,
+                            --   and paths to those libraries.
+             -> Maybe Text  -- ^ Optional github token.
+             -> IO ()
+dumpPkgNamed noExistCheck name path toExtend token = do
+  existing <- if noExistCheck
+              then pure mempty
+              else findExisting False path
+  libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
+    findExisting True path
   pwd <- getCwd
-  getPkg name existing token >>= dumpPkgs (pwd </> unpack path)
+  packages <- getPkg name (existing <> libraries) token
+  dumpPkgs (pwd </> unpack path) packages toExtend
+
+getExtensions :: [Text] -> Record Path
+getExtensions = foldl' step mempty where
+  step :: Record Path -> Text -> Record Path
+  step exts nameEqPath = case T.split (== '=') nameEqPath of
+    [name, path] -> case H.lookup name exts of
+      Nothing -> H.insert name path exts
+      Just path' -> errorC ["Extension ", name, " is mapped to both path ",
+                            path, " and path ", path']
+    _ -> errorC ["Extensions must be of the form NAME=PATH (in argument ",
+                 nameEqPath, ")"]
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions NixFromNpmOptions{..} = do
-  dumpPkgNamed nfnoNoCache nfnoPkgName nfnoOutputPath nfnoGithubToken
+  forM_ nfnoPkgNames $ \name -> do
+    let extensions = getExtensions nfnoExtendPaths
+    dumpPkgNamed nfnoNoCache name nfnoOutputPath extensions nfnoGithubToken

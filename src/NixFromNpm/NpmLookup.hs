@@ -192,6 +192,7 @@ fetchHttp subpath uri = do
 
 githubCurl :: Text -> NpmFetcher Value
 githubCurl uri = do
+  -- Add in the github auth token if it is provided.
   extraCurlArgs <- gets githubAuthToken >>= \case
     Nothing -> return []
     Just token -> return ["-H", "Authorization: token " <> token]
@@ -286,7 +287,11 @@ resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
-    vs -> return $ maximum vs
+    vs -> do
+      let bestVersion = maximum vs
+      putStrsLn ["Requirement ", name, " version ", pack $ show range,
+                 " already satisfied: ", pack $ show bestVersion]
+      return bestVersion
   Nothing -> _resolveDep name range
 
 startResolving :: Name -> SemVer -> NpmFetcher ()
