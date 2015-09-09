@@ -1,36 +1,23 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import System.Environment (getArgs)
-import System.Console.Docopt.NoTH
+import Options.Applicative
 
-import NixFromNpm hiding (getArgs)
+import NixFromNpm hiding (getArgs, (<>))
 
-usageString :: String
-usageString = "\
-  \Usage:\n\
-  \  nixfromnpm <packagename> [-o PATH] [options]\n\
-  \Options:\n\
-  \  -o, --output PATH                 Output files to this path\n\
-  \  --extend PATHS...                 Use nix expressions existing at these\n\
-  \                                    paths\n\                 
-  \  --registries REGISTRIES...        Use only these registries\n\
-  \  --extra-registries REGISTRIES..   Use these in addition to default registry\n\
-  \  --no-cache                        Don't use existing cache\n\
-  \  --test                            Don't write expressions, just fetch\n\
-  \  --timeout SECONDS                 Seconds after which to fail fetching a\n\
-  \                                    package\n\
-  \  --node-version VERSION            Use this version of node\n"
 
 main :: IO ()
 main = do
-  patterns <- parseUsageOrExit usageString
-  args <- parseArgsOrExit patterns =<< getArgs
-  let getText = map pack . getArgOrExitWith patterns args
-      getFlag = isPresent args . longOption
-  pkgName <- getText (argument "packagename")
-  path <- getText (longOption "output")
-  dumpPkgFromOptions $ (defaultOptions pkgName path) {
-        nfnoNoCache = getFlag "no-cache"
-      }
+  maybeToken <- getEnv "GITHUB_TOKEN"
+  let opts = info (helper <*> pOptions maybeToken)
+             (fullDesc <> progDesc description <> header headerText)
+  parsedOpts <- execParser opts
+  dumpPkgFromOptions parsedOpts
+  where
+    description = concat ["nixfromnpm allows you to generate nix expressions ",
+                          "automatically from npm packages. It provides ",
+                          "features such as de-duplication of shared ",
+                          "dependencies and advanced customization."]
+    headerText = "nixfromnpm - Create nix expressions from NPM"

@@ -1,5 +1,5 @@
 name:                nixfromnpm
-version:             0.1.0.8
+version:             0.2.0.0
 synopsis:            Generate nix expressions from npm packages.
 description:
   Given an npm package name and one or more npm repositories, will dump out a
@@ -26,6 +26,7 @@ library
                      , NixFromNpm.NpmLookup
                      , NixFromNpm.NpmTypes
                      , NixFromNpm.NpmVersion
+                     , NixFromNpm.Options
                      , NixFromNpm.SemVer
                      , NixFromNpm.Parsers.Common
                      , NixFromNpm.Parsers.NpmVersion
@@ -49,6 +50,7 @@ library
                      , network-uri
                      , directory
                      , hnix
+                     , optparse-applicative
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -78,7 +80,7 @@ executable nixfromnpm
                      , directory
                      , hnix
                      , nixfromnpm
-                     , docopt
+                     , optparse-applicative
   -- extra-libraries:     curl
   hs-source-dirs:      src
   default-language:    Haskell2010
@@ -113,3 +115,4 @@ Test-Suite spec
                      , network-uri
                      , directory
                      , hnix
+                     , optparse-applicative

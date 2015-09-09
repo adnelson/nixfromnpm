@@ -15,6 +15,7 @@ import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
+import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
@@ -112,7 +113,7 @@ mkDefaultNix :: Record (HashMap SemVer a) -> NExpr
 mkDefaultNix rec = do
   let mkPath' = mkPath False . unpack
       toPath name ver = mkPath' $ concat ["./", name, "/", toDotNix ver]
-      mkBinding name ver = toDepName name ver 
+      mkBinding name ver = toDepName name ver
                             `bindTo` callPackage (toPath name ver)
       mkBindings name vers = map (mkBinding name) vers
       mkDefVer name vers = do
@@ -123,7 +124,7 @@ mkDefaultNix rec = do
       byVersion = mkNonRecSet $ concatMap (uncurry mkBindings) versOnly
       defaults = mkWith (mkSym "byVersion") $
         mkNonRecSet $ map (uncurry mkDefVer) versOnly
-      newBindings = ["byVersion" `bindTo` byVersion, 
+      newBindings = ["byVersion" `bindTo` byVersion,
                      "defaults" `bindTo` defaults]
   modifyFunctionBody (appendBindings newBindings) _startingExpr
 
@@ -180,34 +181,12 @@ findExisting path = do
       putStrsLn ["Found ", render total, " existing expressions"]
       return $ H.fromList $ catMaybes verMaps
 
--- | Various options we have available for nixfromnpm. As of right now,
--- most of these are unimplemented.
-data NixFromNpmOptions = NixFromNpmOptions {
-  nfnoPkgName :: Name,
-  nfnoOutputPath :: Text,
-  nfnoNoCache :: Bool,
-  nfnoExtendPaths :: [Text],
-  nfnoTest :: Bool,
-  nfnoRegistries :: [Text],
-  nfnoTimeout :: Int
-} deriving (Show, Eq)
-
-defaultOptions :: Name -> Text -> NixFromNpmOptions
-defaultOptions pkgName outputPath = NixFromNpmOptions {
-  nfnoPkgName = pkgName,
-  nfnoOutputPath = outputPath,
-  nfnoNoCache = False,
-  nfnoExtendPaths = [],
-  nfnoTest = False,
-  nfnoTimeout = 10,
-  nfnoRegistries = []
-  }              
-
-dumpPkgNamed :: Bool -> Text -> Text -> IO ()
-dumpPkgNamed noExistCheck name path = do
+dumpPkgNamed :: Bool -> Text -> Text -> Maybe Text -> IO ()
+dumpPkgNamed noExistCheck name path token = do
   existing <- if noExistCheck then pure mempty else findExisting $ unpack path
-  getPkg name existing >>= dumpPkgs (unpack path)
+  pwd <- getCwd
+  getPkg name existing token >>= dumpPkgs (pwd </> unpack path)
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions NixFromNpmOptions{..} = do
-  dumpPkgNamed nfnoNoCache nfnoPkgName nfnoOutputPath
+  dumpPkgNamed nfnoNoCache nfnoPkgName nfnoOutputPath nfnoGithubToken

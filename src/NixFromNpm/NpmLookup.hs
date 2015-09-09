@@ -422,9 +422,10 @@ runItWith state x = do
 
 getPkg :: Name
        -> Record (HashMap SemVer NExpr)
+       -> Maybe Text -- a possible github token
        -> IO (Record (HashMap SemVer (Either NExpr ResolvedPkg)))
-getPkg name existing = do
+getPkg name existing token = do
   let range = Gt (0, 0, 0)
-  state <- startState existing <$> getRegistries <*> getToken
+  state <- startState existing <$> getRegistries <*> pure token
   (_, finalState) <- runItWith state (_resolveDep name range)
   return (resolved finalState)
