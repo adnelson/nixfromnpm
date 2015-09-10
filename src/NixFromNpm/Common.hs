@@ -35,7 +35,7 @@ module NixFromNpm.Common (
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
-    pathToString, joinBy, mapJoinBy, getEnv, getCwd
+    pathToString, joinBy, mapJoinBy, getEnv, getCwd, modifyMap
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -99,6 +99,14 @@ alterKeys f mp = do
   let newPairs = P.map (\(k, v) -> (f k, v)) pairs
   let newMap = H.fromList newPairs
   newMap
+
+-- | Create a hashmap by applying a test to everything in the existing
+-- map.
+modifyMap :: (Eq k, Hashable k) => (a -> Maybe b) -> HashMap k a -> HashMap k b
+modifyMap test inputMap = foldl' step mempty $ H.toList inputMap where
+  step result (k, elem) = case test elem of
+    Nothing -> result
+    Just newElem -> H.insert k newElem result
 
 cerror :: [String] -> a
 cerror = error . concat
@@ -167,10 +175,3 @@ mapJoinBy sep func = joinBy sep . map func
 -- | Reads an environment variable.
 getEnv :: Text -> IO (Maybe Text)
 getEnv = shelly . silently . get_env
-
--- | Get the current working directory.
-getCwd :: IO String
-getCwd = getEnv "PWD" >>= \case
-  Nothing -> errorC ["Could not determine current working directory: ",
-                     "PWD variable is not set."]
-  Just path -> return $ unpack path

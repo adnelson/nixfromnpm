@@ -26,7 +26,10 @@ _startingSrc :: String
 _startingSrc = "\
   \{nixpkgs ? import <nixpkgs> {}}:                                  \
   \let                                                               \
-  \  allPkgs = nixpkgs // nodePkgs // extensions //                  \
+  \  inherit (builtins) attrValues;                                  \
+  \  joinSets = foldl (a: b: a // b) {};                             \
+  \  joinedExtensions = joinSets (attrValues extensions);            \
+  \  allPkgs = nixpkgs // nodePkgs // joinedExtensions //            \
   \   {inherit (nixpkgs.nodePackages)buildNodePackage;};             \
   \  callPackage = nixpkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = byVersion // defaults;                               \
@@ -112,7 +115,7 @@ mkDefaultNix rec extensionMap = do
   let mkPath' = mkPath False . unpack
       toPath name ver = mkPath' $ concat ["./", name, "/", toDotNix ver]
       -- Make a set of all of the extensions
-      extensions = mkNonRecSet $
+      extensionsSet = mkNonRecSet $
         -- Map over the expression map, creating a binding for each pair.
         flip map (H.toList extensionMap) $ \(name, path) ->
           name `bindTo` mkApp (mkSym "import") (mkPath False (unpack path))
@@ -127,10 +130,18 @@ mkDefaultNix rec extensionMap = do
       byVersion = mkNonRecSet $ concatMap (uncurry mkBindings) versOnly
       defaults = mkWith (mkSym "byVersion") $
         mkNonRecSet $ map (uncurry mkDefVer) versOnly
-      newBindings = ["byVersion" `bindTo` byVersion,
-                     "defaults" `bindTo` defaults,
-                     "extensions" `bindTo` extensions]
+      newBindings = ["extensions" `bindTo` extensionsSet,
+                     "byVersion" `bindTo` byVersion,
+                     "defaults" `bindTo` defaults]
   modifyFunctionBody (appendBindings newBindings) _startingExpr
+
+takeNewPackages :: Record (HashMap SemVer (Either NExpr ResolvedPkg))
+                -> Record (HashMap SemVer ResolvedPkg)
+takeNewPackages startingRec = do
+  let takeNews = modifyMap $ \case Left _ -> Nothing
+                                   Right rpkg -> Just rpkg
+      takeNonEmptys = H.filter (not . H.null)
+  takeNonEmptys $ H.map takeNews startingRec
 
 dumpPkgs :: MonadIO m
          => String
@@ -138,21 +149,22 @@ dumpPkgs :: MonadIO m
          -> Record Path -- ^ Libraries being extended.
          -> m ()
 dumpPkgs path rPkgs extensions = liftIO $ do
-  createDirectoryIfMissing True path
-  withDir path $ forM_ (H.toList rPkgs) $ \(pkgName, pkgVers) -> do
-    writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs extensions
-    let subdir = path </> unpack pkgName
-    createDirectoryIfMissing False subdir
-    withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
-      case rpkg of
-        -- A NixExpression value means it had already existed. We
-        -- don't need to do anything.
-        Left e -> return ()
-        -- A right value means it's a ResolvedPkg object; in this case
-        -- we convert it to a nix expression.
-        Right r -> do
-           let nixexpr = resolvedPkgToNix r
-           writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
+  let newPackages = takeNewPackages rPkgs
+  -- if there aren't any new packages, we can stop here
+  if H.null newPackages
+  then putStrLn "No new packages created." >> return ()
+  else do
+    putStrsLn ["Creating new packages at ", pack path]
+    createDirectoryIfMissing True path
+    withDir path $ forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
+      writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs extensions
+      let subdir = path </> unpack pkgName
+      -- If we don't have any new packages, we don't need to do
+      -- anything.
+      createDirectoryIfMissing False subdir
+      withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
+        let nixexpr = resolvedPkgToNix rpkg
+        writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
 
 parseVersion :: String -> IO (Maybe (SemVer, NExpr))
 parseVersion pth = do
@@ -210,7 +222,7 @@ dumpPkgNamed noExistCheck name path toExtend token = do
               else findExisting False path
   libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
     findExisting True path
-  pwd <- getCwd
+  pwd <- getCurrentDirectory
   packages <- getPkg name (existing <> libraries) token
   dumpPkgs (pwd </> unpack path) packages toExtend
 
