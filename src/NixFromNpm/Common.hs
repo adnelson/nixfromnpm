@@ -35,7 +35,7 @@ module NixFromNpm.Common (
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
-    pathToString, joinBy, mapJoinBy, getEnv, getCwd, modifyMap
+    pathToString, joinBy, mapJoinBy, getEnv, modifyMap
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,

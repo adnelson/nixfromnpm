@@ -26,13 +26,13 @@ _startingSrc :: String
 _startingSrc = "\
   \{nixpkgs ? import <nixpkgs> {}}:                                  \
   \let                                                               \
-  \  inherit (builtins) attrValues;                                  \
+  \  inherit (nixpkgs.lib) attrValues;                               \
   \  joinSets = foldl (a: b: a // b) {};                             \
   \  joinedExtensions = joinSets (attrValues extensions);            \
   \  allPkgs = nixpkgs // nodePkgs // joinedExtensions //            \
   \   {inherit (nixpkgs.nodePackages)buildNodePackage;};             \
   \  callPackage = nixpkgs.lib.callPackageWith allPkgs;              \
-  \  nodePkgs = byVersion // defaults;                               \
+  \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
   \nodePkgs"
 
@@ -118,7 +118,9 @@ mkDefaultNix rec extensionMap = do
       extensionsSet = mkNonRecSet $
         -- Map over the expression map, creating a binding for each pair.
         flip map (H.toList extensionMap) $ \(name, path) ->
-          name `bindTo` mkApp (mkSym "import") (mkPath False (unpack path))
+          name `bindTo` (mkApp
+                          (mkApp (mkSym "import") (mkPath False (unpack path)))
+                          (mkNonRecSet [Inherit Nothing [mkSelector "nixpkgs"]]))
       mkBinding name ver = toDepName name ver
                             `bindTo` callPackage (toPath name ver)
       mkBindings name vers = map (mkBinding name) vers
