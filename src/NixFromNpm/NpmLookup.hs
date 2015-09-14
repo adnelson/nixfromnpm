@@ -32,10 +32,40 @@ import NixFromNpm.Parsers.NpmVersion
 import Nix.Types
 --------------------------------------------------------------------------
 
+-- | Things which can be converted into nix expressions: either they
+--   are actual nix expressions themselves (which can be either
+--   existing in the output, or existing in an extension), or they are
+--   new packages which we have discovered.
+data FullyDefinedPackage
+  = NewPackage ResolvedPkg
+  | FromExistingInOutput NExpr
+  | FromExistingInExtension Name NExpr
+  deriving (Show, Eq)
+
+-- | The type of pre-existing packages, which can either come from the
+-- output path, or come from an extension
+data PreExistingPackage
+  = FromOutput NExpr
+  | FromExtension Name NExpr
+  deriving (Show, Eq)
+
+toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
+toFullyDefined (FromOutput expr) = FromExistingInOutput expr
+toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
+
+-- | We use this data structure a lot: a mapping of package names to
+--   a mapping of versions to fully defined packages.
+type PackageMap pkg = Record (HashMap SemVer pkg)
+
+-- | Map a function across a PackageMap.
+mapPM :: (a -> b) -> PackageMap a -> PackageMap b
+mapPM f = H.map (H.map f)
+
+-- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
   githubAuthToken :: Maybe Text,
-  resolved :: Record (HashMap SemVer (Either NExpr ResolvedPkg)),
+  resolved :: PackageMap FullyDefinedPackage,
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -45,6 +75,9 @@ data NpmFetcherState = NpmFetcherState {
 } deriving (Show, Eq)
 
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
+
+concatDots :: SemVer -> Text
+concatDots (a, b, c) = pack $ intercalate "." (map show [a,b,c])
 
 indent :: Text -> NpmFetcher Text
 indent txt = do
@@ -65,17 +98,15 @@ putStrsI = putStrI . concat
 
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version _rpkg = do
-  let rpkg = Right _rpkg
+  let rpkg = NewPackage _rpkg
   pkgSet <- H.lookupDefault mempty name <$> gets resolved
   modify $ \s -> s {
     resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
     }
 
-_defaultCurlArgs :: [Text]
-_defaultCurlArgs = ["-L", "--fail"]
-
+-- | Performs a curl query and returns whatever that query returns.
 curl :: [Text] -> NpmFetcher Text
-curl args = shell $ print_stdout False $ run "curl" (_defaultCurlArgs <> args)
+curl args = shell $ print_stdout False $ run "curl" (["-L", "--fail"] <> args)
 
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
@@ -192,6 +223,7 @@ fetchHttp subpath uri = do
 
 githubCurl :: Text -> NpmFetcher Value
 githubCurl uri = do
+  -- Add in the github auth token if it is provided.
   extraCurlArgs <- gets githubAuthToken >>= \case
     Nothing -> return []
     Just token -> return ["-H", "Authorization: token " <> token]
@@ -284,9 +316,24 @@ resolveNpmVersionRange name range = case range of
 -- duplication.
 resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
+  -- We've alread defined some versions of this package.
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
-    vs -> return $ maximum vs
+    vs -> do
+      let bestVersion = maximum vs
+          versionDots = concatDots bestVersion
+          package = fromJust $ H.lookup bestVersion versions
+      putStrsLn ["Requirement ", name, " version ", pack $ show range,
+                 " already satisfied:"]
+      putStrsLn $ case package of
+        NewPackage _ -> ["Fetched package version ", versionDots]
+        FromExistingInOutput _ -> ["Already had version ", versionDots,
+                                   " in output directory (use --no-cache",
+                                   " to override)"]
+        FromExistingInExtension name _ -> ["Version ", versionDots,
+                                           " provided by extension ", name]
+      return bestVersion
+  -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
 
 startResolving :: Name -> SemVer -> NpmFetcher ()
@@ -379,7 +426,7 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: Record (HashMap SemVer NExpr)
+startState :: PackageMap PreExistingPackage
            -> [Text]
            -> Maybe Text
            -> NpmFetcherState
@@ -387,7 +434,7 @@ startState existing registries token = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
-      resolved = map (map Left) existing,
+      resolved = mapPM toFullyDefined existing,
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
@@ -420,12 +467,12 @@ runItWith state x = do
     (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
     (Right x, state) -> return (x, state)
 
-getPkg :: Name
-       -> Record (HashMap SemVer NExpr)
-       -> Maybe Text -- a possible github token
-       -> IO (Record (HashMap SemVer (Either NExpr ResolvedPkg)))
+getPkg :: Name -- ^ Name of package to get.
+       -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
+       -> Maybe Text -- ^ A possible github token.
+       -> IO (PackageMap FullyDefinedPackage) -- ^ Set of fully defined packages.
 getPkg name existing token = do
   let range = Gt (0, 0, 0)
   state <- startState existing <$> getRegistries <*> pure token
-  (_, finalState) <- runItWith state (_resolveDep name range)
+  (_, finalState) <- runItWith state (resolveDep name range)
   return (resolved finalState)
