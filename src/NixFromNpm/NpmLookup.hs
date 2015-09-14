@@ -42,15 +42,29 @@ data FullyDefinedPackage
   | FromExistingInExtension Name NExpr
   deriving (Show, Eq)
 
+-- | The type of pre-existing packages, which can either come from the
+-- output path, or come from an extension
+data PreExistingPackage
+  = FromOutput NExpr
+  | FromExtension Name NExpr
+  deriving (Show, Eq)
+
+toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
+toFullyDefined (FromOutput expr) = FromExistingInOutput expr
+toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
+
 -- | We use this data structure a lot: a mapping of package names to
 --   a mapping of versions to fully defined packages.
-type PackageMap = Record (HashMap SemVer FullyDefinedPackage)
+type PackageMap pkg = Record (HashMap SemVer pkg)
+
+mapPM :: (a -> b) -> PackageMap a -> PackageMap b
+mapPM f = H.map (H.map f)
 
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
   githubAuthToken :: Maybe Text,
-  resolved :: PackageMap,
+  resolved :: PackageMap FullyDefinedPackage,
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -60,6 +74,9 @@ data NpmFetcherState = NpmFetcherState {
 } deriving (Show, Eq)
 
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
+
+concatDots :: SemVer -> Text
+concatDots (a, b, c) = pack $ intercalate "." (map show [a,b,c])
 
 indent :: Text -> NpmFetcher Text
 indent txt = do
@@ -298,13 +315,24 @@ resolveNpmVersionRange name range = case range of
 -- duplication.
 resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
+  -- We've alread defined some versions of this package.
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
+          versionDots = concatDots bestVersion
+          package = fromJust $ H.lookup bestVersion versions
       putStrsLn ["Requirement ", name, " version ", pack $ show range,
-                 " already satisfied: ", pack $ show bestVersion]
+                 " already satisfied:"]
+      putStrsLn $ case package of
+        NewPackage _ -> ["Fetched package version ", versionDots]
+        FromExistingInOutput _ -> ["Already had version ", versionDots,
+                                   " in output directory (use --no-cache",
+                                   " to override)"]
+        FromExistingInExtension name _ -> ["Version ", versionDots,
+                                           " provided by extension ", name]
       return bestVersion
+  -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
 
 startResolving :: Name -> SemVer -> NpmFetcher ()
@@ -397,7 +425,7 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: PackageMap
+startState :: PackageMap PreExistingPackage
            -> [Text]
            -> Maybe Text
            -> NpmFetcherState
@@ -405,7 +433,7 @@ startState existing registries token = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
-      resolved = existing,
+      resolved = mapPM toFullyDefined existing,
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
@@ -438,12 +466,12 @@ runItWith state x = do
     (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
     (Right x, state) -> return (x, state)
 
-getPkg :: Name
-       -> PackageMap
-       -> Maybe Text -- a possible github token
-       -> IO PackageMap
+getPkg :: Name -- ^ Name of package to get.
+       -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
+       -> Maybe Text -- ^ A possible github token.
+       -> IO (PackageMap FullyDefinedPackage) -- ^ Set of fully defined packages.
 getPkg name existing token = do
   let range = Gt (0, 0, 0)
   state <- startState existing <$> getRegistries <*> pure token
-  (_, finalState) <- runItWith state (_resolveDep name range)
+  (_, finalState) <- runItWith state (resolveDep name range)
   return (resolved finalState)
