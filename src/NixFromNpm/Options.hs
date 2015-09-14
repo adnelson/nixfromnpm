@@ -51,6 +51,7 @@ pOptions githubToken = NixFromNpmOptions
                       <> help "Build all expressions from scratch")
     extendHelp = "Use expressions at PATH called NAME"
     extendPaths = many (textOption (long "extend"
+                                    <> short 'E'
                                     <> metavar "NAME=PATH"
                                     <> help extendHelp))
     isTest = switch (long "test"
@@ -61,8 +62,9 @@ pOptions githubToken = NixFromNpmOptions
                            <> value 10)
     registries :: Parser [Text]
     registries = many $ textOption (long "registry"
-                                  <> metavar "REGISTRY"
-                                  <> help "NPM registry to query")
+                                    <> short 'R'
+                                    <> metavar "REGISTRY"
+                                    <> help "NPM registry to query")
     tokenHelp = ("Token to use for github access (also can be set with " <>
                  "GITHUB_TOKEN environment variable)")
     token = (Just <$> textOption (long "github-token"
