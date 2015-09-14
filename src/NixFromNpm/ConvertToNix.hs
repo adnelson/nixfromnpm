@@ -2,6 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module NixFromNpm.ConvertToNix where
 
 import Data.HashMap.Strict (HashMap)
@@ -19,7 +20,7 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
-import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..))
+import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..), PackageMap)
 
 _startingSrc :: String
 _startingSrc = "\
@@ -123,11 +124,12 @@ mkDefaultNix rec extensionMap = do
       mkBinding name ver = toDepName name ver
                             `bindTo` callPackage (toPath name ver)
       mkBindings name vers = map (mkBinding name) vers
-      mkDefVer name vers = do
-        fixName name `bindTo` mkSym (toDepName name $ maximum vers)
+      mkDefVer name vers = case vers of
+        [] -> errorC ["FATAL: no versions generated for package ", name]
+        _  -> fixName name `bindTo` mkSym (toDepName name $ maximum vers)
       -- This bit of map gymnastics will create a list of pairs of names
       -- with all of the versions of that name that we have.
-      versOnly = map (map (map fst)) $ H.toList $ map H.toList rec
+      versOnly = sortOn fst $ map (map (map fst)) $ H.toList $ map H.toList rec
       byVersion = mkNonRecSet $ concatMap (uncurry mkBindings) versOnly
       defaults = mkWith (mkSym "byVersion") $
         mkNonRecSet $ map (uncurry mkDefVer) versOnly
@@ -136,38 +138,7 @@ mkDefaultNix rec extensionMap = do
                      "defaults" `bindTo` defaults]
   modifyFunctionBody (appendBindings newBindings) _startingExpr
 
-takeNewPackages :: Record (HashMap SemVer (Either NExpr ResolvedPkg))
-                -> Record (HashMap SemVer ResolvedPkg)
-takeNewPackages startingRec = do
-  let takeNews = modifyMap $ \case Left _ -> Nothing
-                                   Right rpkg -> Just rpkg
-      takeNonEmptys = H.filter (not . H.null)
-  takeNonEmptys $ H.map takeNews startingRec
-
-dumpPkgs :: MonadIO m
-         => String
-         -> Record (HashMap SemVer (Either NExpr ResolvedPkg))
-         -> Record Path -- ^ Libraries being extended.
-         -> m ()
-dumpPkgs path rPkgs extensions = liftIO $ do
-  let newPackages = takeNewPackages rPkgs
-  -- if there aren't any new packages, we can stop here
-  if H.null newPackages
-  then putStrLn "No new packages created." >> return ()
-  else do
-    putStrsLn ["Creating new packages at ", pack path]
-    createDirectoryIfMissing True path
-    withDir path $ forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
-      writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs extensions
-      let subdir = path </> unpack pkgName
-      -- If we don't have any new packages, we don't need to do
-      -- anything.
-      createDirectoryIfMissing False subdir
-      withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, rpkg) -> do
-        let nixexpr = resolvedPkgToNix rpkg
-        writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
-
-takeNewPackages :: Record (HashMap SemVer FullyDefinedPackage)
+takeNewPackages :: PackageMap
                 -> Record (HashMap SemVer NExpr)
 takeNewPackages startingRec = do
   let takeNews = modifyMap $ \case
@@ -178,13 +149,13 @@ takeNewPackages startingRec = do
   takeNonEmptys $ H.map takeNews startingRec
 
 dumpPkgs :: MonadIO m
-         => String
-         -> Record (HashMap SemVer FullyDefinedPackage)
+         => String      -- ^ Path to directory packages are being put in.
+         -> PackageMap  -- ^ Packages being dumped.
          -> Record Path -- ^ Libraries being extended.
          -> m ()
 dumpPkgs path rPkgs extensions = liftIO $ do
   let newPackages = takeNewPackages rPkgs
-  -- if there aren't any new packages, we can stop here
+  -- if there aren't any new packages, we can stop here.
   if H.null newPackages
   then putStrLn "No new packages created." >> return ()
   else do
@@ -241,25 +212,34 @@ findExisting maybeName path = do
       putStrsLn ["Found ", render total, " existing expressions"]
       return $ H.fromList $ catMaybes verMaps
 
+-- | Given the output directory and any number of extensions to load,
+-- finds any existing packages.
+preloadPackages :: Bool        -- ^ Whether to skip the existence check.
+                -> Path        -- ^ Output path to search for existing packages.
+                -> Record Path -- ^ Mapping of names of libraries to extend,
+                               --   and paths to those libraries.
+                -> IO PackageMap
+preloadPackages noExistCheck path toExtend = do
+  existing <- if noExistCheck then pure mempty
+              else (map $ map FromExistingInOutput) <$> findExisting Nothing path
+  libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
+    map (map $ FromExistingInExtension name) <$> findExisting (Just name) path
+  return (existing <> libraries)
+
 -- | Given the name of a package and a place to dump expressions to, generates
 --   the expressions needed to build that package.
-dumpPkgNamed :: Bool        -- ^ Whether to skip the existence check.
-             -> Text        -- ^ The name of the package to fetch.
-             -> Text        -- ^ The path to output to.
-             -> Record Path -- ^ Mapping of names of libraries to extend,
-                            --   and paths to those libraries.
+dumpPkgNamed :: Text        -- ^ The name of the package to fetch.
+             -> Path        -- ^ The path to output to.
+             -> PackageMap  -- ^ Set of existing packages.
+             -> Record Path -- ^ Names -> paths of extensions.
              -> Maybe Text  -- ^ Optional github token.
-             -> IO ()
-dumpPkgNamed noExistCheck name path toExtend token = do
-  existing <- if noExistCheck
-              then pure mempty
-              else map (map FromExistingInOutput) $ findExisting Nothing path
-  libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
-    map (FromExistingInExtension name) $ findExisting (Just name) path
+             -> IO ()       -- ^ Writes files to a folder.
+dumpPkgNamed name path existing extensions token = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name (existing <> libraries) token
-  dumpPkgs (pwd </> unpack path) packages toExtend
+  packages <- getPkg name existing token
+  dumpPkgs (pwd </> unpack path) packages extensions
 
+-- | Parse the NAME=PATH extension directives.
 getExtensions :: [Text] -> Record Path
 getExtensions = foldl' step mempty where
   step :: Record Path -> Text -> Record Path
@@ -271,8 +251,13 @@ getExtensions = foldl' step mempty where
     _ -> errorC ["Extensions must be of the form NAME=PATH (in argument ",
                  nameEqPath, ")"]
 
+displayExisting :: PackageMap -> IO ()
+displayExisting pmap = forM_
+
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions NixFromNpmOptions{..} = do
   forM_ nfnoPkgNames $ \name -> do
     let extensions = getExtensions nfnoExtendPaths
-    dumpPkgNamed nfnoNoCache name nfnoOutputPath extensions nfnoGithubToken
+    existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
+    displayExisting existing
+    dumpPkgNamed name nfnoOutputPath existing extensions nfnoGithubToken

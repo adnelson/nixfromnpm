@@ -32,16 +32,25 @@ import NixFromNpm.Parsers.NpmVersion
 import Nix.Types
 --------------------------------------------------------------------------
 
+-- | Things which can be converted into nix expressions: either they
+--   are actual nix expressions themselves (which can be either
+--   existing in the output, or existing in an extension), or they are
+--   new packages which we have discovered.
 data FullyDefinedPackage
   = NewPackage ResolvedPkg
   | FromExistingInOutput NExpr
   | FromExistingInExtension Name NExpr
   deriving (Show, Eq)
 
+-- | We use this data structure a lot: a mapping of package names to
+--   a mapping of versions to fully defined packages.
+type PackageMap = Record (HashMap SemVer FullyDefinedPackage)
+
+-- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
   githubAuthToken :: Maybe Text,
-  resolved :: Record (HashMap SemVer FullyDefinedPackage),
+  resolved :: PackageMap,
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -388,7 +397,7 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: Record (HashMap SemVer FullyDefinedPackage)
+startState :: PackageMap
            -> [Text]
            -> Maybe Text
            -> NpmFetcherState
@@ -430,9 +439,9 @@ runItWith state x = do
     (Right x, state) -> return (x, state)
 
 getPkg :: Name
-       -> Record (HashMap SemVer FullyDefinedPackage)
+       -> PackageMap
        -> Maybe Text -- a possible github token
-       -> IO (Record (HashMap SemVer FullyDefinedPackage))
+       -> IO PackageMap
 getPkg name existing token = do
   let range = Gt (0, 0, 0)
   state <- startState existing <$> getRegistries <*> pure token
