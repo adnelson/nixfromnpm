@@ -3,7 +3,7 @@
 , hnix, hspec, hspec-expectations, http-client-streams, io-streams
 , MissingH, mtl, network-uri, parsec, shelly, stdenv
 , system-filepath, text, text-render, unordered-containers
-, optparse-applicative, curl, cacert, cabal-install, zsh
+, optparse-applicative, curl, cacert, cabal-install
 }:
 mkDerivation {
   pname = "nixfromnpm";
@@ -15,7 +15,7 @@ mkDerivation {
     aeson base bytestring classy-prelude containers data-default
     directory docopt error-list filepath hnix MissingH mtl network-uri
     parsec shelly system-filepath text text-render unordered-containers
-    optparse-applicative cabal-install curl zsh
+    optparse-applicative cabal-install curl
   ];
   executableHaskellDepends = [curl cacert];
   testDepends = [

@@ -19,8 +19,7 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
-import NixFromNpm.NpmLookup (getPkg)
-
+import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..))
 
 _startingSrc :: String
 _startingSrc = "\
@@ -168,6 +167,38 @@ dumpPkgs path rPkgs extensions = liftIO $ do
         let nixexpr = resolvedPkgToNix rpkg
         writeFile (unpack $ toDotNix ver) $ show $ prettyNix nixexpr
 
+takeNewPackages :: Record (HashMap SemVer FullyDefinedPackage)
+                -> Record (HashMap SemVer NExpr)
+takeNewPackages startingRec = do
+  let takeNews = modifyMap $ \case
+        NewPackage rpkg -> Just (resolvedPkgToNix rpkg)
+        FromExistingInOutput expr -> Just expr
+        FromExistingInExtension _ _ -> Nothing
+      takeNonEmptys = H.filter (not . H.null)
+  takeNonEmptys $ H.map takeNews startingRec
+
+dumpPkgs :: MonadIO m
+         => String
+         -> Record (HashMap SemVer FullyDefinedPackage)
+         -> Record Path -- ^ Libraries being extended.
+         -> m ()
+dumpPkgs path rPkgs extensions = liftIO $ do
+  let newPackages = takeNewPackages rPkgs
+  -- if there aren't any new packages, we can stop here
+  if H.null newPackages
+  then putStrLn "No new packages created." >> return ()
+  else do
+    putStrsLn ["Creating new packages at ", pack path]
+    createDirectoryIfMissing True path
+    withDir path $ forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
+      writeFile "default.nix" $ show $ prettyNix $ mkDefaultNix rPkgs extensions
+      let subdir = path </> unpack pkgName
+      -- If we don't have any new packages, we don't need to do
+      -- anything.
+      createDirectoryIfMissing False subdir
+      withDir subdir $ forM_ (H.toList pkgVers) $ \(ver, expr) -> do
+        writeFile (unpack $ toDotNix ver) $ show $ prettyNix expr
+
 parseVersion :: String -> IO (Maybe (SemVer, NExpr))
 parseVersion pth = do
   case parseSemVer . pack $ dropSuffix ".nix" $ takeBaseName pth of
@@ -180,17 +211,18 @@ parseVersion pth = do
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 --   expressions findable at that path and returns a map of them.
-findExisting :: Bool -- ^ Whether to fail if the path does not exist.
-             -> Path -- ^ The path to search.
+findExisting :: Maybe Name -- ^ Is `Just` if this is an extension.
+             -> Path       -- ^ The path to search.
              -> IO (Record (HashMap SemVer NExpr)) -- ^ Mapping of package
                                                    --   names to maps of
                                                    --   versions to nix
                                                    --   expressions.
-findExisting failIfNotExists path = do
+findExisting maybeName path = do
   doesDirectoryExist (unpack path) >>= \case
-    False -> if failIfNotExists
-             then errorC ["Path ", path, " does not exist."]
-             else return mempty
+    False -> case maybeName of
+               Just name -> errorC ["Extension ", name, " at path ", path,
+                                    " does not exist."]
+               Nothing -> return mempty
     True -> withDir (unpack path) $ do
       putStrsLn ["Searching for existing expressions in ", path, "..."]
       contents <- getDirectoryContents "."
@@ -221,9 +253,9 @@ dumpPkgNamed :: Bool        -- ^ Whether to skip the existence check.
 dumpPkgNamed noExistCheck name path toExtend token = do
   existing <- if noExistCheck
               then pure mempty
-              else findExisting False path
+              else map (map FromExistingInOutput) $ findExisting Nothing path
   libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
-    findExisting True path
+    map (FromExistingInExtension name) $ findExisting (Just name) path
   pwd <- getCurrentDirectory
   packages <- getPkg name (existing <> libraries) token
   dumpPkgs (pwd </> unpack path) packages toExtend

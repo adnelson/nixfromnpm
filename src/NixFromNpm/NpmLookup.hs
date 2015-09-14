@@ -32,10 +32,16 @@ import NixFromNpm.Parsers.NpmVersion
 import Nix.Types
 --------------------------------------------------------------------------
 
+data FullyDefinedPackage
+  = NewPackage ResolvedPkg
+  | FromExistingInOutput NExpr
+  | FromExistingInExtension Name NExpr
+  deriving (Show, Eq)
+
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
   githubAuthToken :: Maybe Text,
-  resolved :: Record (HashMap SemVer (Either NExpr ResolvedPkg)),
+  resolved :: Record (HashMap SemVer FullyDefinedPackage),
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
   currentlyResolving :: HashSet (Name, SemVer),
@@ -65,17 +71,15 @@ putStrsI = putStrI . concat
 
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version _rpkg = do
-  let rpkg = Right _rpkg
+  let rpkg = NewPackage _rpkg
   pkgSet <- H.lookupDefault mempty name <$> gets resolved
   modify $ \s -> s {
     resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
     }
 
-_defaultCurlArgs :: [Text]
-_defaultCurlArgs = ["-L", "--fail"]
-
+-- | Performs a curl query and returns whatever that query returns.
 curl :: [Text] -> NpmFetcher Text
-curl args = shell $ print_stdout False $ run "curl" (_defaultCurlArgs <> args)
+curl args = shell $ print_stdout False $ run "curl" (["-L", "--fail"] <> args)
 
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
@@ -384,7 +388,7 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: Record (HashMap SemVer NExpr)
+startState :: Record (HashMap SemVer FullyDefinedPackage)
            -> [Text]
            -> Maybe Text
            -> NpmFetcherState
@@ -392,7 +396,7 @@ startState existing registries token = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
-      resolved = map (map Left) existing,
+      resolved = existing,
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
@@ -426,9 +430,9 @@ runItWith state x = do
     (Right x, state) -> return (x, state)
 
 getPkg :: Name
-       -> Record (HashMap SemVer NExpr)
+       -> Record (HashMap SemVer FullyDefinedPackage)
        -> Maybe Text -- a possible github token
-       -> IO (Record (HashMap SemVer (Either NExpr ResolvedPkg)))
+       -> IO (Record (HashMap SemVer FullyDefinedPackage))
 getPkg name existing token = do
   let range = Gt (0, 0, 0)
   state <- startState existing <$> getRegistries <*> pure token
