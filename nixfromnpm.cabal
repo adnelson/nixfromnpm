@@ -1,5 +1,5 @@
 name:                nixfromnpm
-version:             0.2.1
+version:             0.2.2
 synopsis:            Generate nix expressions from npm packages.
 description:
   Given an npm package name and one or more npm repositories, will dump out a
@@ -31,6 +31,7 @@ library
                      , NixFromNpm.Parsers.Common
                      , NixFromNpm.Parsers.NpmVersion
                      , NixFromNpm.Parsers.SemVer
+                     , NixFromNpm.PackageMap
   build-depends:       base >=4.8 && <4.9
                      , classy-prelude
                      , text

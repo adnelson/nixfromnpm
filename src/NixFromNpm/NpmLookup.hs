@@ -21,6 +21,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
 import Shelly hiding (get)
+import Nix.Types
 
 import NixFromNpm.Common
 import NixFromNpm.NpmTypes
@@ -29,13 +30,13 @@ import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
-import Nix.Types
+import NixFromNpm.PackageMap
 --------------------------------------------------------------------------
 
 -- | Things which can be converted into nix expressions: either they
---   are actual nix expressions themselves (which can be either
---   existing in the output, or existing in an extension), or they are
---   new packages which we have discovered.
+-- are actual nix expressions themselves (which can be either
+-- existing in the output, or existing in an extension), or they are
+-- new packages which we have discovered.
 data FullyDefinedPackage
   = NewPackage ResolvedPkg
   | FromExistingInOutput NExpr
@@ -53,14 +54,6 @@ toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined (FromOutput expr) = FromExistingInOutput expr
 toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
 
--- | We use this data structure a lot: a mapping of package names to
---   a mapping of versions to fully defined packages.
-type PackageMap pkg = Record (HashMap SemVer pkg)
-
--- | Map a function across a PackageMap.
-mapPM :: (a -> b) -> PackageMap a -> PackageMap b
-mapPM f = H.map (H.map f)
-
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
   registries :: [URI],
@@ -68,7 +61,7 @@ data NpmFetcherState = NpmFetcherState {
   resolved :: PackageMap FullyDefinedPackage,
   pkgInfos :: Record PackageInfo,
   -- For cycle detection.
-  currentlyResolving :: HashSet (Name, SemVer),
+  currentlyResolving :: PackageMap (),
   indentLevel :: Int,
   knownProblematicPackages :: HashSet Name,
   getDevDeps :: Bool
@@ -99,9 +92,8 @@ putStrsI = putStrI . concat
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version _rpkg = do
   let rpkg = NewPackage _rpkg
-  pkgSet <- H.lookupDefault mempty name <$> gets resolved
   modify $ \s -> s {
-    resolved = H.insert name (H.insert version rpkg pkgSet) (resolved s)
+    resolved = pmInsert name version rpkg (resolved s)
     }
 
 -- | Performs a curl query and returns whatever that query returns.
@@ -155,6 +147,8 @@ bestMatchFromRecord range rec = do
     [] -> throwError1 "No versions satisfy given range"
     matches -> return $ snd $ maximumBy (compare `on` fst) matches
 
+-- | Performs a shell command and reports if it errors; otherwise returns
+--   the stdout from the command.
 shell :: Sh Text -> NpmFetcher Text
 shell action = do
   (code, out, err) <- shelly $ errExit False $ do
@@ -174,7 +168,7 @@ silentShell :: Sh Text -> NpmFetcher Text
 silentShell = shell . silently
 
 -- | Returns the SHA1 hash of the result of fetching the URI, and the path
--- in which the tarball is stored.
+--   in which the tarball is stored.
 nixPrefetchSha1 :: URI -> NpmFetcher (Text, FilePath)
 nixPrefetchSha1 uri = do
   hashAndPath <- silentShell $ do
@@ -323,14 +317,14 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
       let bestVersion = maximum vs
           versionDots = concatDots bestVersion
           package = fromJust $ H.lookup bestVersion versions
-      putStrsLn ["Requirement ", name, " version ", pack $ show range,
-                 " already satisfied:"]
+      putStrs ["Requirement ", name, " version ", pack $ show range,
+                 " already satisfied: "]
       putStrsLn $ case package of
-        NewPackage _ -> ["Fetched package version ", versionDots]
-        FromExistingInOutput _ -> ["Already had version ", versionDots,
+        NewPackage _ -> ["fetched package version ", versionDots]
+        FromExistingInOutput _ -> ["already had version ", versionDots,
                                    " in output directory (use --no-cache",
                                    " to override)"]
-        FromExistingInExtension name _ -> ["Version ", versionDots,
+        FromExistingInExtension name _ -> ["version ", versionDots,
                                            " provided by extension ", name]
       return bestVersion
   -- We haven't yet found any versions of this package.
@@ -339,14 +333,18 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
 startResolving :: Name -> SemVer -> NpmFetcher ()
 startResolving name ver = do
   putStrsLn ["Resolving ", name, " version ", renderSV ver]
-  modify $ \s ->
-    s {currentlyResolving = HS.insert (name, ver) $ currentlyResolving s}
+  modify $ \s -> do
+    s {currentlyResolving = pmInsert name ver () $ currentlyResolving s}
 
 finishResolving :: Name -> SemVer -> NpmFetcher ()
 finishResolving name ver = do
   modify $ \s ->
-    s {currentlyResolving = HS.delete (name, ver) $ currentlyResolving s}
+    s {currentlyResolving = pmDelete name ver $ currentlyResolving s}
   putStrsLn ["Finished resolving ", name, " ", renderSV ver]
+
+isBeingResolved :: Name -> SemVer -> NpmFetcher Bool
+isBeingResolved name version =
+  pmMember name version <$> gets currentlyResolving
 
 resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
 resolveVersionInfo versionInfo = do
@@ -359,14 +357,17 @@ resolveVersionInfo versionInfo = do
                                    viVersion versionInfo,
                                    " Due to: ", pack $ show err]
       Right v -> return v
-    HS.member (name, version) <$> gets currentlyResolving >>= \case
+    isBeingResolved name version >>= \case
       True -> do putStrsLn ["Warning: cycle detected"]
                  return version
       False -> do
+        -- Define a recursion function that takes a string describing the
+        -- dependency type, and a list of dependencies of that type.
         let recurOn deptype deps = map H.fromList $ do
               let depList = H.toList $ deps versionInfo
               when (length depList > 0) $
-                putStrsLn ["Found ", deptype, ": ", pack (show depList)]
+                putStrsLn [name, " version ", concatDots version, " has ",
+                           deptype, ": ", pack (show depList)]
               res <- map catMaybes $ forM depList $ \(depName, depRange) -> do
                 HS.member depName <$> gets knownProblematicPackages >>= \case
                   True -> do
@@ -380,9 +381,9 @@ resolveVersionInfo versionInfo = do
         -- To prevent the cycles, we store which packages we're currently
         -- resolving.
         startResolving name version
-        deps <- recurOn "Dependencies" viDependencies
+        deps <- recurOn "dependencies" viDependencies
         devDeps <- gets getDevDeps >>= \case
-          True -> recurOn "Dev dependencies" viDevDependencies
+          True -> recurOn "dev dependencies" viDevDependencies
           False -> return mempty
         finishResolving name version
         let dist = case viDist versionInfo of
@@ -434,7 +435,7 @@ startState existing registries token = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
-      resolved = mapPM toFullyDefined existing,
+      resolved = pmMap toFullyDefined existing,
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],

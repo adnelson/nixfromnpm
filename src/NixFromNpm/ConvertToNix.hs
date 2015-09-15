@@ -20,8 +20,9 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
+import NixFromNpm.PackageMap (PackageMap)
 import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..), concatDots,
-                             PackageMap, mapPM, PreExistingPackage(..))
+                             PreExistingPackage(..))
 
 _startingSrc :: String
 _startingSrc = "\
@@ -216,8 +217,8 @@ findExisting :: Maybe Name -- ^ Is `Just` if this is an extension.
 findExisting maybeName path = do
   doesDirectoryExist (unpack path) >>= \case
     False -> case maybeName of
-               Just name -> errorC ["Extension ", name, " at path ", path,
-                                    " does not exist."]
+               Just name -> errorC ["Extension ", pack $ show name,
+                                    " at path ", path, " does not exist."]
                Nothing -> return mempty
     True -> withDir (unpack path) $ do
       let wrapper :: NExpr -> PreExistingPackage

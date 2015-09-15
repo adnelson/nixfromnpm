@@ -1,2 +1,2 @@
 { nixpkgs ? import <nixpkgs> {}, compiler ? "ghc7102" }:
-(import ./project.nix { inherit nixpkgs compiler; }).env
+(import ./default.nix { inherit nixpkgs compiler; }).env
