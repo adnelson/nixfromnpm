@@ -10,8 +10,9 @@ import NixFromNpm.Common hiding ((<>))
 -- most of these are unimplemented.
 data NixFromNpmOptions = NixFromNpmOptions {
   nfnoPkgNames :: [Name],       -- ^ Names of packages to build.
-  nfnoPkgPaths :: [Text],       -- ^ Paths to package.jsons to build.
+  nfnoPkgPath :: Maybe Text,    -- ^ Paths to package.jsons to build.
   nfnoOutputPath :: Text,       -- ^ Path to output built expressions to.
+  nfnoNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
   nfnoNoCache :: Bool,          -- ^ Build all expressions from scratch.
   nfnoExtendPaths :: [Text],    -- ^ Extend existing expressions.
   nfnoTest :: Bool,             -- ^ Fetch only; don't write expressions.
@@ -26,8 +27,9 @@ textOption opts = pack <$> strOption opts
 pOptions :: Maybe Text -> Parser NixFromNpmOptions
 pOptions githubToken = NixFromNpmOptions
     <$> many (textOption packageName)
-    <*> many (textOption packageFile)
+    <*> packageFile
     <*> textOption outputDir
+    <*> noDefaultNix
     <*> noCache
     <*> extendPaths
     <*> isTest
@@ -35,24 +37,32 @@ pOptions githubToken = NixFromNpmOptions
     <*> timeout
     <*> token
   where
-    packageName = (short 'p'
+    packageName = short 'p'
                    <> long "package"
-                   <> metavar "PACKAGENAME"
-                   <> help "Package to generate expression for")
-    packageFile = (short 'f'
-                   <> long "file"
-                   <> metavar "PACKAGEFILE"
-                   <> help "Path to package.json to generate expression for")
-    outputDir = (short 'o'
+                   <> metavar "NAME"
+                   <> help ("Package to generate expression for (supports "
+                            <> "multiples)")
+    packageFileHelp = "Path to package.json to generate expression for "
+                      ++ " (NOT YET SUPPORTED)"
+    packageFile = (Just <$> textOption (long "file"
+                                        <> short 'f'
+                                        <> metavar "FILE"
+                                        <> help packageFileHelp))
+                  <|> pure Nothing
+    outputDir = short 'o'
                  <> long "output"
-                 <> metavar "DIRECTORY"
-                 <> help "Directory to output expressions to")
+                 <> metavar "OUTPUT"
+                 <> help "Directory to output expressions to"
+    noDefaultNix = switch (long "no-default-nix"
+                           <> help ("When building from a package.json, do not"
+                                    <> " create a default.nix"))
     noCache = switch (long "no-cache"
-                      <> help "Build all expressions from scratch")
-    extendHelp = "Use expressions at PATH called NAME"
+                      <> help "Build all expressions in OUTPUT from scratch")
+    extendHelp = ("Use expressions at PATH, optionally called NAME. (supports "
+                  <> "multiples)")
     extendPaths = many (textOption (long "extend"
-                                    <> short 'E'
-                                    <> metavar "NAME=PATH"
+                                    <> short 'e'
+                                    <> metavar "[NAME=]PATH"
                                     <> help extendHelp))
     isTest = switch (long "test"
                      <> help "Don't write expressions; just test")
@@ -62,9 +72,10 @@ pOptions githubToken = NixFromNpmOptions
                            <> value 10)
     registries :: Parser [Text]
     registries = many $ textOption (long "registry"
-                                    <> short 'R'
+                                    <> short 'r'
                                     <> metavar "REGISTRY"
-                                    <> help "NPM registry to query")
+                                    <> help ("NPM registry to query (supports "
+                                             <> "multiples)"))
     tokenHelp = ("Token to use for github access (also can be set with " <>
                  "GITHUB_TOKEN environment variable)")
     token = (Just <$> textOption (long "github-token"

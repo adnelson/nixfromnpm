@@ -18,13 +18,21 @@ Given the name of one or more packages and an output directory, queries NPM repo
 
 First, nix needs to be installed. Then to install `nixfromnpm`, just use nix. Make sure `nixpkgs` is in your `NIX_PATH`, and then run:
 
-```
+```bash
 $ nix-env -f /path/to/nixfromnpm -i
+```
+
+If you'd like to try out `nixfromnpm` or hack on it, you can use it in a `nix-shell`:
+
+```bash
+$ nix-shell /path/to/nixfromnpm
+$ cabal configure
+$ cabal run -- <arguments>
 ```
 
 ### Usage
 
-#### Basics
+#### Generating an expression for a package
 
 The most basic usage is providing `-p` (`--package`) and `-o` (`--output`) flags:
 
@@ -34,19 +42,37 @@ $ nixfromnpm -p package_name -o /some/path
 
 This will build the package called `package_name` and put all of the generated expressions in `/some/path`.
 
+#### Generating an expression from a package.json file
+
+**Note:** this feature is not yet implemented.
+
+You can also generate an expression for a project on the local disk by passing in the path to a `package.json` file. The generated expressions will be placed by default in the same directory as the `package.json` file in a `nix` folder, and a `default.nix` will be created in the directory as well.
+
+```bash
+$ nixfromnpm -f /path/to/package.json
+```
+
+If a different output path is desired, `-o` can be used. The creation of `default.nix` can be disabled with `--no-default-nix`.
+
+```bash
+$ nixfromnpm -f /path/to/package.json -o /path/to/expressions --no-default-nix
+```
+
+This will build the package called `package_name` and put all of the generated expressions in `/some/path`.
+
 #### Extra registries
 
-For a package in a private repo located at `https://my.registry:2345`:
+For a package in a private registry located at `https://my.registry:2345`:
 
-```
-$ nixfromnpm -p private_package -o /some/path -R https://my.registry:2345
+```bash
+$ nixfromnpm -p private_package -o /some/path -r https://my.registry:2345
 ```
 
 #### Github authorization
 
 For npm packages which fetch from git, if an authorization token is required:
 
-```
+```bash
 $ nixfromnpm -p package -o /some/path --github-token llnl23uinlaskjdno34nedhoaidjn5o48wugn
 ```
 
@@ -61,10 +87,10 @@ By default, `nixfromnpm` will discover all existing packages in the specified ou
 If there is an existing set of packages located in `/path/to/library`, you might want to build a new set of packages without modifying the existing set. For example, it might be read-only, or you might want to separate private packages from public. You can do this with extensions:
 
 
-```
-$ nixfromnpm -p package -o /some/path -E /path/to/library
+```bash
+$ nixfromnpm -p package -o /some/path --extend /path/to/library
 ```
 
-This will discover all of the packages in `/path/to/library` and make them available in the generated expressions at `/some/path`, but will not modify the library at all.
+This will discover all of the packages in `/path/to/library` and make them available in the generated expressions at `/some/path`, but will not modify the library at all. Extensions can also be specified with `-e`
 
-You can pass in multiple libraries with multiple invocations of `-E`, but the libraries must have distinct base names (e.g. `/path/lib1`, `/path/lib2`). If two libraries share a base name, you can rename them with a `NAME=PATH` syntax, e.g. `-E lib1=/path1/lib -E lib2=/path2/lib`.
+You can pass in multiple libraries with multiple invocations of `--extend`, but the libraries must have distinct base names (e.g. `/path/lib1`, `/path/lib2`). If two libraries share a base name, you can rename them with a `NAME=PATH` syntax, e.g. `-E lib1=/path1/lib -E lib2=/path2/lib`.
