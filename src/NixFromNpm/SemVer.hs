@@ -12,6 +12,7 @@ import Data.Aeson.Types (typeMismatch)
 
 import NixFromNpm.Common
 
+-- A SemVer has major, minor and patch versions.
 type SemVer = (Int, Int, Int)
 
 -- | A partially specified semantic version. Implicitly defines
@@ -22,19 +23,22 @@ data Wildcard = Any
               | Three Int Int Int
               deriving (Show, Eq)
 
+-- | A range specifies bounds on a semver.
 data SemVerRange
-  = Eq SemVer
-  | Gt SemVer
-  | Lt SemVer
-  | Geq SemVer
-  | Leq SemVer
-  | And SemVerRange SemVerRange
-  | Or SemVerRange SemVerRange
+  = Eq SemVer                   -- ^ Exact equality
+  | Gt SemVer                   -- ^ Greater than
+  | Lt SemVer                   -- ^ Less than
+  | Geq SemVer                  -- ^ Greater than or equal to
+  | Leq SemVer                  -- ^ Less than or equal to
+  | And SemVerRange SemVerRange -- ^ Conjunction
+  | Or SemVerRange SemVerRange  -- ^ Disjunction
   deriving (Eq)
 
+-- | Render a semver as Text.
 renderSV :: SemVer -> Text
 renderSV (x, y, z) = pack (renderSV' (x, y, z))
 
+-- | Render a semver as a String.
 renderSV' :: SemVer -> String
 renderSV' (x, y, z) = show x <> "." <> show y <> "." <> show z
 

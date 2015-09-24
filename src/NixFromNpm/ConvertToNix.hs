@@ -21,19 +21,23 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.PackageMap (PackageMap)
-import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..), concatDots,
+import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
                              PreExistingPackage(..))
 
 _startingSrc :: String
 _startingSrc = "\
-  \{nixpkgs ? import <nixpkgs> {}}:                                  \
+  \{pkgs ? import <nixpkgs> {}}:                                  \
   \let                                                               \
-  \  inherit (nixpkgs.lib) attrValues foldl;                         \
+  \  inherit (pkgs.lib) attrValues foldl;                         \
   \  joinSets = foldl (a: b: a // b) {};                             \
   \  joinedExtensions = joinSets (attrValues extensions);            \
-  \  allPkgs = nixpkgs // nodePkgs // joinedExtensions //            \
-  \   {inherit (nixpkgs.nodePackages)buildNodePackage;};             \
-  \  callPackage = nixpkgs.lib.callPackageWith allPkgs;              \
+  \  nodejs = pkgs.callPackage ../data/nodejs4.1.1.nix {};       \
+  \  buildNodePackage = import ../data/buildNodePackage.nix { \
+  \    inherit pkgs nodejs; \
+  \  }; \
+  \  allPkgs = pkgs // nodePkgs // joinedExtensions //            \
+  \   {inherit buildNodePackage;};             \
+  \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
   \nodePkgs"
@@ -63,9 +67,10 @@ fixName = T.replace "." "-"
 toDepName :: Name -> SemVer -> Name
 toDepName name (a, b, c) = concat [fixName name, "_", pack $
                                    intercalate "-" $ map show [a, b, c]]
+
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> Text
-toDotNix v = concatDots v <> ".nix"
+toDotNix v = renderSV v <> ".nix"
 
 -- | Creates a doublequoted string from some text.
 str :: Text -> NExpr

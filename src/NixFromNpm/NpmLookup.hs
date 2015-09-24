@@ -19,6 +19,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
+import qualified Data.Dequeue as D
 import qualified Text.Parsec as Parsec
 import Shelly hiding (get)
 import Nix.Types
@@ -56,38 +57,33 @@ toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
 
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
+  -- | List of URIs that we can use to query for NPM packages, in order of
+  -- preference.
   registries :: [URI],
+  -- | Used for authorization when fetching a package from github.
   githubAuthToken :: Maybe Text,
+  -- | Set of all of the packages that we have fully resolved.
   resolved :: PackageMap FullyDefinedPackage,
+  -- | Set of all of the package info objects that we have fetched for
+  -- a particular package.
   pkgInfos :: Record PackageInfo,
-  -- For cycle detection.
+  -- | Queue of packages waiting to be resolved, since we are fetching using
+  -- breadth-first search.
+  packageWaitQueue :: D.BankersDequeue (Name, SemVerRange),
+  -- | For cycle detection.
   currentlyResolving :: PackageMap (),
-  indentLevel :: Int,
+  -- | Stack of packages that we are resolving so we can get the path to the
+  -- current package.
+  packageStackTrace :: [(Name, SemVer)],
+  -- | Set of packages known to be problematic; it is an error if one of these
+  -- packages appears in a dependency tree.
   knownProblematicPackages :: HashSet Name,
+  -- | Boolean telling us whether to fetch dev dependencies.
   getDevDeps :: Bool
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | The monad for fetching from NPM.
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
-
-concatDots :: SemVer -> Text
-concatDots (a, b, c) = pack $ intercalate "." (map show [a,b,c])
-
-indent :: Text -> NpmFetcher Text
-indent txt = do
-  ind <- gets indentLevel
-  return $ concat [txt, " (depth of ", pack $ show ind, ")"]
-
-putStrLnI :: Text -> NpmFetcher ()
-putStrLnI = indent >=> putStrLn
-
-putStrsLnI :: [Text] -> NpmFetcher ()
-putStrsLnI = putStrLnI . concat
-
-putStrI :: Text -> NpmFetcher ()
-putStrI = indent >=> putStr
-
-putStrsI :: [Text] -> NpmFetcher ()
-putStrsI = putStrI . concat
 
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version _rpkg = do
@@ -185,11 +181,9 @@ nixPrefetchSha1 uri = do
 
 extractVersionInfo :: FilePath -> Text -> NpmFetcher VersionInfo
 extractVersionInfo tarballPath subpath = do
-  ind <- gets indentLevel
   pkJson <- silentShell $ withTmpDir $ \dir -> do
     chdir dir $ do
       putStrs ["Extracting ", pathToText tarballPath, " to tempdir"]
-      putStrsLn [" (depth of ", pack $ show ind, ")"]
       run_ "tar" ["-xf", pathToText tarballPath]
       curdir <- pathToText <$> pwd
       pth <- fmap T.strip $ run "find" [curdir, "-name", "package.json"]
@@ -315,7 +309,7 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
-          versionDots = concatDots bestVersion
+          versionDots = renderSV bestVersion
           package = fromJust $ H.lookup bestVersion versions
       putStrs ["Requirement ", name, " version ", pack $ show range,
                  " already satisfied: "]
@@ -366,7 +360,7 @@ resolveVersionInfo versionInfo = do
         let recurOn deptype deps = map H.fromList $ do
               let depList = H.toList $ deps versionInfo
               when (length depList > 0) $
-                putStrsLn [name, " version ", concatDots version, " has ",
+                putStrsLn [name, " version ", renderSV version, " has ",
                            deptype, ": ", pack (show depList)]
               res <- map catMaybes $ forM depList $ \(depName, depRange) -> do
                 HS.member depName <$> gets knownProblematicPackages >>= \case
@@ -436,10 +430,11 @@ startState existing registries token = do
       registries = parseURIs registries,
       githubAuthToken = token,
       resolved = pmMap toFullyDefined existing,
+      packageWaitQueue = D.empty,
+      packageStackTrace = [],
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
-      indentLevel = 0,
       getDevDeps = False
     }
 

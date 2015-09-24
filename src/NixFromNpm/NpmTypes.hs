@@ -15,15 +15,21 @@ import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.SemVer
 
+-- | Package information; specifically all of the different versions.
 data PackageInfo = PackageInfo {
   piVersions :: Record VersionInfo,
   piTags :: Record Name
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | Metadata about a package.
 data PackageMeta = PackageMeta {
   pmDescription :: Maybe Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | Expresses all of the information that a version of a package needs, in
+-- the abstract (e.g. using version ranges instead of explicit versions).
+-- This type can be used as an input to the NpmLookup stuff to produce a
+-- `ResolvedPkg`.
 data VersionInfo = VersionInfo {
   viDependencies :: Record NpmVersionRange,
   viDevDependencies :: Record NpmVersionRange,
@@ -33,14 +39,17 @@ data VersionInfo = VersionInfo {
   viHasTest :: Bool,
   viMeta :: PackageMeta,
   viVersion :: Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
   diShasum :: Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | This contains the same information as the .nix file that corresponds
+-- to the package. More or less it tells us everything that we need to build
+-- the package.
 data ResolvedPkg = ResolvedPkg {
   rpName :: Name,
   rpVersion :: SemVer,
@@ -48,7 +57,7 @@ data ResolvedPkg = ResolvedPkg {
   rpMeta :: PackageMeta,
   rpDependencies :: Record SemVer,
   rpDevDependencies :: Record SemVer
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
 instance Semigroup PackageInfo where
   PackageInfo vs ts <> PackageInfo vs' ts' =
