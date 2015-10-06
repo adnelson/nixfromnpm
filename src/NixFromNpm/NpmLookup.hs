@@ -149,7 +149,10 @@ bestMatchFromRecord :: SemVerRange -> Record a -> NpmFetcher a
 bestMatchFromRecord range record = do
   pairs <- toSemVerList record
   case filter (matches range . fst) pairs of
-    [] -> throwErrorC ["No versions satisfy given range"]
+    [] -> do
+      let weaker = weakenEquality range
+      if weaker == range then throwErrorC ["No versions satisfy given range"]
+      else bestMatchFromRecord weaker record
     matches -> return $ snd $ maximumBy (compare `on` fst) matches
 
 -- | Performs a shell command and reports if it errors; otherwise returns
@@ -416,7 +419,7 @@ resolveVersionInfo versionInfo = do
               let depList = H.toList $ deps versionInfo
               when (length depList > 0) $
                 putStrsLn [name, " version ", renderSV version, " has ",
-                           deptype, ": ", pack (show depList)]
+                           deptype, ": ", showDeps depList]
               res <- map catMaybes $ forM depList $ \(depName, depRange) -> do
                 HS.member depName <$> gets knownProblematicPackages >>= \case
                   True -> do

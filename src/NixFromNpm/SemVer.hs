@@ -21,7 +21,7 @@ type SemVer = (Int, Int, Int, [Text])
 data Wildcard = Any
               | One Int
               | Two Int Int
-              | Three Int Int Int
+              | Three Int Int Int [Text]
               deriving (Show, Eq)
 
 -- | A range specifies bounds on a semver.
@@ -74,6 +74,10 @@ matches range ver = case range of
   And sv1 sv2 -> matches sv1 ver && matches sv2 ver
   Or sv1 sv2 -> matches sv1 ver || matches sv2 ver
 
+weakenEquality :: SemVerRange -> SemVerRange
+weakenEquality (Eq (maj, min, _, [])) = wildcardToRange (Two maj min)
+weakenEquality rng = rng
+
 -- | Gets the highest-matching semver in a range.
 bestMatch :: SemVerRange -> [SemVer] -> Either String SemVer
 bestMatch range vs = case filter (matches range) vs of
@@ -85,7 +89,7 @@ wildcardToSemver :: Wildcard -> SemVer
 wildcardToSemver Any = (0, 0, 0, [])
 wildcardToSemver (One n) = (n, 0, 0, [])
 wildcardToSemver (Two n m) = (n, m, 0, [])
-wildcardToSemver (Three n m o) = (n, m, o, [])
+wildcardToSemver (Three n m o tags) = (n, m, o, tags)
 
 -- | Translates a wildcard (partially specified version) to a range.
 -- Ex: 2 := >=2.0.0 <3.0.0
@@ -95,16 +99,16 @@ wildcardToRange = \case
   Any -> Geq (0, 0, 0, [])
   One n -> Geq (n, 0, 0, []) `And` Lt (n+1, 0, 0, [])
   Two n m -> Geq (n, m, 0, []) `And` Lt (n, m + 1, 0, [])
-  Three n m o -> Eq (n, m, o, [])
+  Three n m o tags -> Eq (n, m, o, tags)
 
 -- | Translates a ~wildcard to a range.
 -- Ex: ~1.2.3 := >=1.2.3 <1.(2+1).0 := >=1.2.3 <1.3.0
 tildeToRange :: Wildcard -> SemVerRange
 tildeToRange = \case
-  Any -> tildeToRange (Three 0 0 0)
-  One n -> tildeToRange (Three n 0 0)
-  Two n m -> tildeToRange (Three n m 0)
-  Three n m o -> And (Geq (n, m, o, [])) (Lt (n, m + 1, 0, []))
+  Any -> tildeToRange (Three 0 0 0 [])
+  One n -> tildeToRange (Three n 0 0 [])
+  Two n m -> tildeToRange (Three n m 0 [])
+  Three n m o tags -> And (Geq (n, m, o, tags)) (Lt (n, m + 1, 0, tags))
 
 -- | Translates a ^wildcard to a range.
 -- Ex: ^1.2.x := >=1.2.0 <2.0.0
@@ -112,9 +116,9 @@ caratToRange :: Wildcard -> SemVerRange
 caratToRange = \case
   One n -> And (Geq (n, 0, 0, [])) (Lt (n+1, 0, 0, []))
   Two n m -> And (Geq (n, m, 0, [])) (Lt (n+1, 0, 0, []))
-  Three 0 0 n -> Eq (0, 0, n, [])
-  Three 0 n m -> And (Geq (0, n, m, [])) (Lt (0, n + 1, 0, []))
-  Three n m o -> And (Geq (n, m, o, [])) (Lt (n+1, 0, 0, []))
+  Three 0 0 n tags -> Eq (0, 0, n, tags)
+  Three 0 n m tags -> And (Geq (0, n, m, tags)) (Lt (0, n + 1, 0, tags))
+  Three n m o tags -> And (Geq (n, m, o, tags)) (Lt (n+1, 0, 0, tags))
 
 -- | Translates two hyphenated wildcards to an actual range.
 -- Ex: 1.2.3 - 2.3.4 := >=1.2.3 <=2.3.4
@@ -125,8 +129,8 @@ hyphenatedRange wc1 wc2 = And sv1 sv2 where
   sv1 = case wc1 of Any -> Geq (0, 0, 0, [])
                     One n -> Geq (n, 0, 0, [])
                     Two n m -> Geq (n, m, 0, [])
-                    Three n m o -> Geq (n, m, o, [])
+                    Three n m o tags -> Geq (n, m, o, tags)
   sv2 = case wc2 of Any -> Geq (0, 0, 0, []) -- Refers to "any version"
                     One n -> Lt (n+1, 0, 0, [])
                     Two n m -> Lt (n, m + 1, 0, [])
-                    Three n m o -> Leq (n, m, o, [])
+                    Three n m o tags -> Leq (n, m, o, tags)

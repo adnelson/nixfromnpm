@@ -115,3 +115,11 @@ getObject :: String -> Value -> Parser (HashMap Text Value)
 getObject _ (Object o) = return o
 getObject msg v =
   typeMismatch ("object (got " <> show v <> ", message " <> msg <> ")") v
+
+
+patchIfMatches :: (a -> Bool) -- ^ Predicate function
+               -> (a -> a) -- ^ Modification function
+               -> a -- ^ Input object
+               -> a -- ^ Patched object
+patchIfMatches pred mod input | pred input = mod input
+                              | otherwise  = input
