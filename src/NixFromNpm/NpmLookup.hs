@@ -14,6 +14,8 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
+import Numeric (showHex)
+import System.IO.Temp (openTempFile)
 
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Aeson.Parser
@@ -23,6 +25,11 @@ import qualified Data.Dequeue as D
 import qualified Text.Parsec as Parsec
 import Shelly hiding (get)
 import Nix.Types
+import Network.HTTP.Types.Header
+import Network.HTTP.Conduit
+import Codec.Archive.Tar as Tar hiding (pack, unpack)
+import Codec.Archive.Tar.Entry as Tar
+import qualified Crypto.Hash.SHA1 as SHA1
 
 import NixFromNpm.Common
 import NixFromNpm.NpmTypes
@@ -61,7 +68,7 @@ data NpmFetcherState = NpmFetcherState {
   -- preference.
   registries :: [URI],
   -- | Used for authorization when fetching a package from github.
-  githubAuthToken :: Maybe Text,
+  githubAuthToken :: Maybe ByteString,
   -- | Set of all of the packages that we have fully resolved.
   resolved :: PackageMap FullyDefinedPackage,
   -- | Set of all of the package info objects that we have fetched for
@@ -79,8 +86,10 @@ data NpmFetcherState = NpmFetcherState {
   -- packages appears in a dependency tree.
   knownProblematicPackages :: HashSet Name,
   -- | Boolean telling us whether to fetch dev dependencies.
-  getDevDeps :: Bool
-  } deriving (Show, Eq)
+  getDevDeps :: Bool,
+  -- | The connection manager for performing HTTP requests.
+  connectionManager :: Manager
+  }
 
 -- | The monad for fetching from NPM.
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
@@ -92,9 +101,9 @@ addResolvedPkg name version _rpkg = do
     resolved = pmInsert name version rpkg (resolved s)
     }
 
--- | Performs a curl query and returns whatever that query returns.
-curl :: [Text] -> NpmFetcher Text
-curl args = shell $ print_stdout False $ run "curl" (["-L", "--fail"] <> args)
+-- | Get the hex sha1 of a bytestring.
+hexSha1 :: BL8.ByteString -> Text
+hexSha1 = pack . concatMap (flip showHex "") . SHA1.hashlazy
 
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
@@ -102,8 +111,8 @@ _getPackageInfo pkgName registryUri = do
   let uri = uriToText $ registryUri `slash` pkgName
   putStrsLn ["Querying ", uriToText registryUri,
              " for package ", pkgName, "..."]
-  jsonStr <- curl [uri]
-  case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
+  jsonStr <- getHttp uri []
+  case eitherDecode jsonStr of
     Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
     Right info -> return info
 
@@ -128,19 +137,19 @@ storePackageInfo name info = do
 
 
 toSemVerList :: Record a -> NpmFetcher [(SemVer, a)]
-toSemVerList rec = do
+toSemVerList record = do
   -- Pairings of parsed semvers (or errors) to values.
   let parsePair (k, v) = (parseSemVer k, v)
-      pairs = map parsePair $ H.toList rec
+      pairs = map parsePair $ H.toList record
   case filter (\(k, _) -> isRight k) pairs of
     [] -> throwError1 "No correctly-formatted versions strings found"
     okPairs -> return $ map (\(Right k, v) -> (k, v)) okPairs
 
 bestMatchFromRecord :: SemVerRange -> Record a -> NpmFetcher a
-bestMatchFromRecord range rec = do
-  pairs <- toSemVerList rec
+bestMatchFromRecord range record = do
+  pairs <- toSemVerList record
   case filter (matches range . fst) pairs of
-    [] -> throwError1 "No versions satisfy given range"
+    [] -> throwErrorC ["No versions satisfy given range"]
     matches -> return $ snd $ maximumBy (compare `on` fst) matches
 
 -- | Performs a shell command and reports if it errors; otherwise returns
@@ -163,36 +172,85 @@ shell action = do
 silentShell :: Sh Text -> NpmFetcher Text
 silentShell = shell . silently
 
+
+getHttp :: Text -- URI to hit
+        -> RequestHeaders -- Additional headers to add
+        -> NpmFetcher BL8.ByteString
+getHttp uri headers = do
+  manager <- gets connectionManager
+  req <- liftIO $ parseUrl $ unpack uri
+  let defaultHdrs = [("Connection", "Close")]
+  let req' = req {
+        requestHeaders = headers <> defaultHdrs <> requestHeaders req
+        }
+  responseBody <$> httpLbs req' manager
+
+-- |
+-- entryFileContents :: Tar.EntryContent -> Either Text ByteString
+-- entryFileContents (Tar.NormalFile contents _) = Right contents
+-- entryFileContents _ = Left "entry is not a normal file"
+
 -- | Returns the SHA1 hash of the result of fetching the URI, and the path
 --   in which the tarball is stored.
-nixPrefetchSha1 :: URI -> NpmFetcher (Text, FilePath)
-nixPrefetchSha1 uri = do
-  hashAndPath <- silentShell $ do
-    setenv "PRINT_PATH" "1"
-    run "nix-prefetch-url" ["--type", "sha1", uriToText uri]
-  if length (lines hashAndPath) /= 2
-  then error "Expected two lines from nix-prefetch-url"
-  else do
-    let [hashBase32, path] = lines hashAndPath
-    -- Convert the hash to base16, which is the format NPM uses.
-    hash <- silentShell $ do
-       run "nix-hash" ["--type", "sha1", "--to-base16", hashBase32]
-    return (T.strip hash, fromString $ unpack path)
+prefetchSha1 :: URI -> NpmFetcher (Text, P.FilePath)
+prefetchSha1 uri = do
+  putStrsLn ["Pre-fetching url ", uriToText uri]
+  -- Make a temporary directory.
+  dir <- liftIO getTemporaryDirectory
+  let outPath = dir <> "/outfile"
+  putStrsLn ["putting in location ", pack outPath]
+  -- Download the file into memory, calculate the hash.
+  tarball <- getHttp (uriToText uri) []
+  let hash = hexSha1 tarball
+  -- Return the hash and the path.
+  path <- liftIO $ do
+    (path, handle) <- openTempFile "/tmp" "nixfromnpmfetch.tgz"
+    hClose handle
+    BL8.writeFile path tarball
+    putStrsLn ["Wrote tarball to ", pack path]
+    return path
 
-extractVersionInfo :: FilePath -> Text -> NpmFetcher VersionInfo
+  return (hash, path)
+
+extractVersionInfo :: P.FilePath -> Text -> NpmFetcher VersionInfo
 extractVersionInfo tarballPath subpath = do
   pkJson <- silentShell $ withTmpDir $ \dir -> do
     chdir dir $ do
-      putStrs ["Extracting ", pathToText tarballPath, " to tempdir"]
-      run_ "tar" ["-xf", pathToText tarballPath]
-      curdir <- pathToText <$> pwd
-      pth <- fmap T.strip $ run "find" [curdir, "-name", "package.json"]
-                           -|- run "head" ["-n", "1"]
-      when (pth == "") $ error "No package.json found"
-      map decodeUtf8 $ readBinary $ fromString $ unpack $ pth
+      putStrs ["Extracting ", pack tarballPath, " to tempdir"]
+      run_ "tar" ["-xf", pack tarballPath]
+      -- Find all of the package.json files. The one we want to read should be
+      -- the one with the shortest path, i.e. the first one found.
+      T.lines <$> run "find" [".", "-name", "package.json"] >>= \case
+        [] -> error "No package.json found"
+        jsons -> do
+          -- The correct package.json should be the one that
+          let pth = L.minimumBy (\p p' -> compare (length p) (length p')) jsons
+          putStrsLn ["Reading information from ", pth]
+          map decodeUtf8 $ readBinary $ fromString $ unpack $ pth
   case eitherDecode $ BL8.fromChunks [encodeUtf8 pkJson] of
-    Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
+    Left err -> throwErrorC ["couldn't parse JSON as VersionInfo: ", pack err,
+                             "\npackage.json contents:\n", pkJson]
     Right info -> return info
+
+-- extractVersionInfo :: -- Name -- ^ Name of package being fetched.
+--                       -- -> SemVer -- ^ Version of package being fetched.
+--                    P.FilePath -- ^ Contents of the tarball
+--                    -> Text -- ^ Subpath within tarball.
+--                    -> NpmFetcher VersionInfo -- ^ A VersionInfo object.
+-- extractVersionInfo  tarballPath subpath = do
+
+--   bytes <- liftIO $ BL8.readFile tarballPath
+--   let failureFunc e = error $ "Tarball contained an error: " <> show e
+--       entryList = foldEntries (:) [] failureFunc $ Tar.read bytes
+--       isPkgJson e = hasSuffix "package.json" $ entryPath e
+--   pkJsonContents <- case filter isPkgJson entryList of
+--     [] -> throwError1 "No package.json found"
+--     (e:_) -> case entryContent e of
+--       NormalFile contents _ -> return contents
+--       _ -> throwError1 "package.json entry was not a normal file"
+--   case eitherDecode pkJsonContents of
+--     Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
+--     Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
@@ -201,7 +259,7 @@ fetchHttp :: Text -- ^ Subpath in which to find the package.json.
           -> NpmFetcher SemVer -- ^ The version of the package at that URI.
 fetchHttp subpath uri = do
   -- Use nix-fetch to download and hash the tarball.
-  (hash, tarballPath) <- nixPrefetchSha1 uri
+  (hash, tarballPath) <- prefetchSha1 uri
   -- Extract the tarball to a temp directory and parse the package.json.
   versionInfo <- extractVersionInfo tarballPath subpath
   -- Create the DistInfo.
@@ -212,17 +270,14 @@ fetchHttp subpath uri = do
 githubCurl :: Text -> NpmFetcher Value
 githubCurl uri = do
   -- Add in the github auth token if it is provided.
-  extraCurlArgs <- gets githubAuthToken >>= \case
+  extraHeaders <- gets githubAuthToken >>= \case
     Nothing -> return []
-    Just token -> return ["-H", "Authorization: token " <> token]
-  let curlArgs = extraCurlArgs <> [
-        -- This accept header tells github to allow redirects.
-        "-H", "Accept: application/vnd.github.quicksilver-preview+json",
-        uri
-        ]
-  -- putStrsLn $ ["calling curl with args: ", T.intercalate " " curlArgs]
-  jsonStr <- curl curlArgs
-  case eitherDecode $ BL8.fromChunks [T.encodeUtf8 jsonStr] of
+    Just token -> return [("Authorization", "token " <> token)]
+  let headers = extraHeaders <>
+                [("Accept", "application/vnd.github.quicksilver-preview+json"),
+                 ("User-Agent", "nixfromnpm-fetcher")]
+  jsonStr <- getHttp uri headers
+  case eitherDecode jsonStr of
     Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
     Right info -> return info
 
@@ -421,11 +476,13 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: PackageMap PreExistingPackage
-           -> [Text]
-           -> Maybe Text
+startState :: Manager
+           -> PackageMap PreExistingPackage
+           -> [Text] -- ^ Registries to query.
+           -> Maybe ByteString -- ^ A possible github token.
+           -> Bool -- ^ Whether to not fetch dev dependencies.
            -> NpmFetcherState
-startState existing registries token = do
+startState manager existing registries token noDev = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
@@ -435,7 +492,8 @@ startState existing registries token = do
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
-      getDevDeps = False
+      getDevDeps = not noDev,
+      connectionManager = manager
     }
 
 -- | Read NPM registry from env or use default.
@@ -452,11 +510,6 @@ getRegistries = do
 getToken :: IO (Maybe Text)
 getToken = shelly $ silently $ get_env "GITHUB_TOKEN"
 
-runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
-runIt x = do
-  state <- startState mempty <$> getRegistries <*> getToken
-  runItWith state x
-
 runItWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
 runItWith state x = do
   runStateT (runExceptT x) state >>= \case
@@ -465,10 +518,12 @@ runItWith state x = do
 
 getPkg :: Name -- ^ Name of package to get.
        -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
-       -> Maybe Text -- ^ A possible github token.
+       -> Maybe ByteString -- ^ A possible github token.
+       -> Bool -- ^ Whether to not fetch dev dependencies.
        -> IO (PackageMap FullyDefinedPackage) -- ^ Set of fully defined packages.
-getPkg name existing token = do
-  let range = Gt (0, 0, 0)
-  state <- startState existing <$> getRegistries <*> pure token
-  (_, finalState) <- runItWith state (resolveDep name range)
+getPkg name existing token noDev = do
+  registries <- getRegistries
+  manager <- newManager tlsManagerSettings
+  let state = startState manager existing registries token noDev
+  (_, finalState) <- runItWith state (resolveDep name anyVersion)
   return (resolved finalState)

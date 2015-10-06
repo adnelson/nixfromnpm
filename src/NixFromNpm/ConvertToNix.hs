@@ -65,8 +65,9 @@ fixName = T.replace "." "-"
 
 -- | Converts a package name and semver into an identifier.
 toDepName :: Name -> SemVer -> Name
-toDepName name (a, b, c) = concat [fixName name, "_", pack $
-                                   intercalate "-" $ map show [a, b, c]]
+toDepName name (a, b, c, tags) = do
+  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
+  fixName name <> "_" <> suffix
 
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> Text
@@ -266,11 +267,12 @@ dumpPkgNamed :: Text        -- ^ The name of the package to fetch.
              -> Path        -- ^ The path to output to.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
-             -> Maybe Text  -- ^ Optional github token.
+             -> Maybe ByteString  -- ^ Optional github token.
+             -> Bool -- ^ Whether to not fetch dev dependencies.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name path existing extensions token = do
+dumpPkgNamed name path existing extensions token noDev = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name existing token
+  packages <- getPkg name existing token noDev
   let (new, existing) = takeNewPackages packages
   dumpPkgs (pwd </> unpack path) new existing extensions
 
@@ -298,4 +300,5 @@ dumpPkgFromOptions NixFromNpmOptions{..} = do
     let extensions = getExtensions nfnoExtendPaths
     existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
     -- displayExisting existing
-    dumpPkgNamed name nfnoOutputPath existing extensions nfnoGithubToken
+    dumpPkgNamed name nfnoOutputPath existing extensions
+       nfnoGithubToken nfnoNoDev

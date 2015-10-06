@@ -53,6 +53,12 @@ library
                      , hnix
                      , optparse-applicative
                      , dequeue
+                     , curl
+                     , http-conduit
+                     , cryptohash
+                     , http-types
+                     , tar
+                     , temporary
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -84,6 +90,12 @@ executable nixfromnpm
                      , nixfromnpm
                      , optparse-applicative
                      , dequeue
+                     , curl
+                     , http-conduit
+                     , cryptohash
+                     , http-types
+                     , tar
+                     , temporary
   -- extra-libraries:     curl
   hs-source-dirs:      src
   default-language:    Haskell2010

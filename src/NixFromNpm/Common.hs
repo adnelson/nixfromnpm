@@ -35,11 +35,12 @@ module NixFromNpm.Common (
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
-    pathToString, joinBy, mapJoinBy, getEnv, modifyMap
+    pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
-                             maximum, maximumBy, try)
+                             maximum, maximumBy,
+                             minimum, minumumBy, try)
 import qualified Prelude as P
 import Control.Monad (when)
 import Control.Monad.Trans (MonadIO(..), lift)
@@ -160,6 +161,12 @@ dropSuffix :: String -> String -> String
 dropSuffix suffix s | s == suffix = ""
 dropSuffix suffix (c:cs) = c : dropSuffix suffix cs
 dropSuffix suffix "" = ""
+
+-- | Return true if the given suffix is on the given String.
+hasSuffix :: String -> String -> Bool
+hasSuffix suffix s | s == suffix = True
+hasSuffix suffix (_:cs) = hasSuffix suffix cs
+hasSuffix suffix "" = False
 
 -- | Return a Just value if the argument is True, else Nothing.
 maybeIf :: Bool -> a -> Maybe a

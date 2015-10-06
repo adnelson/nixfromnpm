@@ -4,7 +4,8 @@
 , MissingH, mtl, network-uri, parsec, shelly, stdenv
 , system-filepath, text, text-render, unordered-containers
 , optparse-applicative, curl, cacert, cabal-install
-, Cabal, safe, QuickCheck
+, Cabal, safe, QuickCheck, nix, curl-haskell, http-conduit
+, cryptohash, tar, temporary, directory-tree
 }:
 
 let
@@ -29,7 +30,8 @@ mkDerivation {
     aeson base bytestring classy-prelude containers data-default
     directory docopt error-list filepath hnix MissingH mtl network-uri
     parsec shelly system-filepath text text-render unordered-containers
-    optparse-applicative cabal-install curl dequeue
+    optparse-applicative cabal-install curl dequeue nix curl-haskell
+    http-conduit cryptohash tar temporary directory-tree
   ];
   executableHaskellDepends = [curl cacert];
   testDepends = [
