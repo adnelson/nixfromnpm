@@ -17,6 +17,7 @@ import qualified Data.HashSet as HS
 import Numeric (showHex)
 import System.IO.Temp (openTempFile)
 
+import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Aeson.Parser
 import Data.Aeson
@@ -27,6 +28,7 @@ import Shelly hiding (get)
 import Nix.Types
 import Network.HTTP.Types.Header
 import Network.HTTP.Conduit
+import Network.Curl
 import Codec.Archive.Tar as Tar hiding (pack, unpack)
 import Codec.Archive.Tar.Entry as Tar
 import qualified Crypto.Hash.SHA1 as SHA1
@@ -88,11 +90,30 @@ data NpmFetcherState = NpmFetcherState {
   -- | Boolean telling us whether to fetch dev dependencies.
   getDevDeps :: Bool,
   -- | The connection manager for performing HTTP requests.
-  connectionManager :: Manager
+  connectionManager :: Manager,
+  -- | Request timeout.
+  requestTimeout :: Long
   }
 
 -- | The monad for fetching from NPM.
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
+
+
+curlGetBS :: MonadIO m
+          => URLString
+          -> [CurlOption]
+          -> m (CurlCode, Int, BL8.ByteString)
+curlGetBS url opts = liftIO $ initialize >>= \ h -> do
+  (finalBody, gatherBody) <- newIncoming
+  setopt h (CurlFailOnError True)
+  setDefaultSSLOpts h url
+  setopt h (CurlURL url)
+  setopt h (CurlWriteFunction (gatherOutput_ gatherBody))
+  mapM (setopt h) opts
+  rc <- perform h
+  bs <- finalBody
+  status <- getResponseCode h
+  return (rc, status, bs)
 
 addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
 addResolvedPkg name version _rpkg = do
@@ -105,16 +126,34 @@ addResolvedPkg name version _rpkg = do
 hexSha1 :: BL8.ByteString -> Text
 hexSha1 = pack . concatMap (flip showHex "") . SHA1.hashlazy
 
+data HttpResult a
+  = HttpSuccess a
+  | HttpError Int
+  | HttpTimedOut Long
+  deriving (Show, Eq)
+
+curl' :: Text -> [CurlOption] -> NpmFetcher (HttpResult BL8.ByteString)
+curl' uri opts = do
+  timeout <- gets requestTimeout
+  let opts' = opts <> [CurlTimeout timeout]
+  (code, status, content) <- curlGetBS (unpack uri) opts'
+  case code of
+    CurlOK -> return $ HttpSuccess content
+    CurlHttpReturnedError -> return $ HttpError status
+    CurlOperationTimeout -> return $ HttpTimedOut timeout
+    err -> throwErrorC ["Curl threw an unknown error ", pack $ show err]
+
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
 _getPackageInfo pkgName registryUri = do
   let uri = uriToText $ registryUri `slash` pkgName
   putStrsLn ["Querying ", uriToText registryUri,
              " for package ", pkgName, "..."]
-  jsonStr <- getHttp uri []
-  case eitherDecode jsonStr of
-    Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
-    Right info -> return info
+  curl' uri [] >>= \case
+    HttpSuccess jsonStr -> case eitherDecode jsonStr of
+      Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
+      Right info -> return info
+    err -> throwError1 $ pshow err
 
 -- | Same as _getPackageInfo, but caches results for speed.
 getPackageInfo :: Name -> NpmFetcher PackageInfo
@@ -172,18 +211,19 @@ shell action = do
 silentShell :: Sh Text -> NpmFetcher Text
 silentShell = shell . silently
 
+-- | Convert (key, value) pairs into a curl Headers option.
+makeHeaders :: [(Text, ByteString)] -> CurlOption
+makeHeaders headers = CurlHttpHeaders $ map mk headers where
+  mk (key, val) = T.unpack key <> ": " <> B.unpack val
 
 getHttp :: Text -- URI to hit
-        -> RequestHeaders -- Additional headers to add
-        -> NpmFetcher BL8.ByteString
+        -> [(Text, ByteString)] -- Additional headers to add
+        -> NpmFetcher (HttpResult BL8.ByteString)
 getHttp uri headers = do
   manager <- gets connectionManager
   req <- liftIO $ parseUrl $ unpack uri
-  let defaultHdrs = [("Connection", "Close")]
-  let req' = req {
-        requestHeaders = headers <> defaultHdrs <> requestHeaders req
-        }
-  responseBody <$> httpLbs req' manager
+  let defHdrs = [("Connection", "Close"), ("User-Agent", "nixfromnpm-fetcher")]
+  curl' uri [makeHeaders (headers <> defHdrs), CurlFollowLocation True]
 
 -- |
 -- entryFileContents :: Tar.EntryContent -> Either Text ByteString
@@ -200,17 +240,18 @@ prefetchSha1 uri = do
   let outPath = dir <> "/outfile"
   putStrsLn ["putting in location ", pack outPath]
   -- Download the file into memory, calculate the hash.
-  tarball <- getHttp (uriToText uri) []
-  let hash = hexSha1 tarball
-  -- Return the hash and the path.
-  path <- liftIO $ do
-    (path, handle) <- openTempFile "/tmp" "nixfromnpmfetch.tgz"
-    hClose handle
-    BL8.writeFile path tarball
-    putStrsLn ["Wrote tarball to ", pack path]
-    return path
-
-  return (hash, path)
+  getHttp (uriToText uri) [] >>= \case
+    HttpSuccess tarball -> do
+      let hash = hexSha1 tarball
+      -- Return the hash and the path.
+      path <- liftIO $ do
+        (path, handle) <- openTempFile "/tmp" "nixfromnpmfetch.tgz"
+        hClose handle
+        BL8.writeFile path tarball
+        putStrsLn ["Wrote tarball to ", pack path]
+        return path
+      return (hash, path)
+    err -> throwErrorC ["Could not fetch tarball at url ", uriToText uri]
 
 extractVersionInfo :: P.FilePath -> Text -> NpmFetcher VersionInfo
 extractVersionInfo tarballPath subpath = do
@@ -274,12 +315,12 @@ githubCurl uri = do
     Nothing -> return []
     Just token -> return [("Authorization", "token " <> token)]
   let headers = extraHeaders <>
-                [("Accept", "application/vnd.github.quicksilver-preview+json"),
-                 ("User-Agent", "nixfromnpm-fetcher")]
-  jsonStr <- getHttp uri headers
-  case eitherDecode jsonStr of
-    Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
-    Right info -> return info
+                [("Accept", "application/vnd.github.quicksilver-preview+json")]
+  getHttp uri headers >>= \case
+    HttpSuccess jsonStr -> case eitherDecode jsonStr of
+      Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
+      Right info -> return info
+    err -> throwError1 $ pshow err
 
 -- | Queries NPM for package information.
 getDefaultBranch :: Name -> Name -> NpmFetcher Name
@@ -400,6 +441,11 @@ isBeingResolved name version =
 broken :: BrokenPackageReason -> NpmFetcher ResolvedDependency
 broken = return . Broken
 
+_recurOn :: Name
+         -> SemVer
+         -> DependencyType
+         -> Record NpmVersionRange
+         -> NpmFetcher (Record ResolvedDependency)
 _recurOn name version deptype deps = map H.fromList $ do
   let depList = H.toList deps
       (desc, descPlural) = case deptype of
@@ -499,7 +545,8 @@ startState manager existing registries token noDev = do
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
       getDevDeps = not noDev,
-      connectionManager = manager
+      connectionManager = manager,
+      requestTimeout = 10
     }
 
 -- | Read NPM registry from env or use default.
@@ -521,6 +568,13 @@ runItWith state x = do
   runStateT (runExceptT x) state >>= \case
     (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
     (Right x, state) -> return (x, state)
+
+runIt :: NpmFetcher a -> IO a
+runIt action = do
+  registries <- getRegistries
+  manager <- newManager tlsManagerSettings
+  let state = startState manager mempty registries Nothing False
+  fst <$> runItWith state action
 
 getPkg :: Name -- ^ Name of package to get.
        -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.

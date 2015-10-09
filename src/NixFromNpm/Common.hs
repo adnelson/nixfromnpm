@@ -35,7 +35,7 @@ module NixFromNpm.Common (
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
     putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
-    pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix
+    pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix, pshow
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -116,6 +116,9 @@ cerror = error . concat
 -- | Concatenate Texts into an error exception.
 cerror' :: [Text] -> a
 cerror' = cerror . map unpack
+
+-- | Show as text
+pshow = pack . show
 
 -- | Like `fromJust` for Eithers. Partial function!
 fromRight :: Either a b -> b

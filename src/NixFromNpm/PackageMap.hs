@@ -1,3 +1,4 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 module NixFromNpm.PackageMap where
 
 import Data.HashMap.Strict (HashMap)
@@ -38,5 +39,5 @@ pmMember name version pmap = case H.lookup name pmap of
   Just vmap -> H.member version vmap
 
 pmFromList :: [(Name, SemVer, a)] -> PackageMap a
-pmFromList = foldl step mempty where
+pmFromList = foldl' step mempty where
   step pmap (name, ver, x) = pmInsert name ver x pmap
