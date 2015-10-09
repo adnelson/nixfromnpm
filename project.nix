@@ -5,7 +5,7 @@
 , system-filepath, text, text-render, unordered-containers
 , optparse-applicative, curl, cacert, cabal-install
 , Cabal, safe, QuickCheck, nix, curl-haskell, http-conduit
-, cryptohash, tar, temporary, directory-tree
+, cryptohash, tar, temporary, directory-tree, wreq
 }:
 
 let
@@ -31,7 +31,7 @@ mkDerivation {
     directory docopt error-list filepath hnix MissingH mtl network-uri
     parsec shelly system-filepath text text-render unordered-containers
     optparse-applicative cabal-install curl dequeue nix curl-haskell
-    http-conduit cryptohash tar temporary directory-tree
+    http-conduit cryptohash tar temporary directory-tree wreq
   ];
   executableHaskellDepends = [curl cacert];
   testDepends = [

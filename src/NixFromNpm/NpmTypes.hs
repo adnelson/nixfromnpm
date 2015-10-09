@@ -55,9 +55,32 @@ data ResolvedPkg = ResolvedPkg {
   rpVersion :: SemVer,
   rpDistInfo :: DistInfo,
   rpMeta :: PackageMeta,
-  rpDependencies :: Record SemVer,
-  rpDevDependencies :: Record SemVer
+  rpDependencies :: Record ResolvedDependency,
+  rpDevDependencies :: Record ResolvedDependency
   } deriving (Show, Eq)
+
+-- | Flag for different types of dependencies.
+data DependencyType
+  = Dependency    -- ^ Required at runtime.
+  | DevDependency -- ^ Only required for development.
+  deriving (Show, Eq)
+
+-- | Reasons why an expression might not have been able to be built.
+data BrokenPackageReason
+  = NoMatchingVersion NpmVersionRange
+  | InvalidNpmVersionRange Text
+  | NoSuchTag Name
+  | TagPointsToInvalidVersion Name Name
+  | InvalidSemVerSyntax Text String
+  | NoDistributionInfo
+  deriving (Show, Eq)
+
+-- | We might not be able to resolve a dependency, in which case we record
+-- it as a broken package.
+data ResolvedDependency
+  = Resolved SemVer -- ^ Package has been resolved at this version.
+  | Broken BrokenPackageReason -- ^ Could not build the dependency.
+  deriving (Show, Eq)
 
 instance Semigroup PackageInfo where
   PackageInfo vs ts <> PackageInfo vs' ts' =

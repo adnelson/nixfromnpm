@@ -69,6 +69,12 @@ toDepName name (a, b, c, tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
   fixName name <> "_" <> suffix
 
+-- | Converts a ResolvedDependency to a nix expression.
+toNixExpr :: Name -> ResolvedDependency -> NExpr
+toNixExpr name (Resolved semver) = str $ toDepName name semver
+toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
+  [ "name" `bindTo` str name, "reason" `bindTo` str (pack $ show reason)]
+
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> Text
 toDotNix v = renderSV v <> ".nix"
@@ -99,10 +105,14 @@ metaToNix PackageMeta{..} = case pmDescription of
 resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
-      deps = map (mkSym . uncurry toDepName) $ H.toList rpDependencies
+      deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+      -- List of non-broken packages
+      nonBrokenDeps = catMaybes $ flip map (H.toList rpDependencies) $ \case
+        (_, Broken _) -> Nothing
+        (name, Resolved ver) -> Just (name, ver)
       -- Get the parameters of the package function (deps + utility functions).
-      _funcParams = map (uncurry toDepName) (H.toList rpDependencies)
-                    <> ["buildNodePackage", "fetchurl"]
+      _funcParams = map (uncurry toDepName) nonBrokenDeps
+                    <> ["buildNodePackage", "fetchurl", "brokenPackage"]
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) _funcParams
   let args = mkNonRecSet $ catMaybes [
