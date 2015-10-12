@@ -61,7 +61,7 @@ data ResolvedPkg = ResolvedPkg {
   rpDistInfo :: DistInfo,
   rpMeta :: PackageMeta,
   rpDependencies :: Record ResolvedDependency,
-  rpDevDependencies :: Record ResolvedDependency
+  rpDevDependencies :: Maybe (Record ResolvedDependency)
   } deriving (Show, Eq)
 
 -- | Flag for different types of dependencies.

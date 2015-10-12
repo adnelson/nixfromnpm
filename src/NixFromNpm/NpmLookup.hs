@@ -2,6 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards #-}
 module NixFromNpm.NpmLookup where
 
 --------------------------------------------------------------------------
@@ -425,14 +426,21 @@ _recurOn name version deptype deps = map H.fromList $ do
     result <- resolveNpmVersionRange depName depRange
     return (depName, result)
 
-_decrementDevDepsDepth :: NpmFetcher ()
-_decrementDevDepsDepth = modify $ \s ->
-  s {devDependencyDepth = devDependencyDepth s - 1}
+atDecrementedDevDepsDepth :: NpmFetcher a -> NpmFetcher a
+atDecrementedDevDepsDepth action = do
+  depth <- gets devDependencyDepth
+  modify $ \s -> s {devDependencyDepth = depth - 1}
+  result <- action
+  modify $ \s -> s {devDependencyDepth = depth}
+  return result
+
+shouldFetchDevs :: NpmFetcher Bool
+shouldFetchDevs = (> 0) <$> gets devDependencyDepth
 
 resolveVersionInfo :: VersionInfo -> NpmFetcher ResolvedDependency
-resolveVersionInfo versionInfo = do
-  let name = viName versionInfo
-      versionStr = viVersion versionInfo
+resolveVersionInfo VersionInfo{..} = do
+  let name = viName
+      versionStr = viVersion
       ctx = concat ["When resolving package ", name, ", version ", versionStr]
   inContext ctx $ case parseSemVer versionStr of
       Left err -> broken $ InvalidSemVerSyntax versionStr (pack $ show err)
@@ -443,22 +451,14 @@ resolveVersionInfo versionInfo = do
                      -- don't want to loop infinitely so we just return.
                      return $ Resolved version
           False -> do
-            -- Define a recursion function that takes a string describing the
-            -- dependency type, and a list of dependencies of that type, and
-            -- recursively fetches all of the dependencies of that type.
-            let
-            -- We need to recur into the package's dependencies.
-            -- To prevent the cycles, we store which packages we're currently
-            -- resolving.
             startResolving name version
-            deps <- recurOn Dependency (viDependencies versionInfo)
-            devDeps <- gets devDependencyDepth >>= \case
-              n | n <= 0 -> return mempty -- ignoring development dependencies.
-                | otherwise -> do
-                    _decrementDevDepsDepth
-                    recurOn DevDependency (viDevDependencies versionInfo)
+            deps <- recurOn Dependency viDependencies
+            devDeps <- shouldFetchDevs >>= \case
+              False -> return Nothing -- ignoring development dependencies.
+              True -> atDecrementedDevDepsDepth $
+                Just <$> recurOn DevDependency viDevDependencies
             finishResolving name version
-            case viDist versionInfo of
+            case viDist of
               Nothing -> broken NoDistributionInfo
               Just dist -> do
                 -- Store this version's info.
@@ -466,7 +466,7 @@ resolveVersionInfo versionInfo = do
                     rpName = name,
                     rpVersion = version,
                     rpDistInfo = dist,
-                    rpMeta = viMeta versionInfo,
+                    rpMeta = viMeta,
                     rpDependencies = deps,
                     rpDevDependencies = devDeps
                   }

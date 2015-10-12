@@ -4,7 +4,7 @@
 , MissingH, mtl, network-uri, parsec, shelly, stdenv
 , system-filepath, text, text-render, unordered-containers
 , optparse-applicative, curl, cacert, cabal-install
-, cryptohash, temporary
+, cryptohash, temporary, nix
 }:
 
 mkDerivation {
@@ -18,7 +18,7 @@ mkDerivation {
     parsec shelly system-filepath text text-render unordered-containers
     optparse-applicative cabal-install curl cryptohash temporary
   ];
-  executableHaskellDepends = [cacert];
+  executableHaskellDepends = [nix cacert];
   testDepends = [
     aeson base bytestring classy-prelude containers data-default
     directory error-list filepath github hnix hspec hspec-expectations

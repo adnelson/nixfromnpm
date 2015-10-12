@@ -36,8 +36,15 @@ _startingSrc = "\
   \  buildNodePackage = import ../data/buildNodePackage.nix { \
   \    inherit pkgs nodejs; \
   \  }; \
+  \  brokenPackage = name: reason: pkgs.stdenv.mkDerivation { \
+  \    name = \"broken-${name}\"; \
+  \    buildCommand = '' \n\
+  \      echo \"This package is broken because ${reason}\" \n\
+  \      exit 1 \n\
+  \    '';\
+  \  };\
   \  allPkgs = pkgs // nodePkgs // joinedExtensions //            \
-  \   {inherit buildNodePackage;};             \
+  \   {inherit buildNodePackage brokenPackage;};         \
   \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
@@ -72,7 +79,7 @@ toDepName name (a, b, c, tags) = do
 
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: Name -> ResolvedDependency -> NExpr
-toNixExpr name (Resolved semver) = str $ toDepName name semver
+toNixExpr name (Resolved semver) = mkSym $ toDepName name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
   [ "name" `bindTo` str name, "reason" `bindTo` str (pack $ show reason)]
 
@@ -107,8 +114,12 @@ resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
       deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+      devDeps = case rpDevDependencies of
+        Nothing -> []
+        Just devdeps -> map (uncurry toNixExpr) $ H.toList devdeps
+      allDeps = H.toList $ rpDependencies <> maybe mempty id rpDevDependencies
       -- List of non-broken packages
-      nonBrokenDeps = catMaybes $ flip map (H.toList rpDependencies) $ \case
+      nonBrokenDeps = catMaybes $ flip map allDeps $ \case
         (_, Broken _) -> Nothing
         (name, Resolved ver) -> Just (name, ver)
       -- Get the parameters of the package function (deps + utility functions).
@@ -120,7 +131,10 @@ resolvedPkgToNix ResolvedPkg{..} = do
         Just $ "name" `bindTo` str rpName,
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
+        maybeIf (isJust rpDevDependencies) $
+          "devsDefined" `bindTo` mkBool True,
         maybeIf (length deps > 0) $ "deps" `bindTo` mkList deps,
+        maybeIf (length devDeps > 0) $ "devDeps" `bindTo` mkList devDeps,
         maybeIf (metaNotEmpty rpMeta) $ "meta" `bindTo` metaToNix rpMeta
         ]
   mkFunction funcParams $ mkApp (mkSym "buildNodePackage") args
