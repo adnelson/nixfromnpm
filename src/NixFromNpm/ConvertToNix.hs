@@ -21,19 +21,23 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.PackageMap (PackageMap)
-import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..), concatDots,
+import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
                              PreExistingPackage(..))
 
 _startingSrc :: String
 _startingSrc = "\
-  \{nixpkgs ? import <nixpkgs> {}}:                                  \
+  \{pkgs ? import <nixpkgs> {}}:                                  \
   \let                                                               \
-  \  inherit (nixpkgs.lib) attrValues foldl;                         \
+  \  inherit (pkgs.lib) attrValues foldl;                         \
   \  joinSets = foldl (a: b: a // b) {};                             \
   \  joinedExtensions = joinSets (attrValues extensions);            \
-  \  allPkgs = nixpkgs // nodePkgs // joinedExtensions //            \
-  \   {inherit (nixpkgs.nodePackages)buildNodePackage;};             \
-  \  callPackage = nixpkgs.lib.callPackageWith allPkgs;              \
+  \  nodejs = pkgs.callPackage ../data/nodejs4.1.1.nix {};       \
+  \  buildNodePackage = import ../data/buildNodePackage.nix { \
+  \    inherit pkgs nodejs; \
+  \  }; \
+  \  allPkgs = pkgs // nodePkgs // joinedExtensions //            \
+  \   {inherit buildNodePackage;};             \
+  \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
   \nodePkgs"
@@ -61,11 +65,19 @@ fixName = T.replace "." "-"
 
 -- | Converts a package name and semver into an identifier.
 toDepName :: Name -> SemVer -> Name
-toDepName name (a, b, c) = concat [fixName name, "_", pack $
-                                   intercalate "-" $ map show [a, b, c]]
+toDepName name (a, b, c, tags) = do
+  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
+  fixName name <> "_" <> suffix
+
+-- | Converts a ResolvedDependency to a nix expression.
+toNixExpr :: Name -> ResolvedDependency -> NExpr
+toNixExpr name (Resolved semver) = str $ toDepName name semver
+toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
+  [ "name" `bindTo` str name, "reason" `bindTo` str (pack $ show reason)]
+
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> Text
-toDotNix v = concatDots v <> ".nix"
+toDotNix v = renderSV v <> ".nix"
 
 -- | Creates a doublequoted string from some text.
 str :: Text -> NExpr
@@ -93,10 +105,14 @@ metaToNix PackageMeta{..} = case pmDescription of
 resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
-      deps = map (mkSym . uncurry toDepName) $ H.toList rpDependencies
+      deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+      -- List of non-broken packages
+      nonBrokenDeps = catMaybes $ flip map (H.toList rpDependencies) $ \case
+        (_, Broken _) -> Nothing
+        (name, Resolved ver) -> Just (name, ver)
       -- Get the parameters of the package function (deps + utility functions).
-      _funcParams = map (uncurry toDepName) (H.toList rpDependencies)
-                    <> ["buildNodePackage", "fetchurl"]
+      _funcParams = map (uncurry toDepName) nonBrokenDeps
+                    <> ["buildNodePackage", "fetchurl", "brokenPackage"]
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) _funcParams
   let args = mkNonRecSet $ catMaybes [
@@ -261,11 +277,12 @@ dumpPkgNamed :: Text        -- ^ The name of the package to fetch.
              -> Path        -- ^ The path to output to.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
-             -> Maybe Text  -- ^ Optional github token.
+             -> Maybe ByteString  -- ^ Optional github token.
+             -> Int -- ^ Depth to which to fetch dev dependencies.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name path existing extensions token = do
+dumpPkgNamed name path existing extensions token devDepth = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name existing token
+  packages <- getPkg name existing token devDepth
   let (new, existing) = takeNewPackages packages
   dumpPkgs (pwd </> unpack path) new existing extensions
 
@@ -293,4 +310,5 @@ dumpPkgFromOptions NixFromNpmOptions{..} = do
     let extensions = getExtensions nfnoExtendPaths
     existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
     -- displayExisting existing
-    dumpPkgNamed name nfnoOutputPath existing extensions nfnoGithubToken
+    dumpPkgNamed name nfnoOutputPath existing extensions
+       nfnoGithubToken nfnoDevDepth

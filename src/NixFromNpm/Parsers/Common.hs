@@ -5,7 +5,7 @@ module NixFromNpm.Parsers.Common (
     module Text.Parsec,
     module NixFromNpm.Common,
     Parser,
-    parse, parseFull, spaces, spaces1, sstring, schar, lexeme, pInt
+    parse, parseFull, spaces, spaces1, sstring, schar, lexeme, pInt, pInt'
   ) where
 
 import qualified Prelude as P
@@ -46,4 +46,8 @@ lexeme p = p <* spaces
 
 -- | Parses an integer.
 pInt :: Parser Int
-pInt = lexeme $ P.read <$> many1 digit
+pInt = lexeme pInt'
+
+-- | Parses an integer without consuming trailing spaces.
+pInt' :: Parser Int
+pInt' = P.read <$> many1 digit

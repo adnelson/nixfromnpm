@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import qualified Data.Text.Encoding as T
 import Options.Applicative
 
 import NixFromNpm hiding (getArgs, (<>))
@@ -10,7 +11,7 @@ import NixFromNpm hiding (getArgs, (<>))
 
 main :: IO ()
 main = do
-  maybeToken <- getEnv "GITHUB_TOKEN"
+  maybeToken <- fmap T.encodeUtf8 <$> getEnv "GITHUB_TOKEN"
   let opts = info (helper <*> pOptions maybeToken)
              (fullDesc <> progDesc description <> header headerText)
   parsedOpts <- execParser opts

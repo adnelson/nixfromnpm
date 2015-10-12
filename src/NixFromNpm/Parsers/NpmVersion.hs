@@ -49,7 +49,7 @@ pLocalPath = LocalPath . fromText . pack <$> do
 pEmptyString :: Parser NpmVersionRange
 pEmptyString = try $ do
   filter (/= ' ') <$> many anyChar >>= \case
-    [] -> return $ SemVerRange $ Geq (0, 0, 0)
+    [] -> return (SemVerRange anyVersion)
     _ -> unexpected "Not an empty string"
 
 pTag :: Parser NpmVersionRange

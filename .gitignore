@@ -3,3 +3,6 @@ dist
 \#*#
 .\#*
 build-node-package
+result
+test_result
+test_result*

@@ -15,15 +15,21 @@ import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.SemVer
 
+-- | Package information; specifically all of the different versions.
 data PackageInfo = PackageInfo {
   piVersions :: Record VersionInfo,
   piTags :: Record Name
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | Metadata about a package.
 data PackageMeta = PackageMeta {
   pmDescription :: Maybe Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | Expresses all of the information that a version of a package needs, in
+-- the abstract (e.g. using version ranges instead of explicit versions).
+-- This type can be used as an input to the NpmLookup stuff to produce a
+-- `ResolvedPkg`.
 data VersionInfo = VersionInfo {
   viDependencies :: Record NpmVersionRange,
   viDevDependencies :: Record NpmVersionRange,
@@ -33,22 +39,48 @@ data VersionInfo = VersionInfo {
   viHasTest :: Bool,
   viMeta :: PackageMeta,
   viVersion :: Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
   diShasum :: Text
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
+-- | This contains the same information as the .nix file that corresponds
+-- to the package. More or less it tells us everything that we need to build
+-- the package.
 data ResolvedPkg = ResolvedPkg {
   rpName :: Name,
   rpVersion :: SemVer,
   rpDistInfo :: DistInfo,
   rpMeta :: PackageMeta,
-  rpDependencies :: Record SemVer,
-  rpDevDependencies :: Record SemVer
-} deriving (Show, Eq)
+  rpDependencies :: Record ResolvedDependency,
+  rpDevDependencies :: Record ResolvedDependency
+  } deriving (Show, Eq)
+
+-- | Flag for different types of dependencies.
+data DependencyType
+  = Dependency    -- ^ Required at runtime.
+  | DevDependency -- ^ Only required for development.
+  deriving (Show, Eq)
+
+-- | Reasons why an expression might not have been able to be built.
+data BrokenPackageReason
+  = NoMatchingVersion NpmVersionRange
+  | InvalidNpmVersionRange Text
+  | NoSuchTag Name
+  | TagPointsToInvalidVersion Name Name
+  | InvalidSemVerSyntax Text String
+  | NoDistributionInfo
+  deriving (Show, Eq)
+
+-- | We might not be able to resolve a dependency, in which case we record
+-- it as a broken package.
+data ResolvedDependency
+  = Resolved SemVer -- ^ Package has been resolved at this version.
+  | Broken BrokenPackageReason -- ^ Could not build the dependency.
+  deriving (Show, Eq)
 
 instance Semigroup PackageInfo where
   PackageInfo vs ts <> PackageInfo vs' ts' =
@@ -106,3 +138,11 @@ getObject :: String -> Value -> Parser (HashMap Text Value)
 getObject _ (Object o) = return o
 getObject msg v =
   typeMismatch ("object (got " <> show v <> ", message " <> msg <> ")") v
+
+
+patchIfMatches :: (a -> Bool) -- ^ Predicate function
+               -> (a -> a) -- ^ Modification function
+               -> a -- ^ Input object
+               -> a -- ^ Patched object
+patchIfMatches pred mod input | pred input = mod input
+                              | otherwise  = input
