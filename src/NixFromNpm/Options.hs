@@ -64,7 +64,7 @@ pOptions githubToken = NixFromNpmOptions
     devDepth = option auto (long "dev-depth"
                             <> metavar "DEPTH"
                             <> help "Depth to which to fetch dev dependencies"
-                            <> value 3)
+                            <> value 1)
     extendHelp = ("Use expressions at PATH, optionally called NAME. (supports "
                   <> "multiples)")
     extendPaths = many (textOption (long "extend"

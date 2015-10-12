@@ -477,14 +477,19 @@ _resolveDep :: Name -> SemVerRange -> NpmFetcher ResolvedDependency
 _resolveDep name range = do
   let ctx = concat ["When resolving dependency ", name, " (",
                     pack $ show range, ")"]
+  putStrsLn ["Resolving ", name, " (", pshow range, ")"]
   inContext ctx $ do
     pInfo <- getPackageInfo name
     (do versionInfo <- bestMatchFromRecord range (piVersions pInfo)
         resolveVersionInfo versionInfo)
-      `ifErrorReturn` (Broken $ NoMatchingVersion (SemVerRange range))
+      `ifErrorDo` do
+        putStrsLn ["Could not find any matching packages"]
+        return $ Broken $ NoMatchingVersion $ SemVerRange range
 
-
-resolveByTag :: Name -> Name -> NpmFetcher ResolvedDependency
+-- | Resolve a dependency by tag name (e.g. a release tag).
+resolveByTag :: Name -- ^ Tag name.
+             -> Name -- ^ Name of the package.
+             -> NpmFetcher ResolvedDependency -- ^ A resolved dependency.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
@@ -544,12 +549,13 @@ runIt action = do
   fst <$> runItWith state action
 
 getPkg :: Name -- ^ Name of package to get.
+       -> NpmVersionRange -- ^ Version bounds of the package.
        -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
        -> Maybe ByteString -- ^ A possible github token.
        -> Int -- ^ Depth to which to fetch dev dependencies.
        -> IO (PackageMap FullyDefinedPackage) -- ^ Set of fully defined packages.
-getPkg name existing token devDependencyDepth = do
+getPkg name range existing token devDependencyDepth = do
   registries <- getRegistries
   let state = startState existing registries token devDependencyDepth
-  (_, finalState) <- runItWith state (resolveDep name anyVersion)
-  return (resolved finalState)
+  (_, finalState) <- runItWith state $ resolveNpmVersionRange name range
+  return $ resolved finalState

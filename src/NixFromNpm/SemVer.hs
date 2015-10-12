@@ -51,7 +51,7 @@ renderSV = pack . renderSV'
 renderSV' :: SemVer -> String
 renderSV' (x, y, z, []) = show x <> "." <> show y <> "." <> show z
 renderSV' (x, y, z, tags) = renderSV' (x, y, z, []) <> "-" <>
-                              (intercalate "." $ map show tags)
+                              (intercalate "." $ map unpack tags)
 
 instance Show SemVerRange where
   show = \case

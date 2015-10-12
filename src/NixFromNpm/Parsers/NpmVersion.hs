@@ -33,6 +33,7 @@ pGitId = try $ do
     Just "gitlab" -> return GitLab
     Just "bitbucket" -> return Bitbucket
     Just "gist" -> return Gist
+    Just proto -> unexpected $ "Unknown git protocol '" <> proto <> "'"
     Nothing -> return Github
   account <- many1 $ noneOf ":/"
   char '/'
