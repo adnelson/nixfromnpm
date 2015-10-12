@@ -36,11 +36,17 @@ $ cabal run -- <arguments>
 
 The most basic usage is providing `-p` (`--package`) and `-o` (`--output`) flags:
 
-```
+```bash
 $ nixfromnpm -p package_name -o /some/path
 ```
 
 This will build the package called `package_name` and put all of the generated expressions in `/some/path`.
+
+You can also specify a version bound on the package you are fetching, using `@`:
+
+```bash
+$ nixfromnpm -p package_name@version_bound -o /some/path
+```
 
 #### Generating an expression from a package.json file
 

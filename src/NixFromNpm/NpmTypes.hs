@@ -2,7 +2,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module NixFromNpm.NpmTypes where
+module NixFromNpm.NpmTypes (
+    module NixFromNpm.NpmVersion,
+    PackageInfo(..), PackageMeta(..), VersionInfo(..),
+    DistInfo(..), ResolvedPkg(..), DependencyType(..),
+    BrokenPackageReason(..), ResolvedDependency(..)
+  ) where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)

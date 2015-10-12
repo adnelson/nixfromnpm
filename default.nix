@@ -5,4 +5,5 @@ in
 
 haskellPackages.callPackage ./project.nix {
   inherit (nixpkgs) cacert;
+  hnix = haskellPackages.callPackage ../hnix/project.nix {};
 }

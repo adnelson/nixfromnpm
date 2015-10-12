@@ -20,6 +20,7 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
+import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.PackageMap (PackageMap)
 import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
                              PreExistingPackage(..))
@@ -66,7 +67,7 @@ fixName = T.replace "." "-"
 -- | Converts a package name and semver into an identifier.
 toDepName :: Name -> SemVer -> Name
 toDepName name (a, b, c, tags) = do
-  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
+  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
   fixName name <> "_" <> suffix
 
 -- | Converts a ResolvedDependency to a nix expression.
@@ -273,16 +274,17 @@ preloadPackages noExistCheck path toExtend = do
 
 -- | Given the name of a package and a place to dump expressions to, generates
 --   the expressions needed to build that package.
-dumpPkgNamed :: Text        -- ^ The name of the package to fetch.
+dumpPkgNamed :: Name        -- ^ The name of the package to fetch.
+             -> NpmVersionRange -- ^ The version range of the package to fetch.
              -> Path        -- ^ The path to output to.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
              -> Maybe ByteString  -- ^ Optional github token.
              -> Int -- ^ Depth to which to fetch dev dependencies.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name path existing extensions token devDepth = do
+dumpPkgNamed name range path existing extensions token devDepth = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name existing token devDepth
+  packages <- getPkg name range existing token devDepth
   let (new, existing) = takeNewPackages packages
   dumpPkgs (pwd </> unpack path) new existing extensions
 
@@ -301,14 +303,19 @@ getExtensions = foldl' step mempty where
         Just path' -> errorC ["Extension ", name, " is mapped to both path ",
                               path, " and path ", path']
 
--- displayExisting :: PackageMap -> IO ()
--- displayExisting pmap = forM_
+parseNameAndRange :: Text -> IO (Name, NpmVersionRange)
+parseNameAndRange name = case T.split (== '@') name of
+  [name] -> return (name, SemVerRange anyVersion)
+  [name, range] -> case parseNpmVersionRange range of
+    Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
+    Right nrange -> return (name, nrange)
+
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions NixFromNpmOptions{..} = do
-  forM_ nfnoPkgNames $ \name -> do
+  forM_ nfnoPkgNames $ \nameAndRange -> do
     let extensions = getExtensions nfnoExtendPaths
     existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
-    -- displayExisting existing
-    dumpPkgNamed name nfnoOutputPath existing extensions
+    (name, range) <- parseNameAndRange nameAndRange
+    dumpPkgNamed name range nfnoOutputPath existing extensions
        nfnoGithubToken nfnoDevDepth
