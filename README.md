@@ -60,6 +60,16 @@ $ nixfromnpm -f /path/to/package.json -o /path/to/expressions --no-default-nix
 
 This will build the package called `package_name` and put all of the generated expressions in `/some/path`.
 
+#### Development Dependencies
+
+NPM packages differentiate between dependencies needed at runtime and dependencies required only when developing on a package (e.g. packages for testing, transpilers for compile-to-javascript languages, etc). A package might have a great number of development dependencies, and there might be circular dependencies with development packages because the packages are not required at runtime. For this reason it's generally better to avoid generating expressions for development dependencies unless they're needed, because they add a lot of extra work and generate a lot of files.
+
+`nixfromnpm` lets you generate expressions for development dependencies at a maximum depth. For example, depth `0` means don't make any development dependency expressions; depth `1` means create expressions for the package being built, but not any of their development dependencies, etc.
+
+```bash
+$ nixfromnpm -p package_name -o /some/path --dev-depth 1
+```
+
 #### Extra registries
 
 For a package in a private registry located at `https://my.registry:2345`:
