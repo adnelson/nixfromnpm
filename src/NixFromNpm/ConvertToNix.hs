@@ -278,11 +278,11 @@ dumpPkgNamed :: Text        -- ^ The name of the package to fetch.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
              -> Maybe ByteString  -- ^ Optional github token.
-             -> Bool -- ^ Whether to not fetch dev dependencies.
+             -> Int -- ^ Depth to which to fetch dev dependencies.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name path existing extensions token noDev = do
+dumpPkgNamed name path existing extensions token devDepth = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name existing token noDev
+  packages <- getPkg name existing token devDepth
   let (new, existing) = takeNewPackages packages
   dumpPkgs (pwd </> unpack path) new existing extensions
 
@@ -311,4 +311,4 @@ dumpPkgFromOptions NixFromNpmOptions{..} = do
     existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
     -- displayExisting existing
     dumpPkgNamed name nfnoOutputPath existing extensions
-       nfnoGithubToken nfnoNoDev
+       nfnoGithubToken nfnoDevDepth

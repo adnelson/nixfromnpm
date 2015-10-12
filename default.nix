@@ -4,6 +4,5 @@ let
 in
 
 haskellPackages.callPackage ./project.nix {
-  inherit (nixpkgs) curl cacert;
-  curl-haskell = haskellPackages.curl;
+  inherit (nixpkgs) cacert;
 }

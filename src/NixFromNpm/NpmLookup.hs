@@ -22,15 +22,10 @@ import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
-import qualified Data.Dequeue as D
 import qualified Text.Parsec as Parsec
 import Shelly hiding (get)
 import Nix.Types
-import Network.HTTP.Types.Header
-import Network.HTTP.Conduit
 import Network.Curl
-import Codec.Archive.Tar as Tar hiding (pack, unpack)
-import Codec.Archive.Tar.Entry as Tar
 import qualified Crypto.Hash.SHA1 as SHA1
 
 import NixFromNpm.Common
@@ -76,9 +71,6 @@ data NpmFetcherState = NpmFetcherState {
   -- | Set of all of the package info objects that we have fetched for
   -- a particular package.
   pkgInfos :: Record PackageInfo,
-  -- | Queue of packages waiting to be resolved, since we are fetching using
-  -- breadth-first search.
-  packageWaitQueue :: D.BankersDequeue (Name, SemVerRange),
   -- | For cycle detection.
   currentlyResolving :: PackageMap (),
   -- | Stack of packages that we are resolving so we can get the path to the
@@ -87,10 +79,10 @@ data NpmFetcherState = NpmFetcherState {
   -- | Set of packages known to be problematic; it is an error if one of these
   -- packages appears in a dependency tree.
   knownProblematicPackages :: HashSet Name,
-  -- | Boolean telling us whether to fetch dev dependencies.
-  getDevDeps :: Bool,
-  -- | The connection manager for performing HTTP requests.
-  connectionManager :: Manager,
+  -- | Depth to which we should fetch dev dependencies. If this value is
+  -- non-zero, dev dependencies will be fetched with this value decremented.
+  -- Otherwise, dev dependencies will not be fetched.
+  devDependencyDepth :: Int,
   -- | Request timeout.
   requestTimeout :: Long
   }
@@ -220,15 +212,8 @@ getHttp :: Text -- URI to hit
         -> [(Text, ByteString)] -- Additional headers to add
         -> NpmFetcher (HttpResult BL8.ByteString)
 getHttp uri headers = do
-  manager <- gets connectionManager
-  req <- liftIO $ parseUrl $ unpack uri
   let defHdrs = [("Connection", "Close"), ("User-Agent", "nixfromnpm-fetcher")]
   curl' uri [makeHeaders (headers <> defHdrs), CurlFollowLocation True]
-
--- |
--- entryFileContents :: Tar.EntryContent -> Either Text ByteString
--- entryFileContents (Tar.NormalFile contents _) = Right contents
--- entryFileContents _ = Left "entry is not a normal file"
 
 -- | Returns the SHA1 hash of the result of fetching the URI, and the path
 --   in which the tarball is stored.
@@ -272,26 +257,6 @@ extractVersionInfo tarballPath subpath = do
     Left err -> throwErrorC ["couldn't parse JSON as VersionInfo: ", pack err,
                              "\npackage.json contents:\n", pkJson]
     Right info -> return info
-
--- extractVersionInfo :: -- Name -- ^ Name of package being fetched.
---                       -- -> SemVer -- ^ Version of package being fetched.
---                    P.FilePath -- ^ Contents of the tarball
---                    -> Text -- ^ Subpath within tarball.
---                    -> NpmFetcher VersionInfo -- ^ A VersionInfo object.
--- extractVersionInfo  tarballPath subpath = do
-
---   bytes <- liftIO $ BL8.readFile tarballPath
---   let failureFunc e = error $ "Tarball contained an error: " <> show e
---       entryList = foldEntries (:) [] failureFunc $ Tar.read bytes
---       isPkgJson e = hasSuffix "package.json" $ entryPath e
---   pkJsonContents <- case filter isPkgJson entryList of
---     [] -> throwError1 "No package.json found"
---     (e:_) -> case entryContent e of
---       NormalFile contents _ -> return contents
---       _ -> throwError1 "package.json entry was not a normal file"
---   case eitherDecode pkJsonContents of
---     Left err -> error $ "couldn't parse JSON as VersionInfo: " <> err
---     Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
@@ -460,6 +425,10 @@ _recurOn name version deptype deps = map H.fromList $ do
     result <- resolveNpmVersionRange depName depRange
     return (depName, result)
 
+_decrementDevDepsDepth :: NpmFetcher ()
+_decrementDevDepsDepth = modify $ \s ->
+  s {devDependencyDepth = devDependencyDepth s - 1}
+
 resolveVersionInfo :: VersionInfo -> NpmFetcher ResolvedDependency
 resolveVersionInfo versionInfo = do
   let name = viName versionInfo
@@ -483,9 +452,11 @@ resolveVersionInfo versionInfo = do
             -- resolving.
             startResolving name version
             deps <- recurOn Dependency (viDependencies versionInfo)
-            devDeps <- gets getDevDeps >>= \case
-              False -> return mempty -- ignoring development dependencies.
-              True -> recurOn DevDependency (viDevDependencies versionInfo)
+            devDeps <- gets devDependencyDepth >>= \case
+              n | n <= 0 -> return mempty -- ignoring development dependencies.
+                | otherwise -> do
+                    _decrementDevDepsDepth
+                    recurOn DevDependency (viDevDependencies versionInfo)
             finishResolving name version
             case viDist versionInfo of
               Nothing -> broken NoDistributionInfo
@@ -528,24 +499,21 @@ parseURIs rawUris = map p $! rawUris where
             Nothing -> errorC ["Invalid URI: ", txt]
             Just uri -> uri
 
-startState :: Manager
-           -> PackageMap PreExistingPackage
+startState :: PackageMap PreExistingPackage
            -> [Text] -- ^ Registries to query.
            -> Maybe ByteString -- ^ A possible github token.
-           -> Bool -- ^ Whether to not fetch dev dependencies.
+           -> Int -- ^ Depth to fetch dev dependencies.
            -> NpmFetcherState
-startState manager existing registries token noDev = do
+startState existing registries token devDependencyDepth = do
   NpmFetcherState {
       registries = parseURIs registries,
       githubAuthToken = token,
       resolved = pmMap toFullyDefined existing,
-      packageWaitQueue = D.empty,
       packageStackTrace = [],
       pkgInfos = mempty,
       currentlyResolving = mempty,
       knownProblematicPackages = HS.fromList ["websocket-server"],
-      getDevDeps = not noDev,
-      connectionManager = manager,
+      devDependencyDepth = devDependencyDepth,
       requestTimeout = 10
     }
 
@@ -572,18 +540,16 @@ runItWith state x = do
 runIt :: NpmFetcher a -> IO a
 runIt action = do
   registries <- getRegistries
-  manager <- newManager tlsManagerSettings
-  let state = startState manager mempty registries Nothing False
+  let state = startState mempty registries Nothing 0
   fst <$> runItWith state action
 
 getPkg :: Name -- ^ Name of package to get.
        -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
        -> Maybe ByteString -- ^ A possible github token.
-       -> Bool -- ^ Whether to not fetch dev dependencies.
+       -> Int -- ^ Depth to which to fetch dev dependencies.
        -> IO (PackageMap FullyDefinedPackage) -- ^ Set of fully defined packages.
-getPkg name existing token noDev = do
+getPkg name existing token devDependencyDepth = do
   registries <- getRegistries
-  manager <- newManager tlsManagerSettings
-  let state = startState manager existing registries token noDev
+  let state = startState existing registries token devDependencyDepth
   (_, finalState) <- runItWith state (resolveDep name anyVersion)
   return (resolved finalState)

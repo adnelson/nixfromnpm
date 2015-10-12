@@ -15,7 +15,7 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoOutputPath :: Text,       -- ^ Path to output built expressions to.
   nfnoNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
   nfnoNoCache :: Bool,          -- ^ Build all expressions from scratch.
-  nfnoNoDev :: Bool,            -- ^ Don't fetch dev dependencies.
+  nfnoDevDepth :: Int,          -- ^ Dev dependency depth.
   nfnoExtendPaths :: [Text],    -- ^ Extend existing expressions.
   nfnoTest :: Bool,             -- ^ Fetch only; don't write expressions.
   nfnoRegistries :: [Text],     -- ^ List of registries to query.
@@ -33,7 +33,7 @@ pOptions githubToken = NixFromNpmOptions
     <*> textOption outputDir
     <*> noDefaultNix
     <*> noCache
-    <*> noDev
+    <*> devDepth
     <*> extendPaths
     <*> isTest
     <*> liftA2 snoc registries (pure "https://registry.npmjs.org")
@@ -61,8 +61,10 @@ pOptions githubToken = NixFromNpmOptions
                                     <> " create a default.nix"))
     noCache = switch (long "no-cache"
                       <> help "Build all expressions in OUTPUT from scratch")
-    noDev = switch (long "no-dev"
-                    <> help "Don't recur into dev dependencies (much faster)")
+    devDepth = option auto (long "dev-depth"
+                            <> metavar "DEPTH"
+                            <> help "Depth to which to fetch dev dependencies"
+                            <> value 3)
     extendHelp = ("Use expressions at PATH, optionally called NAME. (supports "
                   <> "multiples)")
     extendPaths = many (textOption (long "extend"
