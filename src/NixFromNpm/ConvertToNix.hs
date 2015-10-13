@@ -23,6 +23,7 @@ import NixFromNpm.Parsers.SemVer
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.PackageMap (PackageMap)
 import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
+                             NpmFetcherState(..),
                              PreExistingPackage(..))
 
 _startingSrc :: String
@@ -36,6 +37,7 @@ _startingSrc = "\
   \  buildNodePackage = import ../data/buildNodePackage.nix { \
   \    inherit pkgs nodejs; \
   \  }; \
+  \  fetchNodePackage = pkgs.callPackage ../data/fetchNodePackage.nix {};\
   \  brokenPackage = name: reason: pkgs.stdenv.mkDerivation { \
   \    name = \"broken-${name}\"; \
   \    buildCommand = '' \n\
@@ -44,7 +46,7 @@ _startingSrc = "\
   \    '';\
   \  };\
   \  allPkgs = pkgs // nodePkgs // joinedExtensions //            \
-  \   {inherit buildNodePackage brokenPackage;};         \
+  \   {inherit buildNodePackage brokenPackage fetchNodePackage;};  \
   \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
@@ -91,11 +93,13 @@ toDotNix v = renderSV v <> ".nix"
 str :: Text -> NExpr
 str = mkStr DoubleQuoted
 
--- | Converts distinfo into a nix fetchurl call.
+-- | Converts distinfo into a nix fetchNodePackage call.
 distInfoToNix :: DistInfo -> NExpr
-distInfoToNix DistInfo{..} = mkApp (mkSym "fetchurl") $ mkNonRecSet
-  [ "url" `bindTo` str diUrl,
-    "sha1" `bindTo`  str diShasum ]
+distInfoToNix DistInfo{..} = mkApp (mkSym "fetchNodePackage") $
+  mkNonRecSet $ catMaybes $
+    [ Just $ "url" `bindTo` str diUrl,
+      Just $ "sha1" `bindTo`  str diShasum,
+      (\p -> "subPath" `bindTo` str p) <$> diSubPath ]
 
 -- | Tests if there is information in the package meta.
 metaNotEmpty :: PackageMeta -> Bool
@@ -124,7 +128,7 @@ resolvedPkgToNix ResolvedPkg{..} = do
         (name, Resolved ver) -> Just (name, ver)
       -- Get the parameters of the package function (deps + utility functions).
       _funcParams = map (uncurry toDepName) nonBrokenDeps
-                    <> ["buildNodePackage", "fetchurl", "brokenPackage"]
+                    <> ["buildNodePackage", "fetchNodePackage", "brokenPackage"]
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) _funcParams
   let args = mkNonRecSet $ catMaybes [
@@ -293,14 +297,12 @@ dumpPkgNamed :: Name        -- ^ The name of the package to fetch.
              -> Path        -- ^ The path to output to.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
+             -> [Text]      -- ^ List of registries.
              -> Maybe ByteString  -- ^ Optional github token.
              -> Int -- ^ Depth to which to fetch dev dependencies.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name range path existing extensions token devDepth = do
+dumpPkgNamed name range path existing extensions registries token devDepth = do
   pwd <- getCurrentDirectory
-  packages <- getPkg name range existing token devDepth
-  let (new, existing) = takeNewPackages packages
-  dumpPkgs (pwd </> unpack path) new existing extensions
 
 -- | Parse the NAME=PATH extension directives.
 getExtensions :: [Text] -> Record Path
@@ -324,12 +326,34 @@ parseNameAndRange name = case T.split (== '@') name of
     Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
     Right nrange -> return (name, nrange)
 
+stateFromOptions :: NixFromNpmOptions -> IO NpmFetcherState
+stateFromOptions NixFromNpmOptions{..} = do
+  let extensions = getExtensions nfnoExtendPaths
+  existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
+  return $ startState existing nfnoRegistries nfnoGithubToken nfnoDevDepth
+
+
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
-dumpPkgFromOptions NixFromNpmOptions{..} = do
+dumpPkgFromOptions opts = do
+  initState <- stateFromOptions opts
   forM_ nfnoPkgNames $ \nameAndRange -> do
-    let extensions = getExtensions nfnoExtendPaths
-    existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
     (name, range) <- parseNameAndRange nameAndRange
-    dumpPkgNamed name range nfnoOutputPath existing extensions
-       nfnoGithubToken nfnoDevDepth
+    newState <- runItWith initState $ resolveNpmVersionRange name range
+    let (new, existing) = takeNewPackages (resolved newState)
+    dumpPkgs (pwd </> unpack path) new existing extensions
+  case nfnoPkgPath of
+    Nothing -> return ()
+    Just pth -> doesDirectoryExist (unpack pth) >>= \case
+      False -> errorC ["No such directory ", pth]
+      True -> withDir pth $ do
+        doesFileExist "package.json" >>= \case
+          False -> errorC ["No package.json found in ", pth]
+          True -> do
+            ((name, ver), state') <- runItWith initState $ do
+              verinfo <- extractPkgJson "package.json"
+              resolveVersionInfo verinfo
+              return (viName verinfo, viVersion verinfo)
+            case pmLookup name ver (resolved state') of
+              Nothing -> errorC ["FATAL: could not build package.json file"]
+              Just rpkg ->

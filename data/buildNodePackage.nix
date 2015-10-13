@@ -1,13 +1,23 @@
 { pkgs, nodejs }:
 
-{
+let
+
+pkg = {
   name,
   version,
   src,
   deps ? [],
+  devDeps ? [],
+  devsDefined ? false,
+  doCheck ? devsDefined,
   meta ? {},
   requireNodeVersion ? null
-}:
+}@args:
+
+let
+  deps' = map (p: p.withoutTests) deps;
+  devDeps' = map (p: p.withoutTests) devDeps;
+in
 
 # Version must be present.
 if version == "" then throw "No version specified for ${name}"
@@ -21,6 +31,9 @@ else
 let
   inherit (pkgs.stdenv) mkDerivation;
   inherit (pkgs.stdenv.lib) concatStringsSep flip;
+  deps = deps';
+  devDeps = devDeps';
+  shouldTest = devsDefined && doCheck;
   # Extract the nodejs sources to a folder. These will be used as an
   # argument to npm.
   sources = mkDerivation {
@@ -34,67 +47,76 @@ let
   preInstall = ''
     setupDeps() {
       # Symlink each dependency to the `node_modules` folder.
-      ${if deps == [] then "" else "mkdir -p node_modules"}
+      ${if (deps ++ devDeps) == [] then "" else "mkdir -p node_modules"}
       ${concatStringsSep "\n"
         (flip map deps (d: "ln -sv ${d} node_modules/${d.pkgName}"))}
+      ${if !shouldTest then "" else concatStringsSep "\n"
+        (flip map devDeps (d: "ln -sv ${d} node_modules/${d.pkgName}"))}
       echo "Finished installing dependencies"
+    }
+    runInstall() {
+      ${nodejs}/bin/npm install ${npmFlags}
+    }
+    removePeerDependencies() {
+      cat <<EOF | ${pkgs.python.executable}
+    import json
+    with open('package.json') as f:
+        pkg = json.load(f)
+    if 'peerDependencies' in pkg:
+        print("Warning: removing peer dependencies of ${name}@${version}:")
+        for name, ver in pkg['peerDependencies'].items():
+            print(name + '@' + ver)
+        del pkg['peerDependencies']
+        with open('package.json', 'w') as f:
+            f.write(json.dumps(pkg, indent=2))
+    EOF
     }
   '';
 
-  npmFlags = concatStringsSep " " [
+  npmFlags = concatStringsSep " " ([
     # Disable any user-level npm shenanigans
     "--userconfig /dev/null"
     "--registry http://www.example.com"
     "--nodedir=${sources}"
     "--production"
     "--fetch-retries 0"
-  ];
+  ] ++
+    # Run the tests if we have defined dev dependencies
+    pkgs.lib.optional shouldTest "--npat");
+  removePeerDependencies = ''
+  '';
+
+  result = mkDerivation {
+    inherit meta src npmFlags;
+    name = "nodejs-${name}-${version}";
+    # We need to make this available to packages which depend on this, so that we
+    # know what folder to put them in.
+    passthru.pkgName = name;
+    passthru.version = version;
+    passthru.withoutTests = pkg (args // {doCheck = false;});
+
+    phases = ["unpackPhase" "checkPhase" "patchPhase" "installPhase"];
+    buildInputs = [pkgs.python nodejs];
+    propagatedBuildInputs = deps;
+
+    patchPhase = ''
+      patchShebangs $PWD
+    '';
+
+    shellHook = preInstall;
+
+    installPhase = ''
+      cp -r $src $out
+      chmod -R +w $out
+      cd $out
+      ${preInstall}
+      setupDeps
+      removePeerDependencies
+      runInstall
+    '';
+  };
 in
 
-mkDerivation {
-  inherit meta src npmFlags;
-  name = "nodejs-${name}-${version}";
-  # We need to make this available to packages which depend on this, so that we
-  # know what folder to put them in.
-  passthru.pkgName = name;
-  passthru.version = version;
-
-  phases = ["unpackPhase" "patchPhase" "installPhase"];
-  buildInputs = [nodejs];
-  propagatedBuildInputs = deps;
-
-  unpackPhase = ''
-    if [ -d $src ]; then
-      # case: this is not a tarball, but a directory. It must contain a
-      # package.json file. We copy the whole thing into `src`.
-      if [ ! -e $src/package.json ]; then
-        echo "No package.json file found in source directory." 1>&2
-        exit 1
-      else
-        # Remove the `node_modules` folder, so as not to
-        cp -r $src $out
-      fi
-    else
-      tar xf $src
-      [ -d package ] || {
-        echo "Tarball $src did not contain a `package` directory"
-        exit 1
-      }
-      cp -r package $out
-    fi
-    cd $out
-  '';
-
-  patchPhase = ''
-    patchShebangs $PWD
-  '';
-
-  shellHook = preInstall;
-
-  installPhase = ''
-    ${preInstall}
-    setupDeps
-    # Run the npm installer.
-    ${nodejs}/bin/npm install ${npmFlags}
-  '';
-}
+result;
+in
+pkg

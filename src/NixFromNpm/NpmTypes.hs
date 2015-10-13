@@ -14,7 +14,9 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 
+
 import NixFromNpm.Common
+import NixFromNpm.GitTypes (getObject, getDict)
 import NixFromNpm.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
@@ -43,13 +45,14 @@ data VersionInfo = VersionInfo {
   viName :: Text,
   viHasTest :: Bool,
   viMeta :: PackageMeta,
-  viVersion :: Text
+  viVersion :: SemVer
   } deriving (Show, Eq)
 
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
-  diShasum :: Text
+  diShasum :: Text,
+  diSubPath :: Maybe Text -- ^ Possible subpath within the tarball.
   } deriving (Show, Eq)
 
 -- | This contains the same information as the .nix file that corresponds
@@ -105,16 +108,19 @@ instance FromJSON VersionInfo where
     version <- o .: "version"
     packageMeta <- fmap PackageMeta $ o .:? "description"
     scripts :: Record Value <- getDict "scripts" o
-    return $ VersionInfo {
-      viDependencies = dependencies,
-      viDevDependencies = devDependencies,
-      viDist = dist,
-      viMain = main,
-      viName = name,
-      viHasTest = H.member "test" scripts,
-      viMeta = packageMeta,
-      viVersion = version
-    }
+    case parseSemVer version of
+      Left err -> fail $ concat ["Version string ", show version,
+                                 " is not a valid semver (", show err, ")"]
+      Right semver -> return $ VersionInfo {
+        viDependencies = dependencies,
+        viDevDependencies = devDependencies,
+        viDist = dist,
+        viMain = main,
+        viName = name,
+        viHasTest = H.member "test" scripts,
+        viMeta = packageMeta,
+        viVersion = semver
+      }
 
 instance FromJSON SemVerRange where
   parseJSON v = case v of
@@ -133,17 +139,7 @@ instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
     tarball <- o .: "tarball"
     shasum <- o .: "shasum"
-    return $ DistInfo tarball shasum
-
--- | Gets a hashmap from an object, or otherwise returns an empty hashmap.
-getDict :: (FromJSON a) => Text -> Object -> Parser (HashMap Text a)
-getDict key o = mapM parseJSON =<< (o .:? key .!= mempty)
-
-getObject :: String -> Value -> Parser (HashMap Text Value)
-getObject _ (Object o) = return o
-getObject msg v =
-  typeMismatch ("object (got " <> show v <> ", message " <> msg <> ")") v
-
+    return $ DistInfo tarball shasum Nothing
 
 patchIfMatches :: (a -> Bool) -- ^ Predicate function
                -> (a -> a) -- ^ Modification function
