@@ -23,9 +23,12 @@ import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete)
-import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
-                             NpmFetcherState(..), startState,
-                             runItWith, resolveVersionInfo,
+import NixFromNpm.NpmLookup (FullyDefinedPackage(..),
+                             NpmFetcherState(..),
+                             startState,
+                             runNpmFetchWith,
+                             resolveNpmVersionRange,
+                             resolveVersionInfo,
                              extractPkgJson,
                              PreExistingPackage(..))
 
@@ -121,9 +124,7 @@ resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
       deps = map (uncurry toNixExpr) $ H.toList rpDependencies
-      devDeps = case rpDevDependencies of
-        Nothing -> []
-        Just devdeps -> map (uncurry toNixExpr) $ H.toList devdeps
+      devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
       allDeps = H.toList $ rpDependencies <> maybe mempty id rpDevDependencies
       -- List of non-broken packages
       nonBrokenDeps = catMaybes $ flip map allDeps $ \case
@@ -138,10 +139,8 @@ resolvedPkgToNix ResolvedPkg{..} = do
         Just $ "name" `bindTo` str rpName,
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
-        maybeIf (isJust rpDevDependencies) $
-          "devsDefined" `bindTo` mkBool True,
-        maybeIf (length deps > 0) $ "deps" `bindTo` mkList deps,
-        maybeIf (length devDeps > 0) $ "devDeps" `bindTo` mkList devDeps,
+        Just $ "dependencies" `bindTo` mkList deps,
+        bindTo "devDependencies" . mkList <$> devDeps,
         maybeIf (metaNotEmpty rpMeta) $ "meta" `bindTo` metaToNix rpMeta
         ]
   mkFunction funcParams $ mkApp (mkSym "buildNodePackage") args
@@ -293,23 +292,6 @@ preloadPackages noExistCheck path toExtend = do
     findExisting (Just name) path
   return (existing <> libraries)
 
--- | Given the name of a package and a place to dump expressions to, generates
---   the expressions needed to build that package.
-dumpPkgNamed :: Name        -- ^ The name of the package to fetch.
-             -> NpmVersionRange -- ^ The version range of the package to fetch.
-             -> Path        -- ^ The path to output to.
-             -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
-             -> Record Path -- ^ Names -> paths of extensions.
-             -> [Text]      -- ^ List of registries.
-             -> Maybe ByteString  -- ^ Optional github token.
-             -> Int -- ^ Depth to which to fetch dev dependencies.
-             -> IO ()       -- ^ Writes files to a folder.
-dumpPkgNamed name range path existing extensions registries token devDepth = do
-  pwd <- getCurrentDirectory
-  packages <- getPkg name range existing registries token devDepth
-  let (new, existing) = takeNewPackages (resolved packages)
-  dumpPkgs (pwd </> unpack path) new existing extensions
-
 -- | Parse the NAME=PATH extension directives.
 getExtensions :: [Text] -> Record Path
 getExtensions = foldl' step mempty where
@@ -325,12 +307,24 @@ getExtensions = foldl' step mempty where
         Just path' -> errorC ["Extension ", name, " is mapped to both path ",
                               path, " and path ", path']
 
-parseNameAndRange :: Text -> IO (Name, NpmVersionRange)
+parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
 parseNameAndRange name = case T.split (== '@') name of
   [name] -> return (name, SemVerRange anyVersion)
   [name, range] -> case parseNpmVersionRange range of
     Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
     Right nrange -> return (name, nrange)
+
+-- | Given a set of fetched packages, generates the expressions needed to
+-- build that package and writes them to disk.
+dumpPackages :: Path        -- ^ The path to output to.
+             -> PackageMap FullyDefinedPackage -- ^ Set of packages to write.
+             -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
+             -> Record Path -- ^ Names -> paths of extensions.
+             -> IO ()       -- ^ Writes files to a folder.
+dumpPackages path packages existing extensions = do
+  pwd <- getCurrentDirectory
+  let (new, existing) = takeNewPackages packages
+  dumpPkgs (pwd </> unpack path) new existing extensions
 
 dumpFromPkgJson :: NixFromNpmOptions -> P.FilePath -> IO ()
 dumpFromPkgJson NixFromNpmOptions{..} path = do
@@ -345,7 +339,7 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
       doesFileExist "package.json" >>= \case
         False -> errorC ["No package.json found in ", pack path]
         True -> do
-          ((name, ver), newState) <- runItWith state $ do
+          ((name, ver), newState) <- runNpmFetchWith state $ do
             verinfo <- extractPkgJson "package.json"
             resolveVersionInfo verinfo
             return (viName verinfo, viVersion verinfo)
@@ -363,12 +357,14 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
-  forM_ nfnoPkgNames $ \nameAndRange -> do
-    let extensions = getExtensions nfnoExtendPaths
-    existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
-    (name, range) <- parseNameAndRange nameAndRange
-    dumpPkgNamed name range nfnoOutputPath existing extensions
-      nfnoRegistries nfnoGithubToken nfnoDevDepth
+  let extensions = getExtensions nfnoExtendPaths
+  existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
+  let state = startState existing nfnoRegistries nfnoGithubToken nfnoDevDepth
+  (_, finalState) <- runNpmFetchWith state $
+    forM nfnoPkgNames $ \nameAndRange -> do
+      (name, range) <- parseNameAndRange nameAndRange
+      resolveNpmVersionRange name range
+  dumpPackages nfnoOutputPath (resolved finalState) existing extensions
   case nfnoPkgPath of
     Nothing -> return ()
     Just path -> dumpFromPkgJson opts (unpack path)

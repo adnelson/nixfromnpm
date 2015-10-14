@@ -352,8 +352,8 @@ gitRefToSha owner repo ref = do
       fromCommit = do
         putStrsLn ["Seeing if ref ", ref, " is a commit hash..."]
         map Git.cSha $ githubCurl $ concat [uri, "/commits/", ref]
-      ohShit = throwErrorC ["Ref is not valid: ", ref]
-  fromBranch `ifErrorDo` fromTag `ifErrorDo` fromCommit `ifErrorDo` ohShit
+      invalid = throwErrorC ["Ref is not valid: ", ref]
+  fromBranch `ifErrorDo` fromTag `ifErrorDo` fromCommit `ifErrorDo` invalid
 
 -- | Given a github repo and a branch, gets the SHA of the head of that
 -- branch
@@ -494,7 +494,7 @@ finishResolving name ver = do
 showTrace :: NpmFetcher ()
 showTrace = do
   trace <- gets packageStackTrace
-  putStrLn $ mapJoinBy " -> " (uncurry showPair) trace
+  putStrLn $ mapJoinBy " -> " (uncurry showPair) (reverse trace)
 
 -- | Return whether a particular version of a package is being resolved.
 isBeingResolved :: Name -> SemVer -> NpmFetcher Bool
@@ -625,8 +625,8 @@ startState existing registries token devDependencyDepth = do
       requestTimeout = 10
     }
 
-runItWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
-runItWith state x = do
+runNpmFetchWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
+runNpmFetchWith state x = do
   runStateT (runExceptT x) state >>= \case
     (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
     (Right x, state) -> return (x, state)
@@ -635,16 +635,4 @@ runIt :: NpmFetcher a -> IO a
 runIt action = do
   let registries = ["https://registry.npmjs.org/"]
   let state = startState mempty registries Nothing 0
-  fst <$> runItWith state action
-
-getPkg :: Name -- ^ Name of package to get.
-       -> NpmVersionRange -- ^ Version bounds of the package.
-       -> PackageMap PreExistingPackage -- ^ Set of pre-existing packages.
-       -> [Text] -- ^ List of NPM registries.
-       -> Maybe ByteString -- ^ A possible github token.
-       -> Int -- ^ Depth to which to fetch dev dependencies.
-       -> IO NpmFetcherState -- ^ Set of fully defined packages.
-getPkg name range existing registries token devDependencyDepth = do
-  let state = startState existing registries token devDependencyDepth
-  (_, finalState) <- runItWith state $ resolveNpmVersionRange name range
-  return finalState
+  fst <$> runNpmFetchWith state action
