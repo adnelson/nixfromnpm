@@ -41,3 +41,8 @@ pmMember name version pmap = case H.lookup name pmap of
 pmFromList :: [(Name, SemVer, a)] -> PackageMap a
 pmFromList = foldl' step mempty where
   step pmap (name, ver, x) = pmInsert name ver x pmap
+
+pmLookup :: Name -> SemVer -> PackageMap a -> Maybe a
+pmLookup name version pmap = case H.lookup name pmap of
+  Nothing -> Nothing
+  Just vmap -> H.lookup version vmap

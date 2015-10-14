@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module NixFromNpm.ConvertToNix where
 
+import qualified Prelude as P
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 import Data.Map (Map)
@@ -21,9 +22,11 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.PackageMap (PackageMap)
+import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete)
 import NixFromNpm.NpmLookup (getPkg, FullyDefinedPackage(..),
-                             NpmFetcherState(..),
+                             NpmFetcherState(..), startState,
+                             runItWith, resolveVersionInfo,
+                             extractPkgJson,
                              PreExistingPackage(..))
 
 _startingSrc :: String
@@ -303,6 +306,9 @@ dumpPkgNamed :: Name        -- ^ The name of the package to fetch.
              -> IO ()       -- ^ Writes files to a folder.
 dumpPkgNamed name range path existing extensions registries token devDepth = do
   pwd <- getCurrentDirectory
+  packages <- getPkg name range existing registries token devDepth
+  let (new, existing) = takeNewPackages (resolved packages)
+  dumpPkgs (pwd </> unpack path) new existing extensions
 
 -- | Parse the NAME=PATH extension directives.
 getExtensions :: [Text] -> Record Path
@@ -326,34 +332,43 @@ parseNameAndRange name = case T.split (== '@') name of
     Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
     Right nrange -> return (name, nrange)
 
-stateFromOptions :: NixFromNpmOptions -> IO NpmFetcherState
-stateFromOptions NixFromNpmOptions{..} = do
-  let extensions = getExtensions nfnoExtendPaths
-  existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
-  return $ startState existing nfnoRegistries nfnoGithubToken nfnoDevDepth
-
-
+dumpFromPkgJson :: NixFromNpmOptions -> P.FilePath -> IO ()
+dumpFromPkgJson NixFromNpmOptions{..} path = do
+  doesDirectoryExist (unpack path) >>= \case
+    False -> errorC ["No such directory ", pack path]
+    True -> withDir path $ do
+      let extensions = getExtensions nfnoExtendPaths
+      existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
+      pwd <- getCurrentDirectory
+      let state = startState existing nfnoRegistries
+                    nfnoGithubToken nfnoDevDepth
+      doesFileExist "package.json" >>= \case
+        False -> errorC ["No package.json found in ", pack path]
+        True -> do
+          ((name, ver), newState) <- runItWith state $ do
+            verinfo <- extractPkgJson "package.json"
+            resolveVersionInfo verinfo
+            return (viName verinfo, viVersion verinfo)
+          let (new, existing) = takeNewPackages (resolved newState)
+          dumpPkgs (pwd </> unpack path)
+                   (pmDelete name ver new)
+                   existing
+                   (getExtensions nfnoExtendPaths)
+          nixexpr <- case pmLookup name ver (resolved newState) of
+            Nothing -> errorC ["FATAL: could not build nix file"]
+            Just (FromExistingInOutput e) -> return e
+            Just (FromExistingInExtension _ e) -> return e
+            Just (NewPackage rpkg) -> return $ resolvedPkgToNix rpkg
+          writeFile "default.nix" $ show $ prettyNix nixexpr
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
-dumpPkgFromOptions opts = do
-  initState <- stateFromOptions opts
+dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   forM_ nfnoPkgNames $ \nameAndRange -> do
+    let extensions = getExtensions nfnoExtendPaths
+    existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
     (name, range) <- parseNameAndRange nameAndRange
-    newState <- runItWith initState $ resolveNpmVersionRange name range
-    let (new, existing) = takeNewPackages (resolved newState)
-    dumpPkgs (pwd </> unpack path) new existing extensions
+    dumpPkgNamed name range nfnoOutputPath existing extensions
+      nfnoRegistries nfnoGithubToken nfnoDevDepth
   case nfnoPkgPath of
     Nothing -> return ()
-    Just pth -> doesDirectoryExist (unpack pth) >>= \case
-      False -> errorC ["No such directory ", pth]
-      True -> withDir pth $ do
-        doesFileExist "package.json" >>= \case
-          False -> errorC ["No package.json found in ", pth]
-          True -> do
-            ((name, ver), state') <- runItWith initState $ do
-              verinfo <- extractPkgJson "package.json"
-              resolveVersionInfo verinfo
-              return (viName verinfo, viVersion verinfo)
-            case pmLookup name ver (resolved state') of
-              Nothing -> errorC ["FATAL: could not build package.json file"]
-              Just rpkg ->
+    Just path -> dumpFromPkgJson opts (unpack path)
