@@ -61,7 +61,7 @@ data DistInfo = DistInfo {
 data ResolvedPkg = ResolvedPkg {
   rpName :: Name,
   rpVersion :: SemVer,
-  rpDistInfo :: DistInfo,
+  rpDistInfo :: Maybe DistInfo,
   rpMeta :: PackageMeta,
   rpDependencies :: Record ResolvedDependency,
   rpDevDependencies :: Maybe (Record ResolvedDependency)

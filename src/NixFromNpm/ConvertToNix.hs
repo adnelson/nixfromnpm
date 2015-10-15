@@ -34,32 +34,29 @@ import NixFromNpm.NpmLookup (FullyDefinedPackage(..),
 
 _startingSrc :: String
 _startingSrc = "\
-  \{pkgs ? import <nixpkgs> {}}:                                  \
+  \{pkgs ? import <nixpkgs> {},                                   \
+  \ nodejs ? pkgs.nodejs-4_1, \
+  \ buildNodePackage ? pkgs.nodePackages_4_1.buildNodePackage}:\
   \let                                                               \
   \  inherit (pkgs.lib) attrValues foldl;                         \
   \  joinSets = foldl (a: b: a // b) {};                             \
   \  joinedExtensions = joinSets (attrValues extensions);            \
-  \  nodejs = pkgs.callPackage ../data/nodejs4.1.1.nix {};       \
-  \  buildNodePackage = import ../data/buildNodePackage.nix { \
-  \    inherit pkgs nodejs; \
-  \  }; \
-  \  fetchNodePackage = pkgs.callPackage ../data/fetchNodePackage.nix {};\
   \  brokenPackage = name: reason: pkgs.stdenv.mkDerivation { \
   \    name = \"broken-${name}\"; \
   \    buildCommand = '' \n\
-  \      echo \"This package is broken because ${reason}\" \n\
+  \      echo \"Package ${name} is broken: ${reason}\" \n\
   \      exit 1 \n\
   \    '';\
   \  };\
   \  allPkgs = pkgs // nodePkgs // joinedExtensions //            \
-  \   {inherit buildNodePackage brokenPackage fetchNodePackage;};  \
+  \   {inherit buildNodePackage brokenPackage;};  \
   \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
   \nodePkgs"
 
 _startingExpr :: NExpr
-_startingExpr = case parseNixString _startingSrc of
+_startingExpr = case parseNixString $! _startingSrc of
   Success e -> e
   Failure e -> error $ unlines ["FATAL: Starting source failed to parse:",
                                 show e]
@@ -99,13 +96,11 @@ toDotNix v = renderSV v <> ".nix"
 str :: Text -> NExpr
 str = mkStr DoubleQuoted
 
--- | Converts distinfo into a nix fetchNodePackage call.
-distInfoToNix :: DistInfo -> NExpr
-distInfoToNix DistInfo{..} = mkApp (mkSym "fetchNodePackage") $
-  mkNonRecSet $ catMaybes $
-    [ Just $ "url" `bindTo` str diUrl,
-      Just $ "sha1" `bindTo`  str diShasum,
-      (\p -> "subPath" `bindTo` str p) <$> diSubPath ]
+-- | Converts distinfo into a nix fetchurl call.
+distInfoToNix :: Maybe DistInfo -> NExpr
+distInfoToNix Nothing = mkPath False "./."
+distInfoToNix (Just DistInfo{..}) = mkApp (mkSym "fetchurl") $
+  mkNonRecSet ["url" `bindTo` str diUrl, "sha1" `bindTo`  str diShasum]
 
 -- | Tests if there is information in the package meta.
 metaNotEmpty :: PackageMeta -> Bool
@@ -132,15 +127,15 @@ resolvedPkgToNix ResolvedPkg{..} = do
         (name, Resolved ver) -> Just (name, ver)
       -- Get the parameters of the package function (deps + utility functions).
       _funcParams = map (uncurry toDepName) nonBrokenDeps
-                    <> ["buildNodePackage", "fetchNodePackage", "brokenPackage"]
+                    <> ["buildNodePackage", "fetchurl", "brokenPackage"]
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) _funcParams
   let args = mkNonRecSet $ catMaybes [
         Just $ "name" `bindTo` str rpName,
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
-        Just $ "dependencies" `bindTo` mkList deps,
-        bindTo "devDependencies" . mkList <$> devDeps,
+        Just $ "deps" `bindTo` mkList deps,
+        -- bindTo "devDependencies" . mkList <$> devDeps,
         maybeIf (metaNotEmpty rpMeta) $ "meta" `bindTo` metaToNix rpMeta
         ]
   mkFunction funcParams $ mkApp (mkSym "buildNodePackage") args
@@ -176,7 +171,7 @@ mkDefaultNix versionMap extensionMap = do
       newBindings = ["extensions" `bindTo` extensionsSet,
                      "byVersion" `bindTo` byVersion,
                      "defaults" `bindTo` defaults]
-  modifyFunctionBody (appendBindings newBindings) _startingExpr
+  modifyFunctionBody (appendBindings newBindings) $! _startingExpr
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 --   However, the only packages that we want to write are the new ones; that
@@ -326,28 +321,27 @@ dumpPackages path packages existing extensions = do
   let (new, existing) = takeNewPackages packages
   dumpPkgs (pwd </> unpack path) new existing extensions
 
-dumpFromPkgJson :: NixFromNpmOptions -> P.FilePath -> IO ()
+dumpFromPkgJson :: NixFromNpmOptions -> Path -> IO ()
 dumpFromPkgJson NixFromNpmOptions{..} path = do
   doesDirectoryExist (unpack path) >>= \case
-    False -> errorC ["No such directory ", pack path]
-    True -> withDir path $ do
+    False -> errorC ["No such directory ", path]
+    True -> withDir (unpack path) $ do
       let extensions = getExtensions nfnoExtendPaths
       existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
-      pwd <- getCurrentDirectory
+      pwd <- pack <$> getCurrentDirectory
       let state = startState existing nfnoRegistries
                     nfnoGithubToken nfnoDevDepth
       doesFileExist "package.json" >>= \case
-        False -> errorC ["No package.json found in ", pack path]
+        False -> errorC ["No package.json found in ", path]
         True -> do
           ((name, ver), newState) <- runNpmFetchWith state $ do
             verinfo <- extractPkgJson "package.json"
             resolveVersionInfo verinfo
             return (viName verinfo, viVersion verinfo)
-          let (new, existing) = takeNewPackages (resolved newState)
-          dumpPkgs (pwd </> unpack path)
-                   (pmDelete name ver new)
-                   existing
-                   (getExtensions nfnoExtendPaths)
+          dumpPackages (pwd <> "/" <> path)
+                       (pmDelete name ver (resolved newState))
+                       existing
+                       (getExtensions nfnoExtendPaths)
           nixexpr <- case pmLookup name ver (resolved newState) of
             Nothing -> errorC ["FATAL: could not build nix file"]
             Just (FromExistingInOutput e) -> return e
@@ -367,4 +361,4 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   dumpPackages nfnoOutputPath (resolved finalState) existing extensions
   case nfnoPkgPath of
     Nothing -> return ()
-    Just path -> dumpFromPkgJson opts (unpack path)
+    Just path -> dumpFromPkgJson opts path

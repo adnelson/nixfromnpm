@@ -557,23 +557,22 @@ resolveVersionInfo VersionInfo{..} = do
       False -> do
         startResolving viName viVersion
         deps <- recurOn' Dependency viDependencies
-        devDeps <- shouldFetchDevs >>= \case
-          False -> return Nothing -- ignoring development dependencies.
-          True -> Just <$> recurOn' DevDependency viDevDependencies
+        devDeps <- do
+          shouldFetch <- shouldFetchDevs
+          case shouldFetch || H.null viDevDependencies of
+            True -> Just <$> recurOn' DevDependency viDevDependencies
+            False -> return Nothing
         finishResolving viName viVersion
-        case viDist of
-          Nothing -> broken NoDistributionInfo
-          Just dist -> do
-            -- Store this version's info.
-            addResolvedPkg viName viVersion $ ResolvedPkg {
-                rpName = viName,
-                rpVersion = viVersion,
-                rpDistInfo = dist,
-                rpMeta = viMeta,
-                rpDependencies = deps,
-                rpDevDependencies = devDeps
-              }
-            return $ Resolved viVersion
+        -- Store this version's info.
+        addResolvedPkg viName viVersion $ ResolvedPkg {
+            rpName = viName,
+            rpVersion = viVersion,
+            rpDistInfo = viDist,
+            rpMeta = viMeta,
+            rpDependencies = deps,
+            rpDevDependencies = devDeps
+          }
+        return $ Resolved viVersion
 
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: Name -> SemVerRange -> NpmFetcher ResolvedDependency
