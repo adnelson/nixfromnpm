@@ -6,7 +6,8 @@ module NixFromNpm.NpmTypes (
     module NixFromNpm.NpmVersion,
     PackageInfo(..), PackageMeta(..), VersionInfo(..),
     DistInfo(..), ResolvedPkg(..), DependencyType(..),
-    BrokenPackageReason(..), ResolvedDependency(..)
+    BrokenPackageReason(..), ResolvedDependency(..),
+    Shasum(..)
   ) where
 
 import Data.Aeson
@@ -48,10 +49,13 @@ data VersionInfo = VersionInfo {
   viVersion :: SemVer
   } deriving (Show, Eq)
 
+-- | SHA digest, combining an algorithm type with a digest.
+data Shasum = SHA1 Text | SHA256 Text deriving (Show, Eq)
+
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
-  diShasum :: Text,
+  diShasum :: Shasum,
   diSubPath :: Maybe Text -- ^ Possible subpath within the tarball.
   } deriving (Show, Eq)
 
@@ -138,7 +142,7 @@ instance FromJSON PackageInfo where
 instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
     tarball <- o .: "tarball"
-    shasum <- o .: "shasum"
+    shasum <- SHA1 <$> o .: "shasum"
     return $ DistInfo tarball shasum Nothing
 
 patchIfMatches :: (a -> Bool) -- ^ Predicate function

@@ -4,6 +4,6 @@ let
 in
 
 haskellPackages.callPackage ./project.nix {
-  inherit (nixpkgs) cacert;
+  pkgs = nixpkgs;
   hnix = haskellPackages.callPackage ../hnix/project.nix {};
 }

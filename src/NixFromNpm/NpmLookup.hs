@@ -28,6 +28,8 @@ import Shelly hiding (get, (</>))
 import Network.Curl
 import Nix.Types
 import qualified Crypto.Hash.SHA1 as SHA1
+import qualified Crypto.Hash.SHA256 as SHA256
+import Data.Digest.Pure.SHA (sha256, showDigest)
 
 import NixFromNpm.Common
 import NixFromNpm.NpmTypes
@@ -152,10 +154,9 @@ addResolvedPkg name version _rpkg = do
     resolved = pmInsert name version rpkg (resolved s)
     }
 
--- | Get the hex sha1 of a bytestring.
-hexSha1 :: BL8.ByteString -> Text
-hexSha1 = pack . concatMap (flip showHex "") . SHA1.hashlazy
-
+-- | Get the hex sha256 of a bytestring.
+hexSha256 :: BL8.ByteString -> Shasum
+hexSha256 = SHA256 . pack . showDigest . sha256
 
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
@@ -240,10 +241,10 @@ tempFile template = do
   tmpdir <- getTemp
   liftIO $ openTempFile tmpdir template
 
--- | Returns the SHA1 hash of the result of fetching the URI, and the path
+-- | Returns the SHA256 hash of the result of fetching the URI, and the path
 -- in which the tarball is stored.
-prefetchSha1 :: URI -> NpmFetcher (Text, P.FilePath)
-prefetchSha1 uri = do
+prefetchSha256 :: URI -> NpmFetcher (Shasum, P.FilePath)
+prefetchSha256 uri = do
   putStrsLn ["Pre-fetching url ", uriToText uri]
   -- Make a temporary directory.
   dir <- tempDir "tarball-prefetch"
@@ -252,7 +253,7 @@ prefetchSha1 uri = do
   -- Download the file into memory, calculate the hash.
   getHttp (uriToText uri) [] >>= \case
     HttpSuccess tarball -> do
-      let hash = hexSha1 tarball
+      let hash = hexSha256 tarball
       -- Return the hash and the path.
       path <- liftIO $ do
         (path, handle) <- tempFile "nixfromnpmfetch.tgz"
@@ -295,7 +296,7 @@ fetchHttp :: Text -- ^ Subpath in which to find the package.json.
           -> NpmFetcher ResolvedDependency -- ^ The package at that URI.
 fetchHttp subpath uri = do
   -- Use nix-fetch to download and hash the tarball.
-  (hash, tarballPath) <- prefetchSha1 uri
+  (hash, tarballPath) <- prefetchSha256 uri
   -- Extract the tarball to a temp directory and parse the package.json.
   versionInfo <- extractVersionInfo tarballPath subpath
   liftIO $ removeFile tarballPath

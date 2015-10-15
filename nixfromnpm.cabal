@@ -15,55 +15,29 @@ build-type:          Simple
 cabal-version:       >=1.10
 bug-reports:         https://github.com/adnelson/nixfromnpm/issues
 
+-- We define a custom buildNodePackage function, which we package here.
+data-files:   nix-libraries/buildNodePackage/default.nix
+            , nix-libraries/buildNodePackage/removeImpureDependencies.js
+            , nix-libraries/buildNodePackage/setup-hook.sh
+
 source-repository head
   type:     git
   location: git://github.com/adnelson/nixfromnpm.git
 
--- library
---   exposed-modules:     NixFromNpm
---   other-modules:       NixFromNpm.Common
---                      , NixFromNpm.ConvertToNix
---                      , NixFromNpm.NpmLookup
---                      , NixFromNpm.NpmTypes
---                      , NixFromNpm.NpmVersion
---                      , NixFromNpm.Options
---                      , NixFromNpm.SemVer
---                      , NixFromNpm.Parsers.Common
---                      , NixFromNpm.Parsers.NpmVersion
---                      , NixFromNpm.Parsers.SemVer
---                      , NixFromNpm.PackageMap
---   build-depends:       base >=4.8 && <4.9
---                      , classy-prelude
---                      , text
---                      , mtl
---                      , bytestring
---                      , unordered-containers
---                      , containers
---                      , parsec
---                      , aeson
---                      , data-default
---                      , shelly
---                      , MissingH
---                      , error-list
---                      , text-render
---                      , system-filepath
---                      , filepath
---                      , network-uri
---                      , directory
---                      , hnix
---                      , optparse-applicative
---                      , curl
---                      , cryptohash
---                      , temporary
---   hs-source-dirs:      src
---   default-language:    Haskell2010
-
-
-
 executable nixfromnpm
   main-is:             Main.hs
-  -- other-modules:
-  other-extensions:    NoImplicitPrelude, OverloadedStrings
+  other-extensions:    FlexibleContexts
+                     , FlexibleInstances
+                     , LambdaCase
+                     , NoImplicitPrelude
+                     , NoMonomorphismRestriction
+                     , OverloadedStrings
+                     , QuasiQuotes
+                     , RecordWildCards
+                     , ScopedTypeVariables
+                     , TypeFamilies
+                     , TypeSynonymInstances
+                     , ViewPatterns
   build-depends:       base >=4.8 && <4.9
                      , classy-prelude
                      , text
@@ -85,40 +59,6 @@ executable nixfromnpm
                      , hnix
                      , optparse-applicative
                      , curl
-                     , cryptohash
                      , temporary
-  -- extra-libraries:     curl
   hs-source-dirs:      src
   default-language:    Haskell2010
-
-Test-Suite spec
-  Type:                exitcode-stdio-1.0
-  Default-Language:    Haskell2010
-  Hs-Source-Dirs:      src
-                     , test
-  Main-Is:             Spec.hs
-  Build-Depends:       base >=4.8 && <4.9
-                     , classy-prelude
-                     , mtl
-                     , text
-                     , bytestring
-                     , unordered-containers
-                     , containers
-                     , parsec
-                     , io-streams
-                     , http-client-streams
-                     , aeson
-                     , data-default
-                     , shelly
-                     , MissingH
-                     , github
-                     , hspec
-                     , hspec-expectations
-                     , error-list
-                     , text-render
-                     , system-filepath
-                     , filepath
-                     , network-uri
-                     , directory
-                     , hnix
-                     , optparse-applicative

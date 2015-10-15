@@ -12,6 +12,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
+import Text.Printf (printf)
 
 import NixFromNpm.Common
 import Nix.Types
@@ -32,11 +33,12 @@ import NixFromNpm.NpmLookup (FullyDefinedPackage(..),
                              extractPkgJson,
                              PreExistingPackage(..))
 
-_startingSrc :: String
-_startingSrc = "\
-  \{pkgs ? import <nixpkgs> {},                                   \
+_startingSrc :: P.FilePath -> String
+_startingSrc pathToBuildNodePackage = printf "\
+  \{pkgs ? import <nixpkgs> {},               \
   \ nodejs ? pkgs.nodejs-4_1, \
-  \ buildNodePackage ? pkgs.nodePackages_4_1.buildNodePackage}:\
+  \ buildNodePackage ? import %s { \
+  \   inherit pkgs nodejs; }}: \
   \let                                                               \
   \  inherit (pkgs.lib) attrValues foldl;                         \
   \  joinSets = foldl (a: b: a // b) {};                             \
@@ -53,13 +55,17 @@ _startingSrc = "\
   \  callPackage = pkgs.lib.callPackageWith allPkgs;              \
   \  nodePkgs = joinedExtensions // byVersion // defaults;           \
   \in                                                                \
-  \nodePkgs"
+  \nodePkgs" pathToBuildNodePackage
 
-_startingExpr :: NExpr
-_startingExpr = case parseNixString $! _startingSrc of
-  Success e -> e
-  Failure e -> error $ unlines ["FATAL: Starting source failed to parse:",
-                                show e]
+_startingExpr :: IO NExpr
+_startingExpr = do
+  getEnv "BUILD_NODE_PACKAGE_DIR" >>= \case
+    Nothing -> error "BUILD_NODE_PACKAGE_DIR variable is not set"
+    Just bnpPath -> do
+      case parseNixString $! _startingSrc (unpack bnpPath) of
+        Success e -> return e
+        Failure e -> error $ unlines ["FATAL: Starting source failed to parse:",
+                                      show e]
 
 callPackage :: NExpr -> NExpr
 callPackage = callPackageWith []
@@ -99,8 +105,11 @@ str = mkStr DoubleQuoted
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe DistInfo -> NExpr
 distInfoToNix Nothing = mkPath False "./."
-distInfoToNix (Just DistInfo{..}) = mkApp (mkSym "fetchurl") $
-  mkNonRecSet ["url" `bindTo` str diUrl, "sha1" `bindTo`  str diShasum]
+distInfoToNix (Just DistInfo{..}) = mkApp (mkSym "fetchurl") $ do
+  let (algo, hash) = case diShasum of
+        SHA1 hash' -> ("sha1", hash')
+        SHA256 hash' -> ("sha256", hash')
+  mkNonRecSet ["url" `bindTo` str diUrl, algo `bindTo`  str hash]
 
 -- | Tests if there is information in the package meta.
 metaNotEmpty :: PackageMeta -> Bool
@@ -135,18 +144,19 @@ resolvedPkgToNix ResolvedPkg{..} = do
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
         Just $ "deps" `bindTo` mkList deps,
-        -- bindTo "devDependencies" . mkList <$> devDeps,
+        bindTo "devDependencies" . mkList <$> devDeps,
         maybeIf (metaNotEmpty rpMeta) $ "meta" `bindTo` metaToNix rpMeta
         ]
   mkFunction funcParams $ mkApp (mkSym "buildNodePackage") args
 
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
-mkDefaultNix :: Record [SemVer] -- ^ Map of names to versions of packages that
+mkDefaultNix :: NExpr -- The initial nix expression for default.nix.
+             -> Record [SemVer] -- ^ Map of names to versions of packages that
                                 --   exist in this library.
              -> Record Path -- ^ Map of extensions being included.
-             -> NExpr -- ^ A generated nix expression.
-mkDefaultNix versionMap extensionMap = do
+             -> IO NExpr -- ^ A generated nix expression.
+mkDefaultNix baseExpr versionMap extensionMap = do
   let mkPath' = mkPath False . unpack
       toPath name ver = mkPath' $ concat ["./", name, "/", toDotNix ver]
       -- Make a set of all of the extensions
@@ -171,7 +181,7 @@ mkDefaultNix versionMap extensionMap = do
       newBindings = ["extensions" `bindTo` extensionsSet,
                      "byVersion" `bindTo` byVersion,
                      "defaults" `bindTo` defaults]
-  modifyFunctionBody (appendBindings newBindings) $! _startingExpr
+  return $ modifyFunctionBody (appendBindings newBindings) baseExpr
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 --   However, the only packages that we want to write are the new ones; that
@@ -192,13 +202,14 @@ takeNewPackages startingRec = do
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 --   and the names/paths to the libraries being extended.
 dumpPkgs :: MonadIO m
-         => String                 -- ^ Path to output directory.
+         => NExpr                  -- ^ Base default.nix expression.
+         -> String                 -- ^ Path to output directory.
          -> PackageMap ResolvedPkg -- ^ New packages being written.
          -> PackageMap NExpr       -- ^ Existing packages to be included
                                    --   in the generated default.nix.
          -> Record Path            -- ^ Libraries being extended.
          -> m ()
-dumpPkgs path newPackages existingPackages extensions = liftIO $ do
+dumpPkgs baseExpr path newPackages existingPackages extensions = liftIO $ do
   let _path = pack path
   -- If there aren't any new packages, we can stop here.
   if H.null newPackages
@@ -220,7 +231,7 @@ dumpPkgs path newPackages existingPackages extensions = liftIO $ do
       -- We need to build up a record mapping package names to the list of
       -- versions being defined in this library.
       let versionMap = map H.keys newPackages <> map H.keys existingPackages
-          defaultNix = mkDefaultNix versionMap extensions
+      defaultNix <- mkDefaultNix baseExpr versionMap extensions
       writeFile "default.nix" $ show $ prettyNix defaultNix
 
 -- | Given the path to a package, finds all of the .nix files which parse
@@ -311,18 +322,20 @@ parseNameAndRange name = case T.split (== '@') name of
 
 -- | Given a set of fetched packages, generates the expressions needed to
 -- build that package and writes them to disk.
-dumpPackages :: Path        -- ^ The path to output to.
+dumpPackages :: NExpr       -- ^ Base default.nix expression.
+             -> Path        -- ^ The path to output to.
              -> PackageMap FullyDefinedPackage -- ^ Set of packages to write.
              -> PackageMap PreExistingPackage  -- ^ Set of existing packages.
              -> Record Path -- ^ Names -> paths of extensions.
              -> IO ()       -- ^ Writes files to a folder.
-dumpPackages path packages existing extensions = do
+dumpPackages baseExpr path packages existing extensions = do
   pwd <- getCurrentDirectory
   let (new, existing) = takeNewPackages packages
-  dumpPkgs (pwd </> unpack path) new existing extensions
+  dumpPkgs baseExpr (pwd </> unpack path) new existing extensions
 
 dumpFromPkgJson :: NixFromNpmOptions -> Path -> IO ()
 dumpFromPkgJson NixFromNpmOptions{..} path = do
+  baseExpr <- _startingExpr
   doesDirectoryExist (unpack path) >>= \case
     False -> errorC ["No such directory ", path]
     True -> withDir (unpack path) $ do
@@ -338,7 +351,8 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
             verinfo <- extractPkgJson "package.json"
             resolveVersionInfo verinfo
             return (viName verinfo, viVersion verinfo)
-          dumpPackages (pwd <> "/" <> path)
+          dumpPackages baseExpr
+                       (pwd <> "/" <> path)
                        (pmDelete name ver (resolved newState))
                        existing
                        (getExtensions nfnoExtendPaths)
@@ -351,6 +365,7 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
+  baseExpr <- _startingExpr
   let extensions = getExtensions nfnoExtendPaths
   existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
   let state = startState existing nfnoRegistries nfnoGithubToken nfnoDevDepth
@@ -358,7 +373,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     forM nfnoPkgNames $ \nameAndRange -> do
       (name, range) <- parseNameAndRange nameAndRange
       resolveNpmVersionRange name range
-  dumpPackages nfnoOutputPath (resolved finalState) existing extensions
+  dumpPackages baseExpr nfnoOutputPath (resolved finalState) existing
+    extensions
   case nfnoPkgPath of
     Nothing -> return ()
     Just path -> dumpFromPkgJson opts path
