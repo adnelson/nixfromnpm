@@ -34,7 +34,7 @@ module NixFromNpm.Common (
     module System.FilePath.Posix,
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
+    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir, failC,
     pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix, pshow
   ) where
 
@@ -68,7 +68,7 @@ import GHC.Exts (IsList)
 import GHC.IO.Exception
 import Control.Exception (bracket)
 import Text.Render hiding (renderParens)
-import Network.URI (URI(..), parseURI, parseAbsoluteURI,
+import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
 import Shelly hiding (get, relativeTo)
@@ -197,5 +197,8 @@ mapJoinBy :: Text -> (a -> Text) -> [a] -> Text
 mapJoinBy sep func = joinBy sep . map func
 
 -- | Reads an environment variable.
-getEnv :: Text -> IO (Maybe Text)
+getEnv :: MonadIO m => Text -> m (Maybe Text)
 getEnv = shelly . silently . get_env
+
+failC :: Monad m => [Text] -> m a
+failC = fail . unpack . concat

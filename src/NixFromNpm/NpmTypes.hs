@@ -6,7 +6,8 @@ module NixFromNpm.NpmTypes (
     module NixFromNpm.NpmVersion,
     PackageInfo(..), PackageMeta(..), VersionInfo(..),
     DistInfo(..), ResolvedPkg(..), DependencyType(..),
-    BrokenPackageReason(..), ResolvedDependency(..)
+    BrokenPackageReason(..), ResolvedDependency(..),
+    Shasum(..)
   ) where
 
 import Data.Aeson
@@ -15,15 +16,17 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 
 import NixFromNpm.Common
+import NixFromNpm.GitTypes (getObject, getDict)
 import NixFromNpm.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.SemVer
+import NixFromNpm.PackageMap
 
 -- | Package information; specifically all of the different versions.
 data PackageInfo = PackageInfo {
-  piVersions :: Record VersionInfo,
-  piTags :: Record Name
+  piVersions :: HashMap SemVer VersionInfo,
+  piTags :: Record SemVer
   } deriving (Show, Eq)
 
 -- | Metadata about a package.
@@ -43,13 +46,17 @@ data VersionInfo = VersionInfo {
   viName :: Text,
   viHasTest :: Bool,
   viMeta :: PackageMeta,
-  viVersion :: Text
+  viVersion :: SemVer
   } deriving (Show, Eq)
+
+-- | SHA digest, combining an algorithm type with a digest.
+data Shasum = SHA1 Text | SHA256 Text deriving (Show, Eq)
 
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
-  diShasum :: Text
+  diShasum :: Shasum,
+  diSubPath :: Maybe Text -- ^ Possible subpath within the tarball.
   } deriving (Show, Eq)
 
 -- | This contains the same information as the .nix file that corresponds
@@ -58,10 +65,10 @@ data DistInfo = DistInfo {
 data ResolvedPkg = ResolvedPkg {
   rpName :: Name,
   rpVersion :: SemVer,
-  rpDistInfo :: DistInfo,
+  rpDistInfo :: Maybe DistInfo,
   rpMeta :: PackageMeta,
   rpDependencies :: Record ResolvedDependency,
-  rpDevDependencies :: Record ResolvedDependency
+  rpDevDependencies :: Maybe (Record ResolvedDependency)
   } deriving (Show, Eq)
 
 -- | Flag for different types of dependencies.
@@ -75,7 +82,7 @@ data BrokenPackageReason
   = NoMatchingVersion NpmVersionRange
   | InvalidNpmVersionRange Text
   | NoSuchTag Name
-  | TagPointsToInvalidVersion Name Name
+  | TagPointsToInvalidVersion Name SemVer
   | InvalidSemVerSyntax Text String
   | NoDistributionInfo
   deriving (Show, Eq)
@@ -105,16 +112,19 @@ instance FromJSON VersionInfo where
     version <- o .: "version"
     packageMeta <- fmap PackageMeta $ o .:? "description"
     scripts :: Record Value <- getDict "scripts" o
-    return $ VersionInfo {
-      viDependencies = dependencies,
-      viDevDependencies = devDependencies,
-      viDist = dist,
-      viMain = main,
-      viName = name,
-      viHasTest = H.member "test" scripts,
-      viMeta = packageMeta,
-      viVersion = version
-    }
+    case parseSemVer version of
+      Left err -> fail $ concat ["Version string ", show version,
+                                 " is not a valid semver (", show err, ")"]
+      Right semver -> return $ VersionInfo {
+        viDependencies = dependencies,
+        viDevDependencies = devDependencies,
+        viDist = dist,
+        viMain = main,
+        viName = name,
+        viHasTest = H.member "test" scripts,
+        viMeta = packageMeta,
+        viVersion = semver
+      }
 
 instance FromJSON SemVerRange where
   parseJSON v = case v of
@@ -125,25 +135,22 @@ instance FromJSON SemVerRange where
 
 instance FromJSON PackageInfo where
   parseJSON = getObject "package info" >=> \o -> do
-    vs <- getDict "versions" o
-    tags <- getDict "dist-tags" o
-    return $ PackageInfo vs tags
+    vs' <- getDict "versions" o
+    tags' <- getDict "dist-tags" o
+    let vs = H.fromList $ map (\vi -> (viVersion vi, vi)) $ H.elems vs'
+        convert tags [] = return $ PackageInfo vs (H.fromList tags)
+        convert tags ((tName, tVer):ts) = case parseSemVer tVer of
+          Left err -> failC ["Tag ", tName, " refers to an invalid ",
+                             "semver string ", tVer, ": ", pshow err]
+          Right ver -> convert ((tName, ver):tags) ts
+    convert [] $ H.toList tags'
+
 
 instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
     tarball <- o .: "tarball"
-    shasum <- o .: "shasum"
-    return $ DistInfo tarball shasum
-
--- | Gets a hashmap from an object, or otherwise returns an empty hashmap.
-getDict :: (FromJSON a) => Text -> Object -> Parser (HashMap Text a)
-getDict key o = mapM parseJSON =<< (o .:? key .!= mempty)
-
-getObject :: String -> Value -> Parser (HashMap Text Value)
-getObject _ (Object o) = return o
-getObject msg v =
-  typeMismatch ("object (got " <> show v <> ", message " <> msg <> ")") v
-
+    shasum <- SHA1 <$> o .: "shasum"
+    return $ DistInfo tarball shasum Nothing
 
 patchIfMatches :: (a -> Bool) -- ^ Predicate function
                -> (a -> a) -- ^ Modification function

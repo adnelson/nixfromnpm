@@ -28,8 +28,11 @@ instance Show NpmVersionRange where
   show (GitId src _ _ _) = "git fetch from " <> show src
   show (LocalPath pth) = show pth
 
+showPair :: Name -> SemVer -> Text
+showPair name version = name <> "@" <> renderSV version
+
+showRangePair :: Name -> NpmVersionRange -> Text
+showRangePair name range = name <> "@" <> pshow range
+
 showDeps :: [(Name, NpmVersionRange)] -> Text
-showDeps ranges = do
-  let showPair :: Name -> NpmVersionRange -> Text
-      showPair name range = name <> ": " <> pack (show range)
-  joinBy ", " $ map (uncurry showPair) ranges
+showDeps ranges = mapJoinBy ", " (uncurry showRangePair) ranges

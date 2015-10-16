@@ -11,7 +11,7 @@ import NixFromNpm.Common hiding ((<>))
 -- most of these are unimplemented.
 data NixFromNpmOptions = NixFromNpmOptions {
   nfnoPkgNames :: [Name],       -- ^ Names of packages to build.
-  nfnoPkgPath :: Maybe Text,    -- ^ Paths to package.jsons to build.
+  nfnoPkgPath :: Maybe Text,    -- ^ Path of package.json to build.
   nfnoOutputPath :: Text,       -- ^ Path to output built expressions to.
   nfnoNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
   nfnoNoCache :: Bool,          -- ^ Build all expressions from scratch.
