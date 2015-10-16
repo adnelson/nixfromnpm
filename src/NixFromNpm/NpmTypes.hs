@@ -85,6 +85,7 @@ data BrokenPackageReason
   | TagPointsToInvalidVersion Name SemVer
   | InvalidSemVerSyntax Text String
   | NoDistributionInfo
+  | Reason String
   deriving (Show, Eq)
 
 -- | We might not be able to resolve a dependency, in which case we record

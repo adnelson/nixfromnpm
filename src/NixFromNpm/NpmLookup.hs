@@ -274,7 +274,7 @@ extractPkgJson path = do
 -- and store the hash.
 fetchHttp :: Text -- ^ Subpath in which to find the package.json.
           -> URI -- ^ The URI to fetch.
-          -> NpmFetcher ResolvedDependency -- ^ The package at that URI.
+          -> NpmFetcher SemVer -- ^ The package at that URI.
 fetchHttp subpath uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- prefetchSha256 uri
@@ -346,7 +346,7 @@ getShaOfBranch owner repo branchName = do
 
 -- | Fetch a package from github. Will convert a branch name into a specific
 -- SHA so that the generated URL is deterministic.
-fetchGithub :: URI -> NpmFetcher ResolvedDependency
+fetchGithub :: URI -> NpmFetcher SemVer
 fetchGithub uri = do
   (owner, repo) <- case split "/" $ uriPath uri of
     [_, owner, repo] -> return (pack owner, pack $ dropSuffix ".git" repo)
@@ -395,7 +395,7 @@ httpToGitUri uri = do
 -- figure out how to resolve the dependency.
 resolveNpmVersionRange :: Name -- ^ Name of the package.
                        -> NpmVersionRange -- ^ Version bounds of the package.
-                       -> NpmFetcher ResolvedDependency -- ^ Dependency.
+                       -> NpmFetcher SemVer -- ^ Dependency.
 resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
   NpmUri uri -> case uriScheme uri of
@@ -417,7 +417,7 @@ resolveNpmVersionRange name range = case range of
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
-resolveDep :: Name -> SemVerRange -> NpmFetcher ResolvedDependency
+resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   -- We've alread defined some versions of this package.
   Just versions -> case filter (matches range) (H.keys versions) of
@@ -435,7 +435,7 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
                                    " to override)"]
         FromExistingInExtension name _ -> ["version ", versionDots,
                                            " provided by extension ", name]
-      return (Resolved bestVersion)
+      return bestVersion
   -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
 
@@ -466,10 +466,6 @@ isBeingResolved :: Name -> SemVer -> NpmFetcher Bool
 isBeingResolved name version =
   pmMember name version <$> gets currentlyResolving
 
--- | Convenience function to return a broken package.
-broken :: BrokenPackageReason -> NpmFetcher ResolvedDependency
-broken = return . Broken
-
 -- | Recur the fetch on a list of dependencies, at a decremented
 -- development dependency depth.
 recurOn :: Name -- ^ Name of the package whose dependencies these are.
@@ -490,7 +486,8 @@ recurOn name version deptype deps = atDecrementedDevDepsDepth $
     forM depList $ \(depName, depRange) -> do
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair name version]
-      result <- resolveNpmVersionRange depName depRange
+      result <- (Resolved <$> resolveNpmVersionRange depName depRange)
+                `catchError` (return . Broken . Reason . show)
       return (depName, result)
 
 -- | Perform an action at a decremented development dependency depth.
@@ -509,7 +506,7 @@ shouldFetchDevs = (> 0) <$> gets devDependencyDepth
 -- | A VersionInfo is an abstraction of an NPM package. This will resolve
 -- the version info into an actual package (recurring on the dependencies)
 -- and add it to the resolved package map.
-resolveVersionInfo :: VersionInfo -> NpmFetcher ResolvedDependency
+resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
 resolveVersionInfo VersionInfo{..} = do
   let ctx = concat ["When resolving package ", viName, " version ",
                     renderSV viVersion]
@@ -518,7 +515,7 @@ resolveVersionInfo VersionInfo{..} = do
     isBeingResolved viName viVersion >>= \case
       True -> do -- This is a cycle: allowed for dev dependencies, but we
                  -- don't want to loop infinitely so we just return.
-                 return $ Resolved viVersion
+                 return viVersion
       False -> do
         startResolving viName viVersion
         deps <- recurOn' Dependency viDependencies
@@ -537,13 +534,13 @@ resolveVersionInfo VersionInfo{..} = do
             rpDependencies = deps,
             rpDevDependencies = devDeps
           }
-        return $ Resolved viVersion
+        return viVersion
 
 -- | Given a version range and a record of version infos, returns the
 -- version info with the highest version that matches the version.
 
 -- | Resolves a dependency given a name and version range.
-_resolveDep :: Name -> SemVerRange -> NpmFetcher ResolvedDependency
+_resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 _resolveDep name range = do
   let ctx = concat ["When resolving dependency ", name, " (",
                     pack $ show range, ")"]
@@ -565,13 +562,15 @@ _resolveDep name range = do
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.
              -> Name -- ^ Name of the package.
-             -> NpmFetcher ResolvedDependency -- ^ A resolved dependency.
+             -> NpmFetcher SemVer -- ^ A resolved dependency.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
-    Nothing -> broken $ NoSuchTag tag
+    Nothing -> throwErrorC ["No such tag ", tag, " for package ", pkgName]
     Just version -> case H.lookup version $ piVersions pInfo of
-      Nothing -> broken $ TagPointsToInvalidVersion tag version
+      Nothing -> throwErrorC ["Tag ", tag, " points to version ",
+                              renderSV version, ", but no such version of ",
+                              pkgName, " exists."]
       Just versionInfo -> resolveVersionInfo versionInfo
 
 parseURIs :: [Text] -> [URI]
