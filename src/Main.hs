@@ -12,10 +12,11 @@ import NixFromNpm hiding (getArgs, (<>))
 main :: IO ()
 main = do
   maybeToken <- fmap T.encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  let opts = info (helper <*> pOptions maybeToken)
+  let opts = info (helper <*> parseOptions maybeToken)
              (fullDesc <> progDesc description <> header headerText)
   parsedOpts <- execParser opts
-  dumpPkgFromOptions parsedOpts
+  validatedOpts <- validateOptions parsedOpts
+  dumpPkgFromOptions validatedOpts
   where
     description = concat ["nixfromnpm allows you to generate nix expressions ",
                           "automatically from npm packages. It provides ",

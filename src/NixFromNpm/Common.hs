@@ -10,38 +10,40 @@
 module NixFromNpm.Common (
     module ClassyPrelude,
     module Control.Applicative,
-    module Control.Exception,
-    module Control.Exception.ErrorList,
+    module Control.Exception.Lifted,
     module Control.Monad,
     module Control.Monad.Except,
     module Control.Monad.Identity,
-    module Control.Monad.State.Strict,
     module Control.Monad.Reader,
+    module Control.Monad.State.Strict,
     module Control.Monad.Trans,
+    module Control.Monad.RWS.Strict,
     module Data.Char,
     module Data.Default,
-    module Data.HashMap.Strict,
     module Data.Either,
-    module Data.Maybe,
+    module Data.HashMap.Strict,
     module Data.List,
+    module Data.Maybe,
     module Data.String.Utils,
-    module GHC.Exts,
     module Filesystem.Path.CurrentOS,
+    module GHC.Exts,
     module Network.URI,
-    module GHC.IO.Exception,
-    module System.Directory,
+    module Filesystem.Path.Wrappers,
     module Text.Render,
-    module System.FilePath.Posix,
+    module Control.Monad.Trans.Control,
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir, failC,
-    pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix, pshow
+    putStrsLn, putStrs, dropSuffix, maybeIf, grab, failC, errorC,
+    joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix, pshow
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
-                             maximum, maximumBy,
-                             minimum, minumumBy, try)
+                             maximum, maximumBy, (</>), (<>),
+                             minimum, try, stripPrefix, ioError,
+                             mapM_, sequence_, foldM, forM_,
+                             filterM, replicateM)
 import qualified Prelude as P
+import Control.Monad.RWS.Strict hiding (Any)
 import Control.Monad (when)
 import Control.Monad.Trans (MonadIO(..), lift)
 import Control.Monad.Reader (ReaderT(..), MonadReader(..), (<=<), (>=>), ask,
@@ -51,8 +53,9 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
                                    runStateT, execState, execStateT,
                                    evalState, evalStateT)
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
-import Control.Exception.ErrorList
+import Control.Exception.Lifted
 import Control.Monad.Identity (Identity(..))
+import Control.Monad.Trans.Control
 import Control.Applicative hiding (empty, optional)
 import Data.Char (isDigit, isAlpha)
 import Data.Default
@@ -63,17 +66,14 @@ import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
 import qualified Data.Text as T
-import Filesystem.Path.CurrentOS (FilePath, fromText, toText, collapse)
+import Filesystem.Path.CurrentOS hiding (concat, null, (<.>))
 import GHC.Exts (IsList)
-import GHC.IO.Exception
-import Control.Exception (bracket)
 import Text.Render hiding (renderParens)
 import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
 import Shelly hiding (get, relativeTo)
-import System.Directory
-import System.FilePath.Posix hiding (FilePath)
+import Filesystem.Path.Wrappers
 
 -- | Indicates that the text is some identifier.
 type Name = Text
@@ -149,16 +149,6 @@ putStrsLn = putStrLn . concat
 putStrs :: MonadIO m => [Text] -> m ()
 putStrs = putStr . concat
 
--- | Convert a FilePath into Text.
-pathToText :: FilePath -> Text
-pathToText pth = case toText pth of
-  Left p -> p
-  Right p -> p
-
--- | Convert a FilePath into a string.
-pathToString :: FilePath -> String
-pathToString = unpack . pathToText
-
 -- | Strip the given suffix from the given String.
 dropSuffix :: String -> String -> String
 dropSuffix suffix s | s == suffix = ""
@@ -180,14 +170,6 @@ maybeIf False _ = Nothing
 grab :: (Hashable k, Eq k) => k -> HashMap k v -> v
 grab k = fromJust . H.lookup k
 
--- | Perform an IO action inside of the given directory. Catches exceptions.
-withDir :: String -> IO a -> IO a
-withDir directory action = do
-  cur <- getCurrentDirectory
-  bracket (setCurrentDirectory directory)
-          (\_ -> setCurrentDirectory cur)
-          (\_ -> action)
-
 -- | Synonym for intercalate.
 joinBy :: Text -> [Text] -> Text
 joinBy = T.intercalate
@@ -202,3 +184,6 @@ getEnv = shelly . silently . get_env
 
 failC :: Monad m => [Text] -> m a
 failC = fail . unpack . concat
+
+errorC :: [Text] -> a
+errorC = error . unpack . concat

@@ -10,13 +10,14 @@ module NixFromNpm.NpmTypes (
     Shasum(..)
   ) where
 
+import qualified ClassyPrelude as CP
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 
 import NixFromNpm.Common
-import NixFromNpm.GitTypes (getObject, getDict)
+import NixFromNpm.GitTypes (getObject, getDict, GithubError)
 import NixFromNpm.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
@@ -55,8 +56,7 @@ data Shasum = SHA1 Text | SHA256 Text deriving (Show, Eq)
 -- | Distribution info from NPM. Tells us the URL and hash of a tarball.
 data DistInfo = DistInfo {
   diUrl :: Text,
-  diShasum :: Shasum,
-  diSubPath :: Maybe Text -- ^ Possible subpath within the tarball.
+  diShasum :: Shasum
   } deriving (Show, Eq)
 
 -- | This contains the same information as the .nix file that corresponds
@@ -79,14 +79,18 @@ data DependencyType
 
 -- | Reasons why an expression might not have been able to be built.
 data BrokenPackageReason
-  = NoMatchingVersion NpmVersionRange
+  = NoMatchingPackage Name
+  | NoMatchingVersion NpmVersionRange
   | InvalidNpmVersionRange Text
   | NoSuchTag Name
   | TagPointsToInvalidVersion Name SemVer
   | InvalidSemVerSyntax Text String
   | NoDistributionInfo
   | Reason String
-  deriving (Show, Eq)
+  | GithubError GithubError
+  deriving (Show, Eq, Typeable)
+
+instance Exception BrokenPackageReason
 
 -- | We might not be able to resolve a dependency, in which case we record
 -- it as a broken package.
@@ -97,11 +101,11 @@ data ResolvedDependency
 
 instance Semigroup PackageInfo where
   PackageInfo vs ts <> PackageInfo vs' ts' =
-    PackageInfo (vs <> vs') (ts <> ts')
+    PackageInfo (vs CP.<> vs') (ts CP.<> ts')
 
 instance Monoid PackageInfo where
   mempty = PackageInfo mempty mempty
-  mappend = (<>)
+  mappend = (CP.<>)
 
 instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
@@ -151,7 +155,7 @@ instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
     tarball <- o .: "tarball"
     shasum <- SHA1 <$> o .: "shasum"
-    return $ DistInfo tarball shasum Nothing
+    return $ DistInfo tarball shasum
 
 patchIfMatches :: (a -> Bool) -- ^ Predicate function
                -> (a -> a) -- ^ Modification function
