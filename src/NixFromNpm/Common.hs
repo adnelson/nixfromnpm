@@ -34,7 +34,7 @@ module NixFromNpm.Common (
     module System.FilePath.Posix,
     Name, Record, Path,
     tuple, tuple3, fromRight, cerror, cerror', uriToText, uriToString, slash,
-    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir,
+    putStrsLn, pathToText, putStrs, dropSuffix, maybeIf, grab, withDir, failC,
     pathToString, joinBy, mapJoinBy, getEnv, modifyMap, hasSuffix, pshow
   ) where
 
@@ -199,3 +199,6 @@ mapJoinBy sep func = joinBy sep . map func
 -- | Reads an environment variable.
 getEnv :: MonadIO m => Text -> m (Maybe Text)
 getEnv = shelly . silently . get_env
+
+failC :: Monad m => [Text] -> m a
+failC = fail . unpack . concat

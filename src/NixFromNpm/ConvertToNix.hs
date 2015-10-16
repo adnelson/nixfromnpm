@@ -287,7 +287,7 @@ findExisting maybeName path = do
 -- | Given the output directory and any number of extensions to load,
 -- finds any existing packages.
 preloadPackages :: Bool        -- ^ Whether to skip the existence check.
-                -> Path        -- ^ Output path to search for existing packages.
+                -> Path        -- ^ Output path for existing packages.
                 -> Record Path -- ^ Mapping of names of libraries to extend,
                                --   and paths to those libraries.
                 -> IO (PackageMap PreExistingPackage)
@@ -329,9 +329,8 @@ dumpPackages :: NExpr       -- ^ Base default.nix expression.
              -> Record Path -- ^ Names -> paths of extensions.
              -> IO ()       -- ^ Writes files to a folder.
 dumpPackages baseExpr path packages existing extensions = do
-  pwd <- getCurrentDirectory
   let (new, existing) = takeNewPackages packages
-  dumpPkgs baseExpr (pwd </> unpack path) new existing extensions
+  dumpPkgs baseExpr (unpack path) new existing extensions
 
 dumpFromPkgJson :: NixFromNpmOptions -> Path -> IO ()
 dumpFromPkgJson NixFromNpmOptions{..} path = do
@@ -341,7 +340,6 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
     True -> withDir (unpack path) $ do
       let extensions = getExtensions nfnoExtendPaths
       existing <- preloadPackages nfnoNoCache nfnoOutputPath extensions
-      pwd <- pack <$> getCurrentDirectory
       let state = startState existing nfnoRegistries
                     nfnoGithubToken nfnoDevDepth
       doesFileExist "package.json" >>= \case
@@ -352,7 +350,7 @@ dumpFromPkgJson NixFromNpmOptions{..} path = do
             resolveVersionInfo verinfo
             return (viName verinfo, viVersion verinfo)
           dumpPackages baseExpr
-                       (pwd <> "/" <> path)
+                       path
                        (pmDelete name ver (resolved newState))
                        existing
                        (getExtensions nfnoExtendPaths)

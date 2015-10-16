@@ -24,12 +24,6 @@ data Branch = Branch {
   bCommit :: Commit
   } deriving (Show, Eq)
 
-bSha :: Branch -> Text
-bSha = cSha . bCommit
-
-tSha :: Tag -> Text
-tSha = cSha . tCommit
-
 data Repo = Repo {
   rName :: Name,
   rDefaultBranch :: Name
@@ -72,4 +66,4 @@ getObject msg v =
 -- | Convert a vector of tags to a hashmap mapping tag names to SHAs.
 tagListToMap :: Vector Tag -> Record Text
 tagListToMap tags = foldl' step mempty tags where
-  step result tag = H.insert (tName tag) (tSha tag) result
+  step result tag = H.insert (tName tag) (cSha $ tCommit tag) result

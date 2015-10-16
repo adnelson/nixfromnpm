@@ -27,8 +27,6 @@ import qualified Text.Parsec as Parsec
 import Shelly hiding (get, (</>))
 import Network.Curl
 import Nix.Types
-import qualified Crypto.Hash.SHA1 as SHA1
-import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Digest.Pure.SHA (sha256, showDigest)
 
 import NixFromNpm.Common
@@ -95,7 +93,7 @@ data NpmFetcherState = NpmFetcherState {
 type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
 
 
------------------- HTTP Fetching -----------------------
+---------------------- HTTP Fetching -----------------------
 
 
 data HttpResult a
@@ -188,23 +186,6 @@ storePackageInfo name info = do
   let existingInfo = H.lookupDefault mempty name infos
       newInfo = existingInfo <> info
   modify $ \s -> s {pkgInfos = H.insert name newInfo (pkgInfos s)}
-
-
-toSemVerList :: Record a -> NpmFetcher [(SemVer, a)]
-toSemVerList record = do
-  -- Pairings of parsed semvers (or errors) to values.
-  let parsePair (k, v) = (parseSemVer k, v)
-      pairs = map parsePair $ H.toList record
-  case filter (\(k, _) -> isRight k) pairs of
-    [] -> throwError1 "No correctly-formatted versions strings found"
-    okPairs -> return $ map (\(Right k, v) -> (k, v)) okPairs
-
-bestMatchFromRecord :: SemVerRange -> Record a -> NpmFetcher a
-bestMatchFromRecord range record = do
-  pairs <- toSemVerList record
-  case filter (matches range . fst) pairs of
-    [] -> throwErrorC ["No versions satisfy given range"]
-    matches -> return $ snd $ maximumBy (compare `on` fst) matches
 
 -- | Performs a shell command and reports if it errors; otherwise returns
 --   the stdout from the command.
@@ -315,7 +296,7 @@ githubCurl uri = do
     Nothing -> return []
     Just token -> return [("Authorization", "token " <> token)]
   let headers = extraHeaders <>
-                [("Accept", "application/vnd.github.quicksilver-preview+json")]
+              [("Accept", "application/vnd.github.quicksilver-preview+json")]
   getHttp uri headers >>= \case
     HttpSuccess jsonStr -> case eitherDecode jsonStr of
       Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
@@ -328,11 +309,7 @@ getDefaultBranch owner repo = do
   let rpath = "/" <> owner <> "/" <> repo
   let uri = concat ["https://api.github.com/repos", rpath]
   putStrs ["Querying github for default branch of ", rpath, "..."]
-  githubCurl uri >>= \case
-    Object o -> case H.lookup "default_branch" o of
-      Just (String b) -> putStr " OK. " >> return b
-      Nothing -> putStrLn "" >> error "No default branch, or not a string"
-    _ -> error "Expected an object back from github"
+  Git.rDefaultBranch <$> githubCurl uri
 
 gitRefToSha :: Name -- ^ Repo owner
             -> Name -- ^ Repo name
@@ -342,16 +319,14 @@ gitRefToSha owner repo ref = do
   let rpath = "/" <> owner <> "/" <> repo
   let uri = concat ["https://api.github.com/repos", rpath]
       fromBranch = do
-        putStrsLn ["Seeing if ref ", ref, " is a branch..."]
-        map Git.bSha $ githubCurl $ concat [uri, "/branches/", ref]
+        let bSha = Git.cSha . Git.bCommit
+        bSha <$> githubCurl (concat [uri, "/branches/", ref])
       fromTag = do
-        putStrsLn ["Seeing if ref ", ref, " is a tag..."]
         tagMap <- Git.tagListToMap <$> githubCurl (concat [uri, "/tags"])
         case H.lookup ref tagMap of
           Just sha -> return sha
           Nothing -> throwErrorC ["Ref is not a tag: ", ref]
       fromCommit = do
-        putStrsLn ["Seeing if ref ", ref, " is a commit hash..."]
         map Git.cSha $ githubCurl $ concat [uri, "/commits/", ref]
       invalid = throwErrorC ["Ref is not valid: ", ref]
   fromBranch `ifErrorDo` fromTag `ifErrorDo` fromCommit `ifErrorDo` invalid
@@ -367,13 +342,7 @@ getShaOfBranch owner repo branchName = do
   let uri = concat ["https://api.github.com/repos", rpath,
                     "/branches/", branchName]
   putStrs ["Querying github for sha of ", rpath, "/", branchName, "..."]
-  githubCurl uri >>= \case
-    Object o -> case H.lookup "commit" o of
-      Just (Object o') -> case H.lookup "sha" o' of
-        Just (String sha) -> return sha
-        Nothing -> error "No sha in commit info"
-      Nothing -> error "No commit info"
-    _ -> error "Didn't get an object back"
+  Git.cSha . Git.bCommit <$> githubCurl uri
 
 -- | Fetch a package from github. Will convert a branch name into a specific
 -- SHA so that the generated URL is deterministic.
@@ -384,12 +353,7 @@ fetchGithub uri = do
     _ -> throwErrorC ["Invalid repo path: ", pack $ uriPath uri]
   hash <- case uriFragment uri of
     -- if there isn't a ref or a tag, use the default branch.
-    "" -> do
-      branch <- getDefaultBranch owner repo
-      putStrLn $ " Branch is " <> branch
-      sha <- getShaOfBranch owner repo branch
-      putStrLn $ " Hash is " <> sha
-      return sha
+    "" -> gitRefToSha owner repo =<< getDefaultBranch owner repo
     -- otherwise, use that as a tag.
     '#':frag -> return $ pack frag
     frag -> throwErrorC ["Invalid URL fragment '", pack frag, "'"]
@@ -575,6 +539,9 @@ resolveVersionInfo VersionInfo{..} = do
           }
         return $ Resolved viVersion
 
+-- | Given a version range and a record of version infos, returns the
+-- version info with the highest version that matches the version.
+
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: Name -> SemVerRange -> NpmFetcher ResolvedDependency
 _resolveDep name range = do
@@ -583,11 +550,17 @@ _resolveDep name range = do
   putStrsLn ["Resolving ", name, " (", pshow range, ")"]
   inContext ctx $ do
     pInfo <- getPackageInfo name
-    (do versionInfo <- bestMatchFromRecord range (piVersions pInfo)
-        resolveVersionInfo versionInfo)
-      `ifErrorDo` do
-        putStrsLn ["Could not find any matching packages"]
-        broken $ NoMatchingVersion $ SemVerRange range
+    current <- gets currentlyResolving
+    -- Filter out packages currently being evaluated.
+    let notCurrent = case H.lookup name current of
+          Nothing -> piVersions pInfo
+          Just cur -> H.difference (piVersions pInfo) cur
+    -- Choose the entry with the highest version that matches the range.
+    case filter (matches range) $ H.keys notCurrent of
+      [] -> throwErrorC ["No versions satisfy given range"]
+      matches -> do
+        let versionInfo = notCurrent H.! maximum matches
+        resolveVersionInfo versionInfo
 
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.

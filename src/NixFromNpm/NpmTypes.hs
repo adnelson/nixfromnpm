@@ -15,18 +15,18 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 
-
 import NixFromNpm.Common
 import NixFromNpm.GitTypes (getObject, getDict)
 import NixFromNpm.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.Parsers.SemVer
+import NixFromNpm.PackageMap
 
 -- | Package information; specifically all of the different versions.
 data PackageInfo = PackageInfo {
-  piVersions :: Record VersionInfo,
-  piTags :: Record Name
+  piVersions :: HashMap SemVer VersionInfo,
+  piTags :: Record SemVer
   } deriving (Show, Eq)
 
 -- | Metadata about a package.
@@ -82,7 +82,7 @@ data BrokenPackageReason
   = NoMatchingVersion NpmVersionRange
   | InvalidNpmVersionRange Text
   | NoSuchTag Name
-  | TagPointsToInvalidVersion Name Name
+  | TagPointsToInvalidVersion Name SemVer
   | InvalidSemVerSyntax Text String
   | NoDistributionInfo
   deriving (Show, Eq)
@@ -135,9 +135,16 @@ instance FromJSON SemVerRange where
 
 instance FromJSON PackageInfo where
   parseJSON = getObject "package info" >=> \o -> do
-    vs <- getDict "versions" o
-    tags <- getDict "dist-tags" o
-    return $ PackageInfo vs tags
+    vs' <- getDict "versions" o
+    tags' <- getDict "dist-tags" o
+    let vs = H.fromList $ map (\vi -> (viVersion vi, vi)) $ H.elems vs'
+        convert tags [] = return $ PackageInfo vs (H.fromList tags)
+        convert tags ((tName, tVer):ts) = case parseSemVer tVer of
+          Left err -> failC ["Tag ", tName, " refers to an invalid ",
+                             "semver string ", tVer, ": ", pshow err]
+          Right ver -> convert ((tName, ver):tags) ts
+    convert [] $ H.toList tags'
+
 
 instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
