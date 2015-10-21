@@ -85,15 +85,18 @@ rec {
         })));
 
 
-  generatePackages = {rootPath, extensions}:
+  # The function that a default.nix can call into which will scan its
+  # directory for all of the package files and generate a big attribute set
+  # for all of them. Re-exports the `callPackage` function and all of the
+  # attribute sets.
+  generatePackages = {rootPath, extensions ? {}}:
     let
-      callPackage = pkgs.lib.callPackageWith allPkgs;
-      joinedExtensions = joinSets (attrValues extensions);
-      nodePkgs = joinSets (attrValues extensions) //
-                 discoverPackages {inherit callPackage rootPath;};
-      allPkgs = pkgs // nodePkgs // joinedExtensions // {
-        inherit buildNodePackage brokenPackage;
+      callPackage = pkgs.lib.callPackageWith {
+        inherit pkgs nodePackages buildNodePackage brokenPackage;
       };
+      joinedExtensions = joinSets (attrValues extensions);
+      nodePackages = joinSets (attrValues extensions) //
+                     discoverPackages {inherit callPackage rootPath;};
     in
-    nodePkgs // {inherit callPackage;};
+    nodePackages // {inherit callPackage;};
 }

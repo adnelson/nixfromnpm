@@ -69,8 +69,6 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Used for authorization when fetching a package from github.
   nfsRequestTimeout :: Long,
   -- ^ Request timeout.
-  nfsBaseExpr :: NExpr,
-  -- ^ Base nix expression (not used here).
   nfsExtendPaths :: Record FilePath,
   -- ^ Libraries we're extending.
   nfsOutputPath :: FilePath,
@@ -601,7 +599,6 @@ defaultSettings = NpmFetcherSettings {
   nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
   nfsOutputPath = error "default setings provide no output path",
   nfsExtendPaths = mempty,
-  nfsBaseExpr = error "default settings provide no base expression",
   nfsMaxDevDepth = 1,
   nfsNoCache = False
   }

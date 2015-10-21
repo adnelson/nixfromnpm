@@ -41,7 +41,7 @@ import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
                              maximum, maximumBy, (</>), (<>),
                              minimum, try, stripPrefix, ioError,
                              mapM_, sequence_, foldM, forM_,
-                             filterM, replicateM)
+                             filterM, replicateM, writeFile)
 import qualified Prelude as P
 import Control.Monad.RWS.Strict hiding (Any)
 import Control.Monad (when)

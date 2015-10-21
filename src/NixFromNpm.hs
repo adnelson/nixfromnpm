@@ -17,5 +17,4 @@ import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.NpmTypes
 import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.NpmLookup
-import NixFromNpm.ConvertToNix
+import NixFromNpm.Conversion
