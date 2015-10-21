@@ -10,7 +10,7 @@ import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (typeMismatch)
 
-import NixFromNpm.Common
+import NixFromNpm.Common hiding (Any)
 
 -- A SemVer has major, minor and patch versions, and zero or more
 -- pre-release version tags.

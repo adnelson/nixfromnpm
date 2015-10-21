@@ -29,6 +29,15 @@ data Repo = Repo {
   rDefaultBranch :: Name
   } deriving (Show, Eq)
 
+data GithubError
+  = GithubUnreachable
+  | InvalidJsonFromGithub Text
+  | InvalidGitRef Name
+  | NoSuchRepo Name Name
+  deriving (Show, Eq, Typeable)
+
+instance Exception GithubError
+
 instance FromJSON Commit where
   parseJSON = getObject "commit info" >=> \o -> do
     sha <- o .: "sha"

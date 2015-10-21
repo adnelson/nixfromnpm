@@ -24,7 +24,7 @@ import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
-import Shelly hiding (get, (</>))
+import Shelly hiding (get, (</>), trace)
 import Network.Curl
 import Nix.Types
 import Data.Digest.Pure.SHA (sha256, showDigest)
@@ -61,13 +61,28 @@ toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined (FromOutput expr) = FromExistingInOutput expr
 toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
 
+data NpmFetcherSettings = NpmFetcherSettings {
+  nfsRegistries :: [URI],
+  -- ^ List of URIs that we can use to query for NPM packages, in order of
+  -- preference.
+  nfsGithubAuthToken :: Maybe ByteString,
+  -- ^ Used for authorization when fetching a package from github.
+  nfsRequestTimeout :: Long,
+  -- ^ Request timeout.
+  nfsBaseExpr :: NExpr,
+  -- ^ Base nix expression (not used here).
+  nfsExtendPaths :: Record FilePath,
+  -- ^ Libraries we're extending.
+  nfsOutputPath :: FilePath,
+  -- ^ Path we're outputting generated expressions to.
+  nfsMaxDevDepth :: Int,
+  -- ^ Maximum dev dependency fetch depth.
+  nfsNoCache :: Bool
+  -- ^ Ignore cache when fetching.
+  } deriving (Show, Eq)
+
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
-  -- | List of URIs that we can use to query for NPM packages, in order of
-  -- preference.
-  registries :: [URI],
-  -- | Used for authorization when fetching a package from github.
-  githubAuthToken :: Maybe ByteString,
   -- | Set of all of the packages that we have fully resolved.
   resolved :: PackageMap FullyDefinedPackage,
   -- | Set of all of the package info objects that we have fetched for
@@ -78,29 +93,30 @@ data NpmFetcherState = NpmFetcherState {
   -- | Stack of packages that we are resolving so we can get the path to the
   -- current package.
   packageStackTrace :: [(Name, SemVer)],
-  -- | Set of packages known to be problematic; it is an error if one of these
-  -- packages appears in a dependency tree.
-  knownProblematicPackages :: HashSet Name,
   -- | Depth to which we should fetch dev dependencies. If this value is
   -- non-zero, dev dependencies will be fetched with this value decremented.
   -- Otherwise, dev dependencies will not be fetched.
-  devDependencyDepth :: Int,
-  -- | Request timeout.
-  requestTimeout :: Long
+  devDependencyDepth :: Int
   }
 
 -- | The monad for fetching from NPM.
-type NpmFetcher = ExceptT EList (StateT NpmFetcherState IO)
-
+type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
 
 ---------------------- HTTP Fetching -----------------------
 
 
 data HttpResult a
   = HttpSuccess a
-  | HttpError Int
+  | HttpError HttpError
+  deriving (Show, Eq, Typeable)
+
+data HttpError
+  = HttpErrorWithCode Int
   | HttpTimedOut Long
-  deriving (Show, Eq)
+  | CurlError CurlCode
+  deriving (Show, Eq, Typeable)
+
+instance Exception HttpError
 
 -- | Given a URL and some options, perform a curl request and return the
 -- resulting code, HTTP status, and response body.
@@ -127,20 +143,20 @@ makeHeaders headers = CurlHttpHeaders $ map mk headers where
 
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
-getHttp :: Text -- URI to hit
-        -> [(Text, ByteString)] -- Additional headers to add
-        -> NpmFetcher (HttpResult BL8.ByteString)
+getHttp :: Text -- ^ URI to hit
+        -> [(Text, ByteString)] -- ^ Additional headers to add
+        -> NpmFetcher BL8.ByteString
 getHttp uri headers = do
   let defHdrs = [("Connection", "Close"), ("User-Agent", "nixfromnpm-fetcher")]
       opts = [makeHeaders (headers <> defHdrs), CurlFollowLocation True]
-  timeout <- gets requestTimeout
+  timeout <- asks nfsRequestTimeout
   let opts' = opts <> [CurlTimeout timeout]
   (code, status, content) <- curlGetBS (unpack uri) opts'
   case code of
-    CurlOK -> return $ HttpSuccess content
-    CurlHttpReturnedError -> return $ HttpError status
-    CurlOperationTimeout -> return $ HttpTimedOut timeout
-    err -> errorC ["Curl threw an unknown error ", pack $ show err]
+    CurlOK -> return content
+    CurlHttpReturnedError -> throw $ HttpErrorWithCode status
+    CurlOperationTimeout -> throw $ HttpTimedOut timeout
+    err -> throw $ CurlError err
 
 ---------------------------------------------------------
 
@@ -162,23 +178,32 @@ _getPackageInfo pkgName registryUri = do
   let uri = uriToText $ registryUri `slash` pkgName
   putStrsLn ["Querying ", uriToText registryUri,
              " for package ", pkgName, "..."]
-  getHttp uri [] >>= \case
-    HttpSuccess jsonStr -> case eitherDecode jsonStr of
-      Left err -> throwErrorC ["couldn't parse JSON from NPM: ", pack err]
+  jsonStr <- getHttp uri []
+             `catch` \case
+                HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
+  case eitherDecode jsonStr of
+      Left err -> errorC ["couldn't parse JSON from NPM: ", pack err]
       Right info -> return info
-    err -> throwError1 $ pshow err
 
 -- | Same as _getPackageInfo, but caches results for speed.
 getPackageInfo :: Name -> NpmFetcher PackageInfo
-getPackageInfo name = lookup name . pkgInfos <$> get >>= \case
-  Just info -> return info
-  Nothing -> inContext ctx $ do
-    regs <- gets registries
-    info <- firstSuccess "No repos contained package" $
-              map (_getPackageInfo name) regs
-    storePackageInfo name info
-    return info
-  where ctx = pack $ "When querying NPM registry for package " <> show name
+getPackageInfo name = do
+  infos <- gets pkgInfos
+  case H.lookup name infos of
+    Just info -> do
+      return info
+    Nothing -> do
+      let tryToFetch [] = throw (NoMatchingPackage name)
+          tryToFetch (registry:registries) = do
+            putStrsLn ["Trying to fetch from ", uriToText registry]
+            _getPackageInfo name registry
+            `catch` \case
+              NoMatchingPackage _ -> tryToFetch registries
+              NoMatchingVersion _ -> tryToFetch registries
+              err -> throw err
+      info <- tryToFetch =<< asks nfsRegistries
+      storePackageInfo name info
+      return info
 
 storePackageInfo :: Name -> PackageInfo -> NpmFetcher ()
 storePackageInfo name info = do
@@ -199,7 +224,7 @@ shell action = do
   case code of
     0 -> return out
     n -> do
-      throwErrorC $ catMaybes [
+      errorC $ catMaybes [
                       Just "Shell command returned an error.",
                       maybeIf (out /= "") $ "\nstdout:\n" <> out,
                       Just $ "\nstderr:\n" <> err]
@@ -207,72 +232,70 @@ shell action = do
 silentShell :: Sh Text -> NpmFetcher Text
 silentShell = shell . silently
 
-getTemp :: MonadIO m => m P.FilePath
+getTemp :: MonadIO m => m FilePath
 getTemp = getEnv "TMPDIR" >>= \case
   Nothing -> return "/tmp"
-  Just t -> return (unpack t)
+  Just t -> return (fromText t)
 
-tempDir :: MonadIO m => String -> m P.FilePath
+tempDir :: MonadIO m => String -> m FilePath
 tempDir template = do
   tmpdir <- getTemp
-  liftIO $ createTempDirectory tmpdir template
+  liftIO $ decodeString <$> createTempDirectory (encodeString tmpdir) template
 
-tempFile :: MonadIO m => String -> m (P.FilePath, Handle)
+tempFile :: MonadIO m => String -> m (FilePath, Handle)
 tempFile template = do
   tmpdir <- getTemp
-  liftIO $ openTempFile tmpdir template
+  (path, handle) <- liftIO $ openTempFile (encodeString tmpdir) template
+  return (decodeString path, handle)
 
 -- | Returns the SHA256 hash of the result of fetching the URI, and the path
 -- in which the tarball is stored.
-prefetchSha256 :: URI -> NpmFetcher (Shasum, P.FilePath)
+prefetchSha256 :: URI -> NpmFetcher (Shasum, FilePath)
 prefetchSha256 uri = do
   putStrsLn ["Pre-fetching url ", uriToText uri]
   -- Make a temporary directory.
   dir <- tempDir "tarball-prefetch"
   let outPath = dir </> "outfile"
-  putStrsLn ["putting in location ", pack outPath]
+  putStrsLn ["putting in location ", pathToText outPath]
   -- Download the file into memory, calculate the hash.
-  getHttp (uriToText uri) [] >>= \case
-    HttpSuccess tarball -> do
-      let hash = hexSha256 tarball
-      -- Return the hash and the path.
-      path <- liftIO $ do
-        (path, handle) <- tempFile "nixfromnpmfetch.tgz"
-        BL8.hPut handle tarball
-        hClose handle
-        putStrsLn ["Wrote tarball to ", pack path]
-        return path
-      return (hash, path)
-    err -> do
-      putStrsLn ["Could not fetch tarball at url ", uriToText uri,
-                 ": ", pshow err]
-      throwErrorC ["Could not fetch tarball at url ", uriToText uri]
+  tarball <- getHttp (uriToText uri) []
+  let hash = hexSha256 tarball
+  -- Return the hash and the path.
+  path <- liftIO $ do
+    (path, handle) <- tempFile "nixfromnpmfetch.tgz"
+    BL8.hPut handle tarball
+    hClose handle
+    putStrsLn ["Wrote tarball to ", pathToText path]
+    return path
+  return (hash, path)
 
 -- | Shell out to tar to pull the package.json out of a tarball.
-extractVersionInfo :: P.FilePath -- ^ Path to the downloaded tarball.
-                   -> Text       -- ^ Subpath containing package.json file.
+extractVersionInfo :: FilePath -- ^ Path to the downloaded tarball.
+                   -> FilePath -- ^ Subpath containing package.json file.
                    -> NpmFetcher VersionInfo -- ^ The version info object.
 extractVersionInfo tarballPath subpath = do
   temp <- tempDir "pkg-json-extract"
-  putStrsLn ["Extracting ", pack tarballPath, " to tempdir ", pack temp]
-  shelly $ run_ "tar" ["-xf", pack tarballPath, "-C", pack temp]
-  result <- extractPkgJson $ temp </> unpack subpath </> "package.json"
-  liftIO $ removeDirectoryRecursive temp
+  putStrsLn ["Extracting ", pathToText tarballPath, " to tempdir ",
+             pathToText temp]
+  shelly $ run_ "tar" ["-xf", pathToText tarballPath, "-C",
+                       pathToText temp]
+  result <- extractPkgJson $ temp </> subpath </> "package.json"
+  removeDirectoryRecursive temp
   return result
 
 -- | Extract the version info out of a package.json file.
-extractPkgJson :: P.FilePath -> NpmFetcher VersionInfo
+extractPkgJson :: FilePath -> NpmFetcher VersionInfo
 extractPkgJson path = do
-  putStrsLn ["Reading information from ", pack path]
-  pkJson <- liftIO $ B.readFile path
+  putStrsLn ["Reading information from ", pathToText path]
+  pkJson <- liftIO $ B.readFile (encodeString path)
   case eitherDecode $ BL8.fromStrict pkJson of
-    Left err -> throwErrorC ["Invalid package.json file: ", pack err,
+    Left err -> errorC ["Invalid package.json file: ", pack err,
                              "\npackage.json contents:\n", decodeUtf8 pkJson]
     Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
-fetchHttp :: Text -- ^ Subpath in which to find the package.json.
+fetchHttp :: FilePath -- ^ Subpath in which to find the package.json.
           -> URI -- ^ The URI to fetch.
           -> NpmFetcher SemVer -- ^ The package at that URI.
 fetchHttp subpath uri = do
@@ -280,11 +303,10 @@ fetchHttp subpath uri = do
   (hash, tarballPath) <- prefetchSha256 uri
   -- Extract the tarball to a temp directory and parse the package.json.
   versionInfo <- extractVersionInfo tarballPath subpath
-  liftIO $ removeFile tarballPath
+  removeFile tarballPath
   -- Create the DistInfo.
   let dist = DistInfo {diUrl = uriToText uri,
-                       diShasum = hash,
-                       diSubPath = maybeIf (subpath /= "package") subpath}
+                       diShasum = hash}
   -- Add the dist information to the version info and resolve it.
   resolveVersionInfo $ versionInfo {viDist = Just dist}
 
@@ -292,16 +314,15 @@ fetchHttp subpath uri = do
 githubCurl :: FromJSON a => Text -> NpmFetcher a
 githubCurl uri = do
   -- Add in the github auth token if it is provided.
-  extraHeaders <- gets githubAuthToken >>= \case
+  extraHeaders <- asks nfsGithubAuthToken >>= \case
     Nothing -> return []
     Just token -> return [("Authorization", "token " <> token)]
   let headers = extraHeaders <>
               [("Accept", "application/vnd.github.quicksilver-preview+json")]
-  getHttp uri headers >>= \case
-    HttpSuccess jsonStr -> case eitherDecode jsonStr of
-      Left err -> throwErrorC ["couldn't parse JSON from github: ", pack err]
-      Right info -> return info
-    err -> throwError1 $ pshow err
+  jsonStr <- getHttp uri headers
+  case eitherDecode jsonStr of
+    Left err -> throw $ Git.InvalidJsonFromGithub (pshow err)
+    Right info -> return info
 
 -- | Queries NPM for package information.
 getDefaultBranch :: Name -> Name -> NpmFetcher Name
@@ -325,11 +346,13 @@ gitRefToSha owner repo ref = do
         tagMap <- Git.tagListToMap <$> githubCurl (concat [uri, "/tags"])
         case H.lookup ref tagMap of
           Just sha -> return sha
-          Nothing -> throwErrorC ["Ref is not a tag: ", ref]
+          Nothing -> throw (Git.InvalidGitRef ref)
       fromCommit = do
         map Git.cSha $ githubCurl $ concat [uri, "/commits/", ref]
-      invalid = throwErrorC ["Ref is not valid: ", ref]
-  fromBranch `ifErrorDo` fromTag `ifErrorDo` fromCommit `ifErrorDo` invalid
+  fromBranch `catch` \(_ :: Git.GithubError) ->
+    fromTag `catch` \(_ :: Git.GithubError) ->
+      fromCommit `catch` \(_ :: Git.GithubError) ->
+        throw (Git.InvalidGitRef ref)
 
 -- | Given a github repo and a branch, gets the SHA of the head of that
 -- branch
@@ -350,17 +373,17 @@ fetchGithub :: URI -> NpmFetcher SemVer
 fetchGithub uri = do
   (owner, repo) <- case split "/" $ uriPath uri of
     [_, owner, repo] -> return (pack owner, pack $ dropSuffix ".git" repo)
-    _ -> throwErrorC ["Invalid repo path: ", pack $ uriPath uri]
+    _ -> errorC ["Invalid repo path: ", pack $ uriPath uri]
   hash <- case uriFragment uri of
     -- if there isn't a ref or a tag, use the default branch.
     "" -> gitRefToSha owner repo =<< getDefaultBranch owner repo
     -- otherwise, use that as a tag.
     '#':frag -> return $ pack frag
-    frag -> throwErrorC ["Invalid URL fragment '", pack frag, "'"]
+    frag -> errorC ["Invalid URL fragment '", pack frag, "'"]
   -- Use the hash to pull down a zip.
   let uri = concat ["https://github.com/", owner, "/", repo, "/archive/",
                     hash, ".tar.gz"]
-  fetchHttp (repo <> "-" <> hash) (fromJust $ parseURI $ unpack uri)
+  fetchHttp (fromText (repo <> "-" <> hash)) (fromJust $ parseURI $ unpack uri)
 
 makeGithubUri :: Name -- ^ Owner name
               -> Name -- ^ Repo name
@@ -403,16 +426,16 @@ resolveNpmVersionRange name range = case range of
     "git+https:" -> fetchGithub uri
     s | s == "http:" || s == "https:" -> do
       (uri', subpath) <- httpToGitUri uri
-      fetchHttp subpath uri'
-    scheme -> throwErrorC ["Unknown uri scheme ", pack scheme]
+      fetchHttp (fromText subpath) uri'
+    scheme -> errorC ["Unknown uri scheme ", pack scheme]
   GitId src owner repo rev -> case src of
     Github -> do
       let frag = maybe "" ("#" <>) rev
           uri = concat ["https://github.com/", owner, "/", repo, frag]
       fetchGithub $ fromJust $ parseURI $ unpack uri
-    _ -> throwErrorC ["Can't handle git source ", pack $ show src]
+    _ -> errorC ["Can't handle git source ", pack $ show src]
   Tag tag -> resolveByTag tag name
-  vr -> throwErrorC ["Don't know how to resolve dependency '",
+  vr -> errorC ["Don't know how to resolve dependency '",
                      pack $ show vr, "'"]
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
@@ -487,7 +510,10 @@ recurOn name version deptype deps = atDecrementedDevDepsDepth $
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair name version]
       result <- (Resolved <$> resolveNpmVersionRange depName depRange)
-                `catchError` (return . Broken . Reason . show)
+                `catches` [
+                  Handler (\reason -> return $ Broken reason),
+                  Handler (\(e::Git.GithubError) -> return $ Broken $ Reason $ show e)
+                  ]
       return (depName, result)
 
 -- | Perform an action at a decremented development dependency depth.
@@ -508,33 +534,31 @@ shouldFetchDevs = (> 0) <$> gets devDependencyDepth
 -- and add it to the resolved package map.
 resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
 resolveVersionInfo VersionInfo{..} = do
-  let ctx = concat ["When resolving package ", viName, " version ",
-                    renderSV viVersion]
-  inContext ctx $ do
-    let recurOn' = recurOn viName viVersion
-    isBeingResolved viName viVersion >>= \case
-      True -> do -- This is a cycle: allowed for dev dependencies, but we
-                 -- don't want to loop infinitely so we just return.
-                 return viVersion
-      False -> do
-        startResolving viName viVersion
-        deps <- recurOn' Dependency viDependencies
-        devDeps <- do
-          shouldFetch <- shouldFetchDevs
-          case shouldFetch || H.null viDevDependencies of
-            True -> Just <$> recurOn' DevDependency viDevDependencies
-            False -> return Nothing
-        finishResolving viName viVersion
-        -- Store this version's info.
-        addResolvedPkg viName viVersion $ ResolvedPkg {
-            rpName = viName,
-            rpVersion = viVersion,
-            rpDistInfo = viDist,
-            rpMeta = viMeta,
-            rpDependencies = deps,
-            rpDevDependencies = devDeps
-          }
-        return viVersion
+  let recurOn' = recurOn viName viVersion
+  isBeingResolved viName viVersion >>= \case
+    True -> do -- This is a cycle: allowed for dev dependencies, but we
+               -- don't want to loop infinitely so we just return.
+               putStrLn "uh oh"
+               return viVersion
+    False -> do
+      startResolving viName viVersion
+      deps <- recurOn' Dependency viDependencies
+      devDeps <- do
+        shouldFetch <- shouldFetchDevs
+        case shouldFetch || H.null viDevDependencies of
+          True -> Just <$> recurOn' DevDependency viDevDependencies
+          False -> return Nothing
+      finishResolving viName viVersion
+      -- Store this version's info.
+      addResolvedPkg viName viVersion $ ResolvedPkg {
+          rpName = viName,
+          rpVersion = viVersion,
+          rpDistInfo = viDist,
+          rpMeta = viMeta,
+          rpDependencies = deps,
+          rpDevDependencies = devDeps
+        }
+      return viVersion
 
 -- | Given a version range and a record of version infos, returns the
 -- version info with the highest version that matches the version.
@@ -542,22 +566,19 @@ resolveVersionInfo VersionInfo{..} = do
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 _resolveDep name range = do
-  let ctx = concat ["When resolving dependency ", name, " (",
-                    pack $ show range, ")"]
   putStrsLn ["Resolving ", name, " (", pshow range, ")"]
-  inContext ctx $ do
-    pInfo <- getPackageInfo name
-    current <- gets currentlyResolving
-    -- Filter out packages currently being evaluated.
-    let notCurrent = case H.lookup name current of
-          Nothing -> piVersions pInfo
-          Just cur -> H.difference (piVersions pInfo) cur
-    -- Choose the entry with the highest version that matches the range.
-    case filter (matches range) $ H.keys notCurrent of
-      [] -> throwErrorC ["No versions satisfy given range"]
-      matches -> do
-        let versionInfo = notCurrent H.! maximum matches
-        resolveVersionInfo versionInfo
+  pInfo <- getPackageInfo name
+  current <- gets currentlyResolving
+  -- Filter out packages currently being evaluated.
+  let notCurrent = case H.lookup name current of
+        Nothing -> piVersions pInfo
+        Just cur -> H.difference (piVersions pInfo) cur
+  -- Choose the entry with the highest version that matches the range.
+  case filter (matches range) $ H.keys notCurrent of
+    [] -> throw (NoMatchingVersion $ SemVerRange range)
+    matches -> do
+      let versionInfo = notCurrent H.! maximum matches
+      resolveVersionInfo versionInfo
 
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.
@@ -566,45 +587,43 @@ resolveByTag :: Name -- ^ Tag name.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
-    Nothing -> throwErrorC ["No such tag ", tag, " for package ", pkgName]
+    Nothing -> throw (NoSuchTag tag)
     Just version -> case H.lookup version $ piVersions pInfo of
-      Nothing -> throwErrorC ["Tag ", tag, " points to version ",
-                              renderSV version, ", but no such version of ",
-                              pkgName, " exists."]
+      Nothing -> errorC ["Tag ", tag, " points to version ",
+                         renderSV version, ", but no such version of ",
+                         pkgName, " exists."]
       Just versionInfo -> resolveVersionInfo versionInfo
 
-parseURIs :: [Text] -> [URI]
-parseURIs rawUris = map p $! rawUris where
-  p txt = case parseURI $ unpack txt of
-            Nothing -> errorC ["Invalid URI: ", txt]
-            Just uri -> uri
+defaultSettings :: NpmFetcherSettings
+defaultSettings = NpmFetcherSettings {
+  nfsRequestTimeout = 10,
+  nfsGithubAuthToken = Nothing,
+  nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
+  nfsOutputPath = error "default setings provide no output path",
+  nfsExtendPaths = mempty,
+  nfsBaseExpr = error "default settings provide no base expression",
+  nfsMaxDevDepth = 1,
+  nfsNoCache = False
+  }
 
-startState :: PackageMap PreExistingPackage
-           -> [Text] -- ^ Registries to query.
-           -> Maybe ByteString -- ^ A possible github token.
-           -> Int -- ^ Depth to fetch dev dependencies.
-           -> NpmFetcherState
-startState existing registries token devDependencyDepth = do
+startState :: NpmFetcherState
+startState = do
   NpmFetcherState {
-      registries = parseURIs registries,
-      githubAuthToken = token,
-      resolved = pmMap toFullyDefined existing,
-      packageStackTrace = [],
-      pkgInfos = mempty,
-      currentlyResolving = mempty,
-      knownProblematicPackages = HS.fromList ["websocket-server"],
-      devDependencyDepth = devDependencyDepth,
-      requestTimeout = 10
+    resolved = mempty,
+    packageStackTrace = [],
+    pkgInfos = H.empty,
+    currentlyResolving = mempty,
+    devDependencyDepth = 1
     }
 
-runNpmFetchWith :: NpmFetcherState -> NpmFetcher a -> IO (a, NpmFetcherState)
-runNpmFetchWith state x = do
-  runStateT (runExceptT x) state >>= \case
-    (Left elist, _) -> error $ "\n" <> (unpack $ render elist)
-    (Right x, state) -> return (x, state)
+runNpmFetchWith :: NpmFetcherSettings
+                -> NpmFetcherState
+                -> NpmFetcher a
+                -> IO (a, NpmFetcherState)
+runNpmFetchWith settings state action = do
+  (result, newState, _) <- runRWST action settings state
+  return (result, newState)
 
 runIt :: NpmFetcher a -> IO a
 runIt action = do
-  let registries = ["https://registry.npmjs.org/"]
-  let state = startState mempty registries Nothing 0
-  fst <$> runNpmFetchWith state action
+  fst <$> runNpmFetchWith defaultSettings startState action

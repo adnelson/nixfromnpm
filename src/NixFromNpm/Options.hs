@@ -1,33 +1,120 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-module NixFromNpm.Options where
+{-# LANGUAGE LambdaCase #-}
+module NixFromNpm.Options (
+  RawOptions(..), NixFromNpmOptions(..),
+  parseOptions, validateOptions
+  ) where
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import qualified Data.HashMap.Strict as H
 
 import Options.Applicative
 
+import NixFromNpm.NpmVersion
+import NixFromNpm.Parsers.NpmVersion
+import NixFromNpm.SemVer
 import NixFromNpm.Common hiding ((<>))
 
--- | Various options we have available for nixfromnpm. As of right now,
--- most of these are unimplemented.
+-- | Various options we have available for nixfromnpm, as parsed from the
+-- command-line options.
+data RawOptions = RawOptions {
+  roPkgNames :: [Name],       -- ^ Names of packages to build.
+  roPkgPath :: Maybe Text,    -- ^ Path of package.json to build.
+  roOutputPath :: Text,       -- ^ Path to output built expressions to.
+  roNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
+  roNoCache :: Bool,          -- ^ Build all expressions from scratch.
+  roDevDepth :: Int,          -- ^ Dev dependency depth.
+  roExtendPaths :: [Text],    -- ^ Extend existing expressions.
+  roTest :: Bool,             -- ^ Fetch only; don't write expressions.
+  roRegistries :: [Text],     -- ^ List of registries to query.
+  roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
+  roGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  roNoDefaultRegistry :: Bool -- ^ Disable fetching from npmjs.org.
+} deriving (Show, Eq)
+
+-- | Various options we have available for nixfromnpm. Validated
+-- versions of what's parsed from the command-line.
 data NixFromNpmOptions = NixFromNpmOptions {
-  nfnoPkgNames :: [Name],       -- ^ Names of packages to build.
-  nfnoPkgPath :: Maybe Text,    -- ^ Path of package.json to build.
-  nfnoOutputPath :: Text,       -- ^ Path to output built expressions to.
-  nfnoNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
-  nfnoNoCache :: Bool,          -- ^ Build all expressions from scratch.
-  nfnoDevDepth :: Int,          -- ^ Dev dependency depth.
-  nfnoExtendPaths :: [Text],    -- ^ Extend existing expressions.
-  nfnoTest :: Bool,             -- ^ Fetch only; don't write expressions.
-  nfnoRegistries :: [Text],     -- ^ List of registries to query.
-  nfnoTimeout :: Int,           -- ^ Number of seconds after which to timeout.
+  nfnoPkgNames :: [(Name, NpmVersionRange)],
+  -- ^ Names/versions of packages to build.
+  nfnoPkgPath :: Maybe FilePath, -- ^ Path of package.json to build.
+  nfnoOutputPath :: FilePath,    -- ^ Path to output built expressions to.
+  nfnoNoDefaultNix :: Bool,      -- ^ Disable creation of default.nix file.
+  nfnoNoCache :: Bool,           -- ^ Build all expressions from scratch.
+  nfnoDevDepth :: Int,           -- ^ Dev dependency depth.
+  nfnoExtendPaths :: Record FilePath, -- ^ Extend existing expressions.
+  nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
+  nfnoRegistries :: [URI],      -- ^ List of registries to query.
+  nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
   nfnoGithubToken :: Maybe ByteString -- ^ Github authentication token.
 } deriving (Show, Eq)
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
 
-pOptions :: Maybe ByteString -> Parser NixFromNpmOptions
-pOptions githubToken = NixFromNpmOptions
+parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
+parseNameAndRange name = case T.split (== '@') name of
+  [name] -> return (name, SemVerRange anyVersion)
+  [name, range] -> case parseNpmVersionRange range of
+    Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
+    Right nrange -> return (name, nrange)
+
+validateOptions :: RawOptions -> IO NixFromNpmOptions
+validateOptions opts = do
+  pwd <- getCurrentDirectory
+  let
+    validatePath path = do
+      let p' = pwd </> path
+      doesFileExist p' >>= \case
+        True -> errorC ["Path ", pathToText p', " is a file, not a directory"]
+        False -> doesDirectoryExist p' >>= \case
+          False -> errorC ["Path ", pathToText  p', " does not exist"]
+          True -> return p'
+  packageNames <- mapM parseNameAndRange $ roPkgNames opts
+  extendPaths <- mapM validatePath =<< getExtensions (roExtendPaths opts)
+  packagePath <- mapM (validatePath . fromText) $ roPkgPath opts
+  outputPath <- validatePath . fromText $ roOutputPath opts
+  registries <- mapM validateUrl $ (roRegistries opts <>
+                                    if roNoDefaultRegistry opts
+                                       then []
+                                       else ["https://registry.npmjs.org"])
+  tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+  return (NixFromNpmOptions {
+    nfnoOutputPath = outputPath,
+    nfnoExtendPaths = extendPaths,
+    nfnoGithubToken = roGithubToken opts <|> tokenEnv,
+    nfnoNoCache = roNoCache opts,
+    nfnoDevDepth = roDevDepth opts,
+    nfnoTest = roTest opts,
+    nfnoTimeout = roTimeout opts,
+    nfnoPkgNames = packageNames,
+    nfnoRegistries = registries,
+    nfnoPkgPath = packagePath,
+    nfnoNoDefaultNix = roNoDefaultNix opts
+    })
+  where
+    validateUrl rawUrl = case parseURI (unpack rawUrl) of
+      Nothing -> errorC ["Invalid url: ", rawUrl]
+      Just uri -> return uri
+    -- Parses the NAME=PATH extension directives.
+    getExtensions :: [Text] -> IO (Record FilePath)
+    getExtensions = go mempty where
+      go extensions [] = return extensions
+      go extensions (nameEqPath:paths) = case T.split (== '=') nameEqPath of
+        [name, path] -> append name path
+        [path] -> append (pathToText $ basename $ fromText path) path
+        _ -> errorC ["Extensions must be of the form NAME=PATH (in argument ",
+                     nameEqPath, ")"]
+        where
+          append name path = case H.lookup name extensions of
+            Nothing -> go (H.insert name (fromText path) extensions) paths
+            Just path' -> errorC ["Extension ", name, " is mapped to both ",
+                                  "path ", path, " and path ",
+                                  pathToText path']
+
+parseOptions :: Maybe ByteString -> Parser RawOptions
+parseOptions githubToken = RawOptions
     <$> many (textOption packageName)
     <*> packageFile
     <*> textOption outputDir
@@ -39,6 +126,7 @@ pOptions githubToken = NixFromNpmOptions
     <*> liftA2 snoc registries (pure "https://registry.npmjs.org")
     <*> timeout
     <*> token
+    <*> noDefaultRegistry
   where
     packageName = short 'p'
                    <> long "package"
@@ -89,3 +177,5 @@ pOptions githubToken = NixFromNpmOptions
                                   <> metavar "TOKEN"
                                   <> help tokenHelp))
             <|> pure githubToken
+    noDefaultRegistry = switch (long "no-default-registry"
+                        <> help "Do not include default npmjs.org registry")
