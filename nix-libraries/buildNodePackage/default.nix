@@ -10,6 +10,7 @@ pkg = {
   devDependencies ? null,
   doCheck ? devDependencies != null,
   meta ? {},
+  removePeerDependencies ? true,
   requireNodeVersion ? null, patchPhase ? "",
   preInstall ? "", postInstall ? "", shellHook ? ""
 }@args:
@@ -77,7 +78,7 @@ let
 
     runInstall() {
       # NPM looks in the HOME folder so we set it here.
-      HOME=$PWD npm install ${npmFlags} $SOURCE_TARBALL
+      HOME=$PWD ${nodejs}/bin/npm install ${npmFlags} $SOURCE_TARBALL
     }
 
     fixPackageJson() {
@@ -89,103 +90,16 @@ let
     # Disable any user-level npm configuration shenanigans.
     "--userconfig /dev/null"
     # This will make NPM fail if it tries to fetch a dependency.
-    "--registry http://sdlfksjdlfksdlfkjj.sdfkjslkdfjakjsdh.com"
-    # No retries!
-    "--fetch-retries 0"
-    #"--fetch-retry-maxtimeout=1"
-    #"--fetch-retry-mintimout=0"
+    "--registry http://www.example.com"
     "--nodedir=${sources}"
     "--production"
+    "--fetch-retries 0"
   ] ++
     # This flag will run the tests if enabled
     optional shouldTest "--npat");
 
-  unpackPhase = ''
-    # Extract the package source if it is a tar file; else copy it.
-    if [ -d $src ]; then
-      if [ ! -e $src/package.json ]; then
-        echo "No package.json file found in source."
-        exit 1
-      fi
-      cp -r $src $SOURCE
-      chmod -R +w $SOURCE
-    elif tar -tf $src 2>/dev/null 1>&2; then
-      # We will unpack the tarball here, and then set SOURCE to be the
-      # first folder that contains a package.json within it.
-      [ -d $UNPACK ] || {
-        mkdir -p $UNPACK
-        tar -xf $src -C $UNPACK
-      }
-      SOURCE=$(dirname $(find $UNPACK -name package.json | head -n 1))
-    else
-      echo "Invalid source $src: not a directory or a tarball."
-      exit 1
-    fi
-    echo $SOURCE
-  '';
-
-  # In the patch phase we will remove impure dependencies from the
-  # package.json file, patch impure shebangs, and recompress into a
-  # tarball.
-  actualPatchPhase = ''
-    (
-      cd $SOURCE
-      patchShebangs $SOURCE
-      fixPackageJson
-      ${patchPhase}
-      tar -cf $SOURCE_TARBALL .
-      echo $SOURCE_TARBALL
-    )
-  '';
-
-  # In the build phase, we will prepare a node_modules folder with all
-  # of the dependencies present, and then run npm install from the
-  # fixed source tarball.
-  buildPhase = ''
-    # Prepare the build directory.
-    echo BUILDING...........lalalalala
-    (
-      set -e
-      mkdir -p $BUILD
-      echo "YOOOOOOOOO '$BUILD'"
-      ls -la $(dirname $BUILD)
-      cd $BUILD
-      setupDependencies
-      runInstall
-      echo "Done building!"
-    )
-  '';
-
-  installPhase = ''
-    ${preInstall}
-    [ -d $BUILD ] && {
-      echo "build folder '$BUILD' not created"
-      exit 1
-    }
-    mkdir -p $out/lib/node_modules
-    for pkg in $(find $BUILD/node_modules -type d -maxdepth 1); do
-      echo "Transfering $pkg"
-      mv $BUILD/node_modules/$pkg $out/lib/node_modules
-    done
-
-    # Symlink bin folder
-    if [ -d $out/node_modules/.bin ]; then
-      ln -sv $out/node_modules/bin $out/bin
-    fi
-
-    # Copy man pages if they exist
-    manpath="$out/lib/node_modules/${name}/man"
-    if [ -e $manpath ]; then
-      mkdir -p $out/share
-      ln -sv $out/lib/node_modules/${name}/man $out/share/man
-    fi
-    ${postInstall}
-  '';
-
-
   result = mkDerivation {
-    inherit meta src npmFlags;
-    inherit unpackPhase buildPhase installPhase;
+    inherit meta src npmFlags removePeerDependencies;
     name = "nodejs-${name}-${version}";
     # We need to make this available to packages which depend on this, so that we
     # know what folder to put them in.
@@ -201,16 +115,89 @@ let
     buildInputs = [pkgs.python nodejs] ++ optionals shouldTest devDependencies;
     propagatedBuildInputs = dependencies;
 
-    shellHook = ''
-      ${defineVariables}
-      ${unpackPhase}
-      ${actualPatchPhase}
-      ${shellHook}
-    '';
+    shellHook = defineVariables + shellHook;
 
-    patchPhase = actualPatchPhase;
     setupPhase = defineVariables;
 
+    unpackPhase = ''
+      # Extract the package source if it is a tar file; else copy it.
+      if [ -d $src ]; then
+        if [ ! -e $src/package.json ]; then
+          echo "No package.json file found in source."
+          exit 1
+        fi
+        cp -r $src $SOURCE
+        chmod -R +w $SOURCE
+      elif tar -tf $src 2>/dev/null 1>&2; then
+        # We will unpack the tarball here, and then set SOURCE to be the
+        # first folder that contains a package.json within it.
+        [ -d $UNPACK ] || {
+          mkdir -p $UNPACK
+          tar -xf $src -C $UNPACK
+        }
+        SOURCE=$(python ${./find_package_json_dir.py} $UNPACK $name)
+      else
+        echo "Invalid source $src: not a directory or a tarball."
+        exit 1
+      fi
+      echo $SOURCE
+    '';
+
+    # In the patch phase we will remove impure dependencies from the
+    # package.json file, patch impure shebangs, and recompress into a
+    # tarball.
+    patchPhase = ''
+      (
+        cd $SOURCE
+        patchShebangs $SOURCE
+        fixPackageJson
+        ${patchPhase}
+        tar -cf $SOURCE_TARBALL .
+      )
+    '';
+
+    # In the build phase, we will prepare a node_modules folder with all
+    # of the dependencies present, and then run npm install from the
+    # fixed source tarball.
+    buildPhase = ''
+      # Prepare the build directory.
+      (
+        set -e
+        mkdir -p $BUILD
+        cd $BUILD
+        setupDependencies
+        runInstall
+      )
+    '';
+
+    installPhase = ''
+      ${preInstall}
+      mkdir -p $out/lib/node_modules
+      mv $BUILD/node_modules/${name} $out/lib/node_modules
+      for submod in $(find $BUILD/node_modules -mindepth 1 -maxdepth 1); do
+        mkdir -p $out/lib/node_modules/${name}/node_modules
+        cp -r $submod $out/lib/node_modules/${name}/node_modules
+      done
+
+      # Copy generated binaries
+      if [ -d $BUILD/node_modules/.bin ]; then
+        mkdir $out/bin
+        find $BUILD/node_modules/.bin -xtype f -exec ln -sv {} $out/bin/{} \;
+      fi
+
+      # Copy man pages if they exist
+      manpath="$out/lib/node_modules/${name}/man"
+      if [ -e $manpath ]; then
+        mkdir -p $out/share
+        for dir in $(find $manpath -maxdepth 1 -type d); do
+          mkdir -p $out/share/man/$(basename "$dir")
+          for page in $(find $dir -maxdepth 1); do
+            ln -sv $page $out/share/man/$(basename "$dir")
+          done
+        done
+      fi
+      ${postInstall}
+    '';
   };
 in
 
