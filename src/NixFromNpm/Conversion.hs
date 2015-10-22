@@ -66,15 +66,14 @@ takeNewPackages startingRec = do
 --   correctly.
 parseVersion :: MonadIO io => Name -> FilePath -> io (Maybe (SemVer, NExpr))
 parseVersion pkgName path = do
-  let pth = pathToString path
-      versionTxt :: Text
-      versionTxt = pack $ dropSuffix ".nix" $ unpack $ takeBaseName path
-  case parseSemVer versionTxt of
+  let (versionTxt, ext) = splitExtension $ filename path
+  case parseSemVer (pathToText versionTxt) of
+    _ | ext /= Just "nix" -> return Nothing -- not a nix file
     Left _ -> return Nothing -- not a version file
-    Right version -> parseNixString . pack <$> readFile pth >>= \case
+    Right version -> parseNixString . pack <$> readFile path >>= \case
       Failure err -> do
         putStrsLn ["Warning: expression for ", pkgName, " version ",
-                   versionTxt, " failed to parse:\n", pack $ show err]
+                   pathToText versionTxt, " failed to parse:\n", pshow err]
         return Nothing -- invalid nix, should overwrite
       Success expr -> return $ Just (version, expr)
 
@@ -161,8 +160,16 @@ dumpPkgs path newPackages existingPackages extensions = liftIO $ do
                 fullPath = subdir </> toDotNix ver
             putStrsLn ["Writing package file at ", pathToText fullPath]
             writeFile (toDotNix ver) $ show $ prettyNix expr
-          -- Grab the latest version and create a symlink `latest.nix` to that.
-          createSymbolicLink (toDotNix $ maximum $ H.keys pkgVers) "latest.nix"
+          -- Remove the `latest.nix` symlink if it exists.
+          whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
+          -- Grab the latest version and create a symlink `latest.nix`
+          -- to that.
+          let convert fname =
+                case parseSemVer (T.dropEnd 4 $ pathToText fname) of
+                  Left _ -> Nothing -- not a semver, so we don't consider it
+                  Right ver -> Just ver -- return the version
+          allVersions <- catMaybes . map convert <$> getDirectoryContents "."
+          createSymbolicLink (toDotNix $ maximum allVersions) "latest.nix"
       -- Write the default.nix file for the library.
       -- We need to build up a record mapping package names to the list of
       -- versions being defined in this library.
@@ -202,10 +209,9 @@ dumpFromPkgJson path = do
               return (extendPaths H.! extName)
           let fullPath = basePath </> fromText name </> toDotNix version
               nixexpr = mkPkgJsonDefaultNix fullPath
-          liftIO $ writeFile "default.nix" $ show $ prettyNix nixexpr
-          modify $ \s -> s {
-            resolved = pmDelete name version $ resolved s
-            }
+          defNixPath <- map (</> "default.nix") getCurrentDirectory
+          putStrsLn ["Writing package nix file at ", pathToText defNixPath]
+          writeFile "default.nix" $ show $ prettyNix nixexpr
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
@@ -219,10 +225,10 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsNoCache = nfnoNoCache
     }
   runNpmFetchWith settings startState $ do
+    preloadPackages
     forM nfnoPkgNames $ \(name, range) -> do
       resolveNpmVersionRange name range
-    case nfnoPkgPath of
-      Nothing -> return ()
-      Just path -> dumpFromPkgJson path
+    forM nfnoPkgPaths $ \path -> do
+      dumpFromPkgJson path
     dumpPackages
   return ()

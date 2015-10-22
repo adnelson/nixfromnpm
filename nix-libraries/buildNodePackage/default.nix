@@ -82,7 +82,7 @@ let
 
     runInstall() {
       # NPM looks in the HOME folder so we set it here.
-      HOME=$PWD ${nodejs}/bin/npm install ${npmFlags} $SOURCE_TARBALL
+      HOME=$PWD npm install ${npmFlags} $SOURCE_TARBALL
     }
 
     fixPackageJson() {

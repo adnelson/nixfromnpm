@@ -13,7 +13,7 @@ in
 
 mkDerivation {
   pname = "nixfromnpm";
-  version = "0.4.0";
+  version = "0.4.1";
   # Filter .git and dist files from source
   src = filterSource (n: t: !(elem n [".git" "dist"])) ./.;
   isExecutable = true;

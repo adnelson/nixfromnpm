@@ -15,6 +15,10 @@ import Control.Exception.Lifted
 writeFile :: (MonadIO io, IOData dat) => FilePath -> dat -> io ()
 writeFile path = CP.writeFile (pathToString path)
 
+-- | Read a file from disk.
+readFile :: (MonadIO io, IOData dat) => FilePath -> io dat
+readFile path = CP.readFile (pathToString path)
+
 -- | Create a symbolic link at `path2` pointing to `path1`.
 createSymbolicLink :: (MonadIO io) => FilePath -> FilePath -> io ()
 createSymbolicLink path1 path2 = liftIO $ do
