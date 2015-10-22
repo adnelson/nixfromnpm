@@ -442,16 +442,6 @@ resolveNpmVersionRange name range = case range of
   vr -> errorC ["Don't know how to resolve dependency '",
                      pack $ show vr, "'"]
 
--- | Checks if we are allowed to use the cache; this is the case if our
--- current depth is greater than or equal to than the cache depth setting.
-allowedToUseCache :: NpmFetcher Bool
-allowedToUseCache = do
-  depth <- currentDepth
-  asks cacheDepth >>= \case
-    n | n < 0 -> return False -- never allowed to use cache
-
-
-
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
 resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer

@@ -2,7 +2,7 @@
 , data-default, directory, unix, hnix, hspec, hspec-expectations
 , MissingH, mtl, network-uri, parsec, shelly, stdenv
 , system-filepath, text, text-render, unordered-containers
-, optparse-applicative, curl, cabal-install
+, optparse-applicative, curl, cabal-install, ansi-terminal
 , temporary, SHA, pkgs, lifted-base, transformers
 }:
 
@@ -22,7 +22,7 @@ mkDerivation {
     directory hnix MissingH mtl network-uri parsec shelly
     system-filepath text text-render unordered-containers
     optparse-applicative cabal-install curl SHA temporary lifted-base
-    transformers
+    transformers ansi-terminal
   ];
   executableHaskellDepends = with pkgs; [nix cacert];
   testDepends = [
