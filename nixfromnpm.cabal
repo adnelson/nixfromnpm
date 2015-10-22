@@ -63,5 +63,6 @@ executable nixfromnpm
                      , lifted-base
                      , transformers
                      , unix
+                     , data-fix
   hs-source-dirs:      src
   default-language:    Haskell2010

@@ -13,8 +13,8 @@ module NixFromNpm.NpmTypes (
 import qualified ClassyPrelude as CP
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
-import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
+import qualified Data.Text as T
 
 import NixFromNpm.Common
 import NixFromNpm.GitTypes (getObject, getDict, GithubError)
@@ -32,7 +32,9 @@ data PackageInfo = PackageInfo {
 
 -- | Metadata about a package.
 data PackageMeta = PackageMeta {
-  pmDescription :: Maybe Text
+  pmDescription :: Maybe Text,
+  pmHomepage :: Maybe URI,
+  pmKeywords :: Vector Text
   } deriving (Show, Eq)
 
 -- | Expresses all of the information that a version of a package needs, in
@@ -45,7 +47,6 @@ data VersionInfo = VersionInfo {
   viDist :: Maybe DistInfo, -- not present if in a package.json file.
   viMain :: Maybe Text,
   viName :: Text,
-  viHasTest :: Bool,
   viMeta :: PackageMeta,
   viVersion :: SemVer
   } deriving (Show, Eq)
@@ -115,7 +116,21 @@ instance FromJSON VersionInfo where
     name <- o .: "name"
     main <- o .:? "main"
     version <- o .: "version"
-    packageMeta <- fmap PackageMeta $ o .:? "description"
+    packageMeta <- do
+      description <- o .:? "description"
+      homepage <- o .:? "homepage" >>= \case
+        Nothing -> return Nothing
+        Just txt -> return $ parseURIText txt
+      let
+        getString = \case {String s -> Just s; _ -> Nothing}
+        -- If keywords are a string, split on commas and strip whitespace.
+        getKeywords (String s) = fromList $ T.strip <$> T.split (==',') s
+        -- If an array, just take the array.
+        getKeywords (Array a) = catMaybes $ map getString a
+        -- Otherwise, this is an error, but just return an empty array.
+        getKeywords _ = mempty
+      keywords <- map getKeywords $ o .:? "keywords" .!= Null
+      return $ PackageMeta description homepage keywords
     scripts :: Record Value <- getDict "scripts" o
     case parseSemVer version of
       Left err -> fail $ concat ["Version string ", show version,
@@ -126,7 +141,6 @@ instance FromJSON VersionInfo where
         viDist = dist,
         viMain = main,
         viName = name,
-        viHasTest = H.member "test" scripts,
         viMeta = packageMeta,
         viVersion = semver
       }

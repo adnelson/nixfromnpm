@@ -9,6 +9,7 @@ module NixFromNpm.ConvertToNix where
 import qualified Prelude as P
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text, replace)
+import Data.Fix
 
 import NixFromNpm.Common hiding (replace)
 import Nix.Types
@@ -60,9 +61,17 @@ distInfoToNix (Just DistInfo{..}) = do
 
 -- | Converts package meta to a nix expression, if it exists.
 metaToNix :: PackageMeta -> Maybe NExpr
-metaToNix PackageMeta{..} = case pmDescription of
-  Nothing -> Nothing
-  Just d -> Just $ mkNonRecSet ["description" `bindTo` str d]
+metaToNix PackageMeta{..} = do
+  let
+    grab name = maybe [] (\s -> [name `bindTo` str s])
+    homepage = grab "homepage" (map uriToText pmHomepage)
+    description = grab "description" pmDescription
+    keywords = case pmKeywords of
+      ks | null ks -> []
+         | otherwise -> ["keywords" `bindTo` mkList (toList (map str ks))]
+  case homepage <> description <> keywords of
+    [] -> Nothing
+    bindings -> Just $ mkNonRecSet bindings
 
 -- | Converts a resolved package object into a nix expression. The expresion
 -- will be a function where the arguments are its dependencies, and its result
@@ -139,3 +148,22 @@ mkTopDefaultNix extensionMap = do
 mkPkgJsonDefaultNix :: FilePath -> NExpr
 mkPkgJsonDefaultNix path = do
   mkFunction defaultParams $ importWith False path defaultInherits
+
+bindingsToMap :: [Binding t] -> Record t
+bindingsToMap = foldl' step mempty where
+  step record binding = case binding of
+    NamedVar [StaticKey key] obj -> H.insert key obj record
+    _ -> record
+
+-- | For expressions in a very specific format, we can ask them if their
+-- dev dependencies have been defined.
+nixExprHasDevDeps :: NExpr -> Maybe Bool -- ^ Nothing if we don't know
+nixExprHasDevDeps (Fix nexpr) = case nexpr of
+  -- It must be a function type
+  NAbs params (Fix body) -> case body of
+    -- Body must be a call to the `buildNodePackage` function
+    NApp (Fix (NSym "buildNodePackage"))
+         (Fix (NSet bindtype bindings)) -> do
+      Just $ H.member "devDependencies" (bindingsToMap bindings)
+    _ -> Nothing
+  _ -> Nothing

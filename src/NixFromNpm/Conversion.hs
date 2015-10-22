@@ -121,9 +121,9 @@ findExisting maybeName path = do
 -- finds any existing packages.
 preloadPackages :: NpmFetcher () -- ^ Add the existing packages to the state.
 preloadPackages = do
-  existing <- asks nfsNoCache >>= \case
-    True -> return mempty
-    False -> findExisting Nothing =<< asks nfsOutputPath
+  existing <- asks nfsCacheDepth >>= \case
+    n | n < 0 -> return mempty
+      | otherwise -> findExisting Nothing =<< asks nfsOutputPath
   toExtend <- asks nfsExtendPaths
   libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
     findExisting (Just name) path
@@ -222,7 +222,7 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsOutputPath = nfnoOutputPath,
     nfsExtendPaths = nfnoExtendPaths,
     nfsMaxDevDepth = nfnoDevDepth,
-    nfsNoCache = nfnoNoCache
+    nfsCacheDepth = nfnoCacheDepth
     }
   runNpmFetchWith settings startState $ do
     preloadPackages

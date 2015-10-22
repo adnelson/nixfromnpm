@@ -33,7 +33,8 @@ module NixFromNpm.Common (
     module Control.Monad.Trans.Control,
     Name, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
-    errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI
+    errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
+    parseURIText
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -161,6 +162,9 @@ uri // txt = do
     Just uri' -> uri' `relativeTo` fixedUri
 
 unsafeParseURI :: Text -> URI
-unsafeParseURI txt = case parseURI (unpack txt) of
+unsafeParseURI txt = case parseURIText txt of
   Nothing -> errorC ["Invalid URI text: ", pshow txt]
   Just uri -> uri
+
+parseURIText :: Text -> Maybe URI
+parseURIText = parseURI . unpack

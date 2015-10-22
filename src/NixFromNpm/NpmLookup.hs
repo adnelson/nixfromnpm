@@ -35,6 +35,7 @@ import NixFromNpm.NpmTypes
 import qualified NixFromNpm.GitTypes as Git
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
+import NixFromNpm.ConvertToNix (nixExprHasDevDeps)
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
@@ -76,8 +77,10 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Path we're outputting generated expressions to.
   nfsMaxDevDepth :: Int,
   -- ^ Maximum dev dependency fetch depth.
-  nfsNoCache :: Bool
-  -- ^ Ignore cache when fetching.
+  nfsCacheDepth :: Int
+  -- ^ Depth at which to start using the cache. If this is 0, then we will
+  -- always use the cache if we can. If it's 1, then the top-level package
+  -- will not be cached, but lower-level packages will. Et cetera.
   } deriving (Show, Eq)
 
 -- | The state of the NPM fetcher.
@@ -91,11 +94,11 @@ data NpmFetcherState = NpmFetcherState {
   currentlyResolving :: PackageMap (),
   -- | Stack of packages that we are resolving so we can get the path to the
   -- current package.
-  packageStackTrace :: [(Name, SemVer)],
+  packageStackTrace :: [(Name, SemVer)]
   -- | Depth to which we should fetch dev dependencies. If this value is
   -- non-zero, dev dependencies will be fetched with this value decremented.
   -- Otherwise, dev dependencies will not be fetched.
-  devDependencyDepth :: Int
+  -- devDependencyDepth :: Int
   }
 
 -- | The monad for fetching from NPM.
@@ -439,11 +442,21 @@ resolveNpmVersionRange name range = case range of
   vr -> errorC ["Don't know how to resolve dependency '",
                      pack $ show vr, "'"]
 
+-- | Checks if we are allowed to use the cache; this is the case if our
+-- current depth is greater than or equal to than the cache depth setting.
+allowedToUseCache :: NpmFetcher Bool
+allowedToUseCache = do
+  depth <- currentDepth
+  asks cacheDepth >>= \case
+    n | n < 0 -> return False -- never allowed to use cache
+
+
+
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
 resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
-  -- We've alread defined some versions of this package.
+  -- We've already defined some versions of this package.
   Just versions -> case filter (matches range) (H.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
@@ -497,7 +510,7 @@ recurOn :: Name -- ^ Name of the package whose dependencies these are.
         -> DependencyType -- ^ Type of the dependency being fetched.
         -> Record NpmVersionRange -- ^ The dependency map.
         -> NpmFetcher (Record ResolvedDependency) -- ^ The result.
-recurOn name version deptype deps = atDecrementedDevDepsDepth $
+recurOn name version deptype deps =
   map H.fromList $ do
     let depList = H.toList deps
         (desc, descPlural) = case deptype of
@@ -517,18 +530,12 @@ recurOn name version deptype deps = atDecrementedDevDepsDepth $
                   ]
       return (depName, result)
 
--- | Perform an action at a decremented development dependency depth.
-atDecrementedDevDepsDepth :: NpmFetcher a -> NpmFetcher a
-atDecrementedDevDepsDepth action = do
-  depth <- gets devDependencyDepth
-  modify $ \s -> s {devDependencyDepth = depth - 1}
-  result <- action
-  modify $ \s -> s {devDependencyDepth = depth}
-  return result
+currentDepth :: NpmFetcher Int
+currentDepth = length <$> gets packageStackTrace
 
 -- | Tells us whether we should fetch development dependencies.
 shouldFetchDevs :: NpmFetcher Bool
-shouldFetchDevs = (> 0) <$> gets devDependencyDepth
+shouldFetchDevs = (<) <$> currentDepth <*> asks nfsMaxDevDepth
 
 -- | A VersionInfo is an abstraction of an NPM package. This will resolve
 -- the version info into an actual package (recurring on the dependencies)
@@ -560,9 +567,6 @@ resolveVersionInfo VersionInfo{..} = do
           rpDevDependencies = devDeps
         }
       return viVersion
-
--- | Given a version range and a record of version infos, returns the
--- version info with the highest version that matches the version.
 
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
@@ -603,7 +607,7 @@ defaultSettings = NpmFetcherSettings {
   nfsOutputPath = error "default setings provide no output path",
   nfsExtendPaths = mempty,
   nfsMaxDevDepth = 1,
-  nfsNoCache = False
+  nfsCacheDepth = 0
   }
 
 startState :: NpmFetcherState
@@ -612,8 +616,7 @@ startState = do
     resolved = mempty,
     packageStackTrace = [],
     pkgInfos = H.empty,
-    currentlyResolving = mempty,
-    devDependencyDepth = 1
+    currentlyResolving = mempty
     }
 
 runNpmFetchWith :: NpmFetcherSettings
