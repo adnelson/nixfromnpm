@@ -11,6 +11,7 @@ import NixFromNpm.SemVer
 import NixFromNpm.Parsers.Common
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.NpmVersion
+import NixFromNpm.GitTypes hiding (Tag)
 
 pUri :: Parser NpmVersionRange
 pUri = try $ fmap NpmUri $ do
@@ -38,7 +39,7 @@ pGitId = try $ do
   account <- many1 $ noneOf ":/"
   char '/'
   repo <- many1 $ noneOf "#"
-  ref <- optionMaybe $ char '#' *> (pack <$> many1 anyChar)
+  ref <- map (map SomeRef) $ optionMaybe $ char '#' *> (pack <$> many1 anyChar)
   return $ GitId source (pack account) (pack repo) ref
 
 pLocalPath :: Parser NpmVersionRange

@@ -31,9 +31,11 @@ module NixFromNpm.Common (
     module Filesystem.Path.Wrappers,
     module Text.Render,
     module Control.Monad.Trans.Control,
+    module System.Console.ANSI,
     Name, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
-    errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI
+    errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
+    parseURIText, withColor, withUL, warn, warns
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -72,6 +74,7 @@ import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
 import Shelly hiding (get, relativeTo)
+import System.Console.ANSI
 import Filesystem.Path.Wrappers
 
 -- | Indicates that the text is some identifier.
@@ -161,6 +164,29 @@ uri // txt = do
     Just uri' -> uri' `relativeTo` fixedUri
 
 unsafeParseURI :: Text -> URI
-unsafeParseURI txt = case parseURI (unpack txt) of
+unsafeParseURI txt = case parseURIText txt of
   Nothing -> errorC ["Invalid URI text: ", pshow txt]
   Just uri -> uri
+
+parseURIText :: Text -> Maybe URI
+parseURIText = parseURI . unpack
+
+withColor :: MonadIO io => Color -> io a -> io a
+withColor color action = do
+  liftIO $ setSGR [SetColor Foreground Vivid color]
+  result <- action
+  liftIO $ setSGR [Reset]
+  return result
+
+withUL :: MonadIO io => io a -> io a
+withUL action = do
+  liftIO $ setSGR [SetUnderlining SingleUnderline]
+  result <- action
+  liftIO $ setSGR [SetUnderlining NoUnderline]
+  return result
+
+warn :: MonadIO io => Text -> io ()
+warn msg = withColor Red $ putStrsLn ["WARNING: ", msg]
+
+warns :: MonadIO io => [Text] -> io ()
+warns = warn . concat

@@ -24,6 +24,7 @@ data RawOptions = RawOptions {
   roOutputPath :: Text,       -- ^ Path to output built expressions to.
   roNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
   roNoCache :: Bool,          -- ^ Build all expressions from scratch.
+  roCacheDepth :: Int,        -- ^ Depth at which to use cache.
   roDevDepth :: Int,          -- ^ Dev dependency depth.
   roExtendPaths :: [Text],    -- ^ Extend existing expressions.
   roTest :: Bool,             -- ^ Fetch only; don't write expressions.
@@ -41,7 +42,7 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoPkgPaths :: [FilePath],    -- ^ Path of package.json to build.
   nfnoOutputPath :: FilePath,    -- ^ Path to output built expressions to.
   nfnoNoDefaultNix :: Bool,      -- ^ Disable creation of default.nix file.
-  nfnoNoCache :: Bool,           -- ^ Build all expressions from scratch.
+  nfnoCacheDepth :: Int,         -- ^ Dependency depth at which to use cache.
   nfnoDevDepth :: Int,           -- ^ Dev dependency depth.
   nfnoExtendPaths :: Record FilePath, -- ^ Extend existing expressions.
   nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
@@ -84,7 +85,7 @@ validateOptions opts = do
     nfnoOutputPath = outputPath,
     nfnoExtendPaths = extendPaths,
     nfnoGithubToken = roGithubToken opts <|> tokenEnv,
-    nfnoNoCache = roNoCache opts,
+    nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
     nfnoDevDepth = roDevDepth opts,
     nfnoTest = roTest opts,
     nfnoTimeout = roTimeout opts,
@@ -120,10 +121,11 @@ parseOptions githubToken = RawOptions
     <*> textOption outputDir
     <*> noDefaultNix
     <*> noCache
+    <*> cacheDepth
     <*> devDepth
     <*> extendPaths
     <*> isTest
-    <*> liftA2 snoc registries (pure "https://registry.npmjs.org")
+    <*> registries
     <*> timeout
     <*> token
     <*> noDefaultRegistry
@@ -152,6 +154,14 @@ parseOptions githubToken = RawOptions
                             <> metavar "DEPTH"
                             <> help "Depth to which to fetch dev dependencies"
                             <> value 1)
+    cacheHelp = "Depth at which to use cache. Packages at dependency depth \
+                \DEPTH and lower will be pulled from the cache. If DEPTH \
+                \is negative, the cache will be ignored entirely (same as \
+                \using --no-cache)"
+    cacheDepth = option auto (long "cache-depth"
+                              <> metavar "DEPTH"
+                              <> help cacheHelp
+                              <> value 0)
     extendHelp = ("Use expressions at PATH, optionally called NAME. (supports "
                   <> "multiples)")
     extendPaths = many (textOption (long "extend"

@@ -29,10 +29,23 @@ data Repo = Repo {
   rDefaultBranch :: Name
   } deriving (Show, Eq)
 
+-- | A git ref might be a commit hash, or something that could be anything.
+data GitRef
+  = SomeRef Text -- ^ Case where it's not yet known
+  | BranchName Name
+  | TagName Name
+  | CommitHash Text
+  deriving (Show, Eq)
+
+refText :: GitRef -> Text
+refText (SomeRef r) = r
+refText (CommitHash h) = h
+
 data GithubError
   = GithubUnreachable
   | InvalidJsonFromGithub Text
-  | InvalidGitRef Name
+  | InvalidGitRef GitRef
+  | InvalidGithubUri URI
   | NoSuchRepo Name Name
   deriving (Show, Eq, Typeable)
 
