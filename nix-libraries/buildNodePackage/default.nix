@@ -93,14 +93,16 @@ let
   npmFlags = concatStringsSep " " ([
     # Disable any user-level npm configuration shenanigans.
     "--userconfig /dev/null"
-    # This will make NPM fail if it tries to fetch a dependency.
-    "--registry http://www.example.com"
-    "--nodedir=${sources}"
-    "--production"
+    # Using a bogus URL will make NPM fail if it tries to fetch a dependency.
+    "--registry fakeprotocol://not.a.registry"
     "--fetch-retries 0"
-  ] ++
+    # For compiled binaries that need to link against node libs.
+    "--nodedir=${sources}"
+    ]
+    # Don't include dev dependencies when installing.
+    ++ optional (!shouldTest) "--production"
     # This flag will run the tests if enabled
-    optional shouldTest "--npat");
+    ++ optional shouldTest "--npat");
 
   unpackPhase = ''
     # Extract the package source if it is a tar file; else copy it.
