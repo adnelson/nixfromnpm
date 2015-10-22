@@ -32,7 +32,7 @@ import Data.Digest.Pure.SHA (sha256, showDigest)
 
 import NixFromNpm.Common
 import NixFromNpm.NpmTypes
-import qualified NixFromNpm.GitTypes as Git
+import NixFromNpm.GitTypes as Git hiding (Tag)
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
 import NixFromNpm.ConvertToNix (nixExprHasDevDeps)
@@ -71,6 +71,8 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Used for authorization when fetching a package from github.
   nfsRequestTimeout :: Long,
   -- ^ Request timeout.
+  nfsRetries :: Int,
+  -- ^ Number of times to retry HTTP requests.
   nfsExtendPaths :: Record FilePath,
   -- ^ Libraries we're extending.
   nfsOutputPath :: FilePath,
@@ -122,10 +124,10 @@ instance Exception HttpError
 
 -- | Given a URL and some options, perform a curl request and return the
 -- resulting code, HTTP status, and response body.
-curlGetBS :: MonadIO m
+curlGetBS :: (MonadBaseControl IO io, MonadIO io)
           => URLString
           -> [CurlOption]
-          -> m (CurlCode, Int, BL8.ByteString)
+          -> io (CurlCode, Int, BL8.ByteString)
 curlGetBS url opts = liftIO $ initialize >>= \ h -> do
   (finalBody, gatherBody) <- newIncoming
   setopt h (CurlFailOnError True)
@@ -143,31 +145,47 @@ makeHeaders :: [(Text, ByteString)] -> CurlOption
 makeHeaders headers = CurlHttpHeaders $ map mk headers where
   mk (key, val) = T.unpack key <> ": " <> B.unpack val
 
+getHttpWith :: (MonadBaseControl IO io, MonadIO io)
+            => Long -- ^ Timeout in seconds
+            -> Int  -- ^ Number of retries
+            -> [(Text, ByteString)] -- ^ Headers
+            -> URI -- ^ URI to hit
+            -> io BL8.ByteString -- ^ Response content
+getHttpWith timeout retries headers uri = loop retries where
+  opts = [makeHeaders headers, CurlFollowLocation True,
+          CurlTimeout timeout]
+  toErr status CurlHttpReturnedError = HttpErrorWithCode status
+  toErr _ CurlOperationTimeout = HttpTimedOut timeout
+  toErr _ err = throw $ CurlError err
+  loop retries = do
+    (code, status, content) <- curlGetBS (uriToString uri) opts
+    case code of
+      CurlOK -> return content
+      code | retries <= 0 -> throw $ toErr status code
+           | otherwise -> do
+               putStrsLn ["Request failed. ", pshow retries, " retries left."]
+               loop (retries - 1)
+
+
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
 getHttp :: URI -- ^ URI to hit
         -> [(Text, ByteString)] -- ^ Additional headers to add
         -> NpmFetcher BL8.ByteString
 getHttp uri headers = do
-  let defHdrs = [("Connection", "Close"), ("User-Agent", "nixfromnpm-fetcher")]
-      opts = [makeHeaders (headers <> defHdrs), CurlFollowLocation True]
+  let defaultHeaders = [("Connection", "Close"),
+                        ("User-Agent", "nixfromnpm-fetcher")]
   timeout <- asks nfsRequestTimeout
-  let opts' = opts <> [CurlTimeout timeout]
-  (code, status, content) <- curlGetBS (uriToString uri) opts'
-  case code of
-    CurlOK -> return content
-    CurlHttpReturnedError -> throw $ HttpErrorWithCode status
-    CurlOperationTimeout -> throw $ HttpTimedOut timeout
-    err -> throw $ CurlError err
+  retries <- asks nfsRetries
+  getHttpWith timeout retries (headers <> defaultHeaders) uri
 
 ---------------------------------------------------------
 
 
-addResolvedPkg :: Name -> SemVer -> ResolvedPkg -> NpmFetcher ()
-addResolvedPkg name version _rpkg = do
-  let rpkg = NewPackage _rpkg
+addPackage :: Name -> SemVer -> FullyDefinedPackage -> NpmFetcher ()
+addPackage name version pkg = do
   modify $ \s -> s {
-    resolved = pmInsert name version rpkg (resolved s)
+    resolved = pmInsert name version pkg (resolved s)
     }
 
 -- | Get the hex sha256 of a bytestring.
@@ -182,6 +200,7 @@ _getPackageInfo pkgName registryUri = do
   jsonStr <- getHttp (registryUri // pkgName) []
              `catch` \case
                 HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
+                err -> throw err
   case eitherDecode jsonStr of
       Left err -> errorC ["couldn't parse JSON from NPM: ", pack err]
       Right info -> return info
@@ -323,7 +342,7 @@ githubCurl uri = do
   putStrsLn ["GET ", uriToText uri]
   jsonStr <- getHttp uri headers
   case eitherDecode jsonStr of
-    Left err -> throw $ Git.InvalidJsonFromGithub (pshow err)
+    Left err -> throw $ InvalidJsonFromGithub (pshow err)
     Right info -> return info
 
 makeGithubURI :: Name -> Name -> URI
@@ -332,45 +351,40 @@ makeGithubURI owner repo = do
   baseUri // owner // repo
 
 -- | Queries NPM for package information.
-getDefaultBranch :: Name -> Name -> NpmFetcher Name
+getDefaultBranch :: Name -> Name -> NpmFetcher GitRef
 getDefaultBranch owner repo = do
   putStrs ["Querying github for default branch of ", repo, "..."]
-  Git.rDefaultBranch <$> githubCurl (makeGithubURI owner repo)
+  BranchName . rDefaultBranch <$> githubCurl (makeGithubURI owner repo)
 
 gitRefToSha :: Name -- ^ Repo owner
             -> Name -- ^ Repo name
-            -> Name -- ^ Commit-ish, i.e. branch, hash or tag
+            -> GitRef -- ^ Github ref
             -> NpmFetcher Text -- ^ The hash of the branch
-gitRefToSha owner repo ref = do
-  let rpath = "/" <> owner <> "/" <> repo
-  let uri = makeGithubURI owner repo
-      fromBranch = do
-        let bSha = Git.cSha . Git.bCommit
-        bSha <$> githubCurl (uri // "branches" // ref)
-      fromTag = do
-        tagMap <- Git.tagListToMap <$> githubCurl (uri // "tags")
-        case H.lookup ref tagMap of
-          Just sha -> return sha
-          Nothing -> throw (Git.InvalidGitRef ref)
-      fromCommit = do
-        map Git.cSha $ githubCurl (uri // "commits" // ref)
-      catch404 action1 action2 = action1 `catch` \case
-        HttpErrorWithCode 404 -> action2
-        err -> throw err
-  fromBranch `catch404` fromTag `catch404` fromCommit `catch404`
-        throw (Git.InvalidGitRef ref)
-
--- | Given a github repo and a branch, gets the SHA of the head of that
--- branch
-getShaOfBranch :: Name -- ^ Repo owner
-               -> Name -- ^ Repo name
-               -> Name -- ^ Name of the branch to get
-               -> NpmFetcher Text -- ^ The hash of the branch
-getShaOfBranch owner repo branchName = do
-  let rpath = "/" <> owner <> "/" <> repo
-  let uri = makeGithubURI owner repo // "branches" // branchName
-  putStrs ["Querying github for sha of ", rpath, "/", branchName, "..."]
-  Git.cSha . Git.bCommit <$> githubCurl uri
+gitRefToSha owner repo ref = case ref of
+  CommitHash hash -> return hash -- already done
+  BranchName branch -> fromBranch branch
+  TagName tag -> fromTag tag
+  SomeRef whoknows -> tryAll whoknows
+  where
+    uri = makeGithubURI owner repo
+    fromBranch ref = do
+      let bSha = cSha . bCommit
+      bSha <$> githubCurl (uri // "branches" // ref)
+    fromTag tag = do
+      tagMap <- tagListToMap <$> githubCurl (uri // "tags")
+      case H.lookup tag tagMap of
+        Just sha -> return sha
+        Nothing -> throw (InvalidGitRef ref)
+    fromCommit ref = do
+      cSha <$> githubCurl (uri // "commits" // ref)
+    catch404 action1 action2 = action1 `catch` \case
+      HttpErrorWithCode 404 -> action2
+      err -> throw err
+    tryAll txt =
+      fromBranch txt `catch404`
+        fromTag txt `catch404`
+          fromCommit txt `catch404`
+            throw (InvalidGitRef ref)
 
 -- | Fetch a package from github. Will convert a branch name into a specific
 -- SHA so that the generated URL is deterministic.
@@ -378,7 +392,7 @@ fetchGithub :: URI -> NpmFetcher SemVer
 fetchGithub uri = do
   (owner, repo) <- case split "/" $ uriPath uri of
     [_, owner, repo] -> return (pack owner, pack $ dropSuffix ".git" repo)
-    _ -> errorC ["Invalid repo path: ", pack $ uriPath uri]
+    _ -> throw $ InvalidGithubUri uri
   hash <- case uriFragment uri of
     -- if there isn't a ref or a tag, use the default branch.
     "" -> gitRefToSha owner repo =<< getDefaultBranch owner repo
@@ -389,10 +403,18 @@ fetchGithub uri = do
   let uri = makeGithubTarballURI owner repo hash
   fetchHttp (fromText (repo <> "-" <> hash)) uri
 
+
+-- | Fetches an arbitrary git repo from a uri.
+fetchArbitraryGit :: URI -> NpmFetcher SemVer
+fetchArbitraryGit uri = throw $
+  NotYetImplemented $
+    concat ["nixfromnpm can't fetch arbitrary git repos yet (",
+            uriToString uri, ")"]
+
 makeGithubTarballURI :: Name -- ^ Owner name
-              -> Name -- ^ Repo name
-              -> Text -- ^ Commit hash
-              -> URI -- ^ Fully-formed URI
+                     -> Name -- ^ Repo name
+                     -> Text -- ^ Commit hash
+                     -> URI -- ^ Fully-formed URI
 makeGithubTarballURI owner repo commit = URI {
   uriScheme = "https:",
   uriAuthority = Just (URIAuth "" "github.com" ""),
@@ -402,21 +424,22 @@ makeGithubTarballURI owner repo commit = URI {
   uriFragment = ""
   }
 
--- | Convert an HTTP URI to a git URI, if it can be.
-httpToGitUri :: URI -> NpmFetcher (URI, Text)
-httpToGitUri uri = do
-  case uriAuthority uri of
-    Nothing -> return (uri, "package")
-    Just auth -> case uriRegName auth of
-      "github.com" -> case T.split (=='/') $ pack (uriPath uri) of
-        ["", owner, repo, "tarball", ref] -> do
-          sha <- gitRefToSha owner repo ref
-          return (makeGithubTarballURI owner repo sha, repo <> "-" <> sha)
-        ["", owner, repo] -> do
-          branch <- getDefaultBranch owner repo
-          sha <- gitRefToSha owner repo branch
-          return (makeGithubTarballURI owner repo sha, repo <> "-" <> sha)
-      _ -> return (uri, "package")
+-- | Convert a URI to a github URI, if it can be.
+toGithubUri :: URI -> NpmFetcher (Maybe URI)
+toGithubUri uri = case uriAuthority uri of
+  Nothing -> return Nothing
+  Just auth | "github.com" `isSuffixOf` (uriRegName auth) -> do
+    (owner, repo, sha) <- case T.split (=='/') $ pack (uriPath uri) of
+      ["", owner, repo, "tarball", ref] -> do
+        sha <- gitRefToSha owner repo (SomeRef ref)
+        return (owner, repo, sha)
+      ["", owner, repo] -> do
+        branch <- getDefaultBranch owner repo
+        sha <- gitRefToSha owner repo branch
+        return (owner, repo, sha)
+      _ -> throw $ InvalidGithubUri uri
+    return $ Just $ makeGithubTarballURI owner repo sha
+  _ -> return Nothing
 
 -- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
 -- figure out how to resolve the dependency.
@@ -425,22 +448,21 @@ resolveNpmVersionRange :: Name -- ^ Name of the package.
                        -> NpmFetcher SemVer -- ^ Dependency.
 resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
-  NpmUri uri -> case uriScheme uri of
-    "git:" -> fetchGithub uri
-    "git+https:" -> fetchGithub uri
-    s | s == "http:" || s == "https:" -> do
-      (uri', subpath) <- httpToGitUri uri
-      fetchHttp (fromText subpath) uri'
-    scheme -> errorC ["Unknown uri scheme ", pack scheme]
+  NpmUri uri -> toGithubUri uri >>= \case
+    Just githubUri -> fetchGithub githubUri
+    Nothing -> case uriScheme uri of
+      s | "http" `isPrefixOf` s -> fetchHttp "package" uri
+        | "git" `isPrefixOf` s -> fetchArbitraryGit uri
+        | otherwise -> throw $ UnsupportedUriScheme s
   GitId src owner repo rev -> case src of
     Github -> do
-      let frag = maybe "" ("#" <>) rev
-          uri = concat ["https://github.com/", owner, "/", repo, frag]
-      fetchGithub $ fromJust $ parseURI $ unpack uri
-    _ -> errorC ["Can't handle git source ", pack $ show src]
+      sha <- gitRefToSha owner repo =<< case rev of
+               Nothing -> getDefaultBranch owner repo
+               Just r -> return r
+      fetchGithub $ makeGithubTarballURI owner repo sha
+    _ -> throw $ UnsupportedGitSource src
   Tag tag -> resolveByTag tag name
-  vr -> errorC ["Don't know how to resolve dependency '",
-                     pack $ show vr, "'"]
+  vr -> throw $ UnsupportedVersionType range
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
@@ -511,12 +533,20 @@ recurOn name version deptype deps =
       putStrsLn [name, " version ", renderSV version, " has ",
                  descPlural, ": ", showDeps depList]
     forM depList $ \(depName, depRange) -> do
+      -- In case something fails...
+      let failedWarning reason = warns ["Failed to fetch dependency ", depName,
+                                        " version ", pshow depRange, ": ",
+                                        pshow reason]
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair name version]
       result <- (Resolved <$> resolveNpmVersionRange depName depRange)
                 `catches` [
-                  Handler (\reason -> return $ Broken reason),
-                  Handler (\(e::Git.GithubError) -> return $ Broken $ Reason $ show e)
+                  Handler (\reason -> do
+                            failedWarning reason
+                            return $ Broken reason),
+                  Handler (\(e::GithubError) -> do
+                            failedWarning e
+                            return $ Broken $ Reason $ show e)
                   ]
       return (depName, result)
 
@@ -548,7 +578,7 @@ resolveVersionInfo VersionInfo{..} = do
           False -> return Nothing
       finishResolving viName viVersion
       -- Store this version's info.
-      addResolvedPkg viName viVersion $ ResolvedPkg {
+      addPackage viName viVersion $ NewPackage $ ResolvedPkg {
           rpName = viName,
           rpVersion = viVersion,
           rpDistInfo = viDist,
@@ -597,7 +627,8 @@ defaultSettings = NpmFetcherSettings {
   nfsOutputPath = error "default setings provide no output path",
   nfsExtendPaths = mempty,
   nfsMaxDevDepth = 1,
-  nfsCacheDepth = 0
+  nfsCacheDepth = 0,
+  nfsRetries = 1 -- ^ Retry once
   }
 
 startState :: NpmFetcherState

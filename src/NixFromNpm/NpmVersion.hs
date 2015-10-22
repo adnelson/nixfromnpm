@@ -7,6 +7,7 @@ import qualified Data.Text as T
 
 import NixFromNpm.Common
 import NixFromNpm.SemVer
+import NixFromNpm.GitTypes hiding (Tag)
 
 data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
 
@@ -14,17 +15,27 @@ data NpmVersionRange
   = SemVerRange SemVerRange
   | Tag Name
   | NpmUri URI
-  | GitId GitSource Name Name (Maybe Name)
+  | GitId GitSource Name Name (Maybe GitRef)
   | LocalPath FilePath
   deriving (Eq)
+
+
+data NpmVersionError
+  = UnsupportedVersionType NpmVersionRange
+  | UnsupportedUriScheme String
+  | UnsupportedGitSource GitSource
+  | VersionSyntaxError Text String
+  deriving (Show, Eq, Typeable)
+
+instance Exception NpmVersionError
 
 instance Show NpmVersionRange where
   show (SemVerRange rng) = show rng
   show (Tag name) = unpack name
   show (NpmUri uri) = uriToString uri
   show (GitId Github account repo Nothing) = show $ account <> "/" <> repo
-  show (GitId Github account repo (Just hash)) = show $ account <> "/" <> repo
-                                                                <> "#" <> hash
+  show (GitId Github account repo (Just ref)) = show $
+    account <> "/" <> repo <> "#" <> refText ref
   show (GitId src _ _ _) = "git fetch from " <> show src
   show (LocalPath pth) = show pth
 

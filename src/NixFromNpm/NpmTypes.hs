@@ -89,6 +89,7 @@ data BrokenPackageReason
   | NoDistributionInfo
   | Reason String
   | GithubError GithubError
+  | NotYetImplemented String
   deriving (Show, Eq, Typeable)
 
 instance Exception BrokenPackageReason
@@ -133,8 +134,7 @@ instance FromJSON VersionInfo where
       return $ PackageMeta description homepage keywords
     scripts :: Record Value <- getDict "scripts" o
     case parseSemVer version of
-      Left err -> fail $ concat ["Version string ", show version,
-                                 " is not a valid semver (", show err, ")"]
+      Left err -> throw $ VersionSyntaxError version (show err)
       Right semver -> return $ VersionInfo {
         viDependencies = dependencies,
         viDevDependencies = devDependencies,

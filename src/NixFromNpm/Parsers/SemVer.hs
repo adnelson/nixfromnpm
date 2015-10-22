@@ -63,6 +63,8 @@ pWildCard = try $ do
   let stripNothings [Nothing] = []
       stripNothings (Just x:xs) = x : stripNothings xs
       tag = fmap pack $ many1 $ letter <|> digit <|> char '-'
+  -- Versions can optionally start with the character 'v'
+  optional (char 'v')
   takeWhile isJust <$> sepBy1 bound (sstring ".") >>= \case
     [] -> return Any
     [Just n] -> return $ One n

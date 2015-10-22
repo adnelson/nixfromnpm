@@ -35,7 +35,7 @@ module NixFromNpm.Common (
     Name, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL
+    parseURIText, withColor, withUL, warn, warns
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -184,3 +184,9 @@ withUL action = do
   result <- action
   liftIO $ setSGR [SetUnderlining NoUnderline]
   return result
+
+warn :: MonadIO io => Text -> io ()
+warn msg = withColor Red $ putStrsLn ["WARNING: ", msg]
+
+warns :: MonadIO io => [Text] -> io ()
+warns = warn . concat
