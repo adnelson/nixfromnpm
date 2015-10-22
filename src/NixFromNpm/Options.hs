@@ -20,7 +20,7 @@ import NixFromNpm.Common hiding ((<>))
 -- command-line options.
 data RawOptions = RawOptions {
   roPkgNames :: [Name],       -- ^ Names of packages to build.
-  roPkgPath :: Maybe Text,    -- ^ Path of package.json to build.
+  roPkgPaths :: [Text],       -- ^ Paths of package.jsons to build.
   roOutputPath :: Text,       -- ^ Path to output built expressions to.
   roNoDefaultNix :: Bool,     -- ^ Disable creation of default.nix file.
   roNoCache :: Bool,          -- ^ Build all expressions from scratch.
@@ -38,7 +38,7 @@ data RawOptions = RawOptions {
 data NixFromNpmOptions = NixFromNpmOptions {
   nfnoPkgNames :: [(Name, NpmVersionRange)],
   -- ^ Names/versions of packages to build.
-  nfnoPkgPath :: Maybe FilePath, -- ^ Path of package.json to build.
+  nfnoPkgPaths :: [FilePath],    -- ^ Path of package.json to build.
   nfnoOutputPath :: FilePath,    -- ^ Path to output built expressions to.
   nfnoNoDefaultNix :: Bool,      -- ^ Disable creation of default.nix file.
   nfnoNoCache :: Bool,           -- ^ Build all expressions from scratch.
@@ -73,7 +73,7 @@ validateOptions opts = do
           True -> return p'
   packageNames <- mapM parseNameAndRange $ roPkgNames opts
   extendPaths <- mapM validatePath =<< getExtensions (roExtendPaths opts)
-  packagePath <- mapM (validatePath . fromText) $ roPkgPath opts
+  packagePaths <- mapM (validatePath . fromText) $ roPkgPaths opts
   outputPath <- validatePath . fromText $ roOutputPath opts
   registries <- mapM validateUrl $ (roRegistries opts <>
                                     if roNoDefaultRegistry opts
@@ -90,7 +90,7 @@ validateOptions opts = do
     nfnoTimeout = roTimeout opts,
     nfnoPkgNames = packageNames,
     nfnoRegistries = registries,
-    nfnoPkgPath = packagePath,
+    nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts
     })
   where
@@ -116,7 +116,7 @@ validateOptions opts = do
 parseOptions :: Maybe ByteString -> Parser RawOptions
 parseOptions githubToken = RawOptions
     <$> many (textOption packageName)
-    <*> packageFile
+    <*> packageFiles
     <*> textOption outputDir
     <*> noDefaultNix
     <*> noCache
@@ -135,11 +135,10 @@ parseOptions githubToken = RawOptions
                             <> "multiples)")
     packageFileHelp = "Path to package.json to generate expression for "
                       ++ " (NOT YET SUPPORTED)"
-    packageFile = (Just <$> textOption (long "file"
-                                        <> short 'f'
-                                        <> metavar "FILE"
-                                        <> help packageFileHelp))
-                  <|> pure Nothing
+    packageFiles = many $ textOption (long "file"
+                                      <> short 'f'
+                                      <> metavar "FILE"
+                                      <> help packageFileHelp)
     outputDir = short 'o'
                  <> long "output"
                  <> metavar "OUTPUT"

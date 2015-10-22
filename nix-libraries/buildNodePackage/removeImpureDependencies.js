@@ -35,6 +35,10 @@ for (var i in depTypes) {
 
 /* Remove peer dependencies */
 if (process.env.removePeerDependencies && packageObj.peerDependencies) {
+  console.log("WARNING: removing the following peer dependencies:");
+  for (key in packageObj.peerDependencies) {
+    console.log("  " + key + ": " + packageObj.peerDependencies[key]);
+  }
   delete packageObj.peerDependencies;
 }
 

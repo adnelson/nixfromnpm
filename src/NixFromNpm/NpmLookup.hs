@@ -3,6 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE FlexibleContexts #-}
 module NixFromNpm.NpmLookup where
 
 --------------------------------------------------------------------------
@@ -69,8 +70,6 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Used for authorization when fetching a package from github.
   nfsRequestTimeout :: Long,
   -- ^ Request timeout.
-  nfsBaseExpr :: NExpr,
-  -- ^ Base nix expression (not used here).
   nfsExtendPaths :: Record FilePath,
   -- ^ Libraries we're extending.
   nfsOutputPath :: FilePath,
@@ -143,7 +142,7 @@ makeHeaders headers = CurlHttpHeaders $ map mk headers where
 
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
-getHttp :: Text -- ^ URI to hit
+getHttp :: URI -- ^ URI to hit
         -> [(Text, ByteString)] -- ^ Additional headers to add
         -> NpmFetcher BL8.ByteString
 getHttp uri headers = do
@@ -151,7 +150,7 @@ getHttp uri headers = do
       opts = [makeHeaders (headers <> defHdrs), CurlFollowLocation True]
   timeout <- asks nfsRequestTimeout
   let opts' = opts <> [CurlTimeout timeout]
-  (code, status, content) <- curlGetBS (unpack uri) opts'
+  (code, status, content) <- curlGetBS (uriToString uri) opts'
   case code of
     CurlOK -> return content
     CurlHttpReturnedError -> throw $ HttpErrorWithCode status
@@ -175,10 +174,9 @@ hexSha256 = SHA256 . pack . showDigest . sha256
 -- | Queries NPM for package information.
 _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
 _getPackageInfo pkgName registryUri = do
-  let uri = uriToText $ registryUri `slash` pkgName
   putStrsLn ["Querying ", uriToText registryUri,
              " for package ", pkgName, "..."]
-  jsonStr <- getHttp uri []
+  jsonStr <- getHttp (registryUri // pkgName) []
              `catch` \case
                 HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
   case eitherDecode jsonStr of
@@ -258,7 +256,7 @@ prefetchSha256 uri = do
   let outPath = dir </> "outfile"
   putStrsLn ["putting in location ", pathToText outPath]
   -- Download the file into memory, calculate the hash.
-  tarball <- getHttp (uriToText uri) []
+  tarball <- getHttp uri []
   let hash = hexSha256 tarball
   -- Return the hash and the path.
   path <- liftIO $ do
@@ -311,7 +309,7 @@ fetchHttp subpath uri = do
   resolveVersionInfo $ versionInfo {viDist = Just dist}
 
 -- | Send a curl to github with some extra headers set.
-githubCurl :: FromJSON a => Text -> NpmFetcher a
+githubCurl :: FromJSON a => URI -> NpmFetcher a
 githubCurl uri = do
   -- Add in the github auth token if it is provided.
   extraHeaders <- asks nfsGithubAuthToken >>= \case
@@ -319,18 +317,22 @@ githubCurl uri = do
     Just token -> return [("Authorization", "token " <> token)]
   let headers = extraHeaders <>
               [("Accept", "application/vnd.github.quicksilver-preview+json")]
+  putStrsLn ["GET ", uriToText uri]
   jsonStr <- getHttp uri headers
   case eitherDecode jsonStr of
     Left err -> throw $ Git.InvalidJsonFromGithub (pshow err)
     Right info -> return info
 
+makeGithubURI :: Name -> Name -> URI
+makeGithubURI owner repo = do
+  let baseUri = unsafeParseURI "https://api.github.com/repos/"
+  baseUri // owner // repo
+
 -- | Queries NPM for package information.
 getDefaultBranch :: Name -> Name -> NpmFetcher Name
 getDefaultBranch owner repo = do
-  let rpath = "/" <> owner <> "/" <> repo
-  let uri = concat ["https://api.github.com/repos", rpath]
-  putStrs ["Querying github for default branch of ", rpath, "..."]
-  Git.rDefaultBranch <$> githubCurl uri
+  putStrs ["Querying github for default branch of ", repo, "..."]
+  Git.rDefaultBranch <$> githubCurl (makeGithubURI owner repo)
 
 gitRefToSha :: Name -- ^ Repo owner
             -> Name -- ^ Repo name
@@ -338,20 +340,21 @@ gitRefToSha :: Name -- ^ Repo owner
             -> NpmFetcher Text -- ^ The hash of the branch
 gitRefToSha owner repo ref = do
   let rpath = "/" <> owner <> "/" <> repo
-  let uri = concat ["https://api.github.com/repos", rpath]
+  let uri = makeGithubURI owner repo
       fromBranch = do
         let bSha = Git.cSha . Git.bCommit
-        bSha <$> githubCurl (concat [uri, "/branches/", ref])
+        bSha <$> githubCurl (uri // "branches" // ref)
       fromTag = do
-        tagMap <- Git.tagListToMap <$> githubCurl (concat [uri, "/tags"])
+        tagMap <- Git.tagListToMap <$> githubCurl (uri // "tags")
         case H.lookup ref tagMap of
           Just sha -> return sha
           Nothing -> throw (Git.InvalidGitRef ref)
       fromCommit = do
-        map Git.cSha $ githubCurl $ concat [uri, "/commits/", ref]
-  fromBranch `catch` \(_ :: Git.GithubError) ->
-    fromTag `catch` \(_ :: Git.GithubError) ->
-      fromCommit `catch` \(_ :: Git.GithubError) ->
+        map Git.cSha $ githubCurl (uri // "commits" // ref)
+      catch404 action1 action2 = action1 `catch` \case
+        HttpErrorWithCode 404 -> action2
+        err -> throw err
+  fromBranch `catch404` fromTag `catch404` fromCommit `catch404`
         throw (Git.InvalidGitRef ref)
 
 -- | Given a github repo and a branch, gets the SHA of the head of that
@@ -362,8 +365,7 @@ getShaOfBranch :: Name -- ^ Repo owner
                -> NpmFetcher Text -- ^ The hash of the branch
 getShaOfBranch owner repo branchName = do
   let rpath = "/" <> owner <> "/" <> repo
-  let uri = concat ["https://api.github.com/repos", rpath,
-                    "/branches/", branchName]
+  let uri = makeGithubURI owner repo // "branches" // branchName
   putStrs ["Querying github for sha of ", rpath, "/", branchName, "..."]
   Git.cSha . Git.bCommit <$> githubCurl uri
 
@@ -381,15 +383,14 @@ fetchGithub uri = do
     '#':frag -> return $ pack frag
     frag -> errorC ["Invalid URL fragment '", pack frag, "'"]
   -- Use the hash to pull down a zip.
-  let uri = concat ["https://github.com/", owner, "/", repo, "/archive/",
-                    hash, ".tar.gz"]
-  fetchHttp (fromText (repo <> "-" <> hash)) (fromJust $ parseURI $ unpack uri)
+  let uri = makeGithubTarballURI owner repo hash
+  fetchHttp (fromText (repo <> "-" <> hash)) uri
 
-makeGithubUri :: Name -- ^ Owner name
+makeGithubTarballURI :: Name -- ^ Owner name
               -> Name -- ^ Repo name
               -> Text -- ^ Commit hash
               -> URI -- ^ Fully-formed URI
-makeGithubUri owner repo commit = URI {
+makeGithubTarballURI owner repo commit = URI {
   uriScheme = "https:",
   uriAuthority = Just (URIAuth "" "github.com" ""),
   uriPath = '/' : unpack (
@@ -407,11 +408,11 @@ httpToGitUri uri = do
       "github.com" -> case T.split (=='/') $ pack (uriPath uri) of
         ["", owner, repo, "tarball", ref] -> do
           sha <- gitRefToSha owner repo ref
-          return (makeGithubUri owner repo sha, repo <> "-" <> sha)
+          return (makeGithubTarballURI owner repo sha, repo <> "-" <> sha)
         ["", owner, repo] -> do
           branch <- getDefaultBranch owner repo
           sha <- gitRefToSha owner repo branch
-          return (makeGithubUri owner repo sha, repo <> "-" <> sha)
+          return (makeGithubTarballURI owner repo sha, repo <> "-" <> sha)
       _ -> return (uri, "package")
 
 -- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
@@ -601,7 +602,6 @@ defaultSettings = NpmFetcherSettings {
   nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
   nfsOutputPath = error "default setings provide no output path",
   nfsExtendPaths = mempty,
-  nfsBaseExpr = error "default settings provide no base expression",
   nfsMaxDevDepth = 1,
   nfsNoCache = False
   }

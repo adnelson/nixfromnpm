@@ -3,11 +3,26 @@
 module Filesystem.Path.Wrappers where
 
 import ClassyPrelude hiding (FilePath, unpack)
+import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
 import qualified System.Directory as Dir
+import qualified System.Posix.Files as Posix
 import Filesystem.Path.CurrentOS
 import Control.Monad.Trans.Control
 import Control.Exception.Lifted
+
+-- | Write a string to disk.
+writeFile :: (MonadIO io, IOData dat) => FilePath -> dat -> io ()
+writeFile path = CP.writeFile (pathToString path)
+
+-- | Read a file from disk.
+readFile :: (MonadIO io, IOData dat) => FilePath -> io dat
+readFile path = CP.readFile (pathToString path)
+
+-- | Create a symbolic link at `path2` pointing to `path1`.
+createSymbolicLink :: (MonadIO io) => FilePath -> FilePath -> io ()
+createSymbolicLink path1 path2 = liftIO $ do
+  Posix.createSymbolicLink (pathToString path1) (pathToString path2)
 
 -- | Convert a FilePath into Text.
 pathToText :: FilePath -> Text
