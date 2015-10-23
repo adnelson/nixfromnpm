@@ -86,6 +86,7 @@ data BrokenPackageReason
   | NoSuchTag Name
   | TagPointsToInvalidVersion Name SemVer
   | InvalidSemVerSyntax Text String
+  | InvalidPackageJson Text String
   | NoDistributionInfo
   | Reason String
   | GithubError GithubError
@@ -118,12 +119,15 @@ instance FromJSON VersionInfo where
     main <- o .:? "main"
     version <- o .: "version"
     packageMeta <- do
+      let getString = \case {String s -> Just s; _ -> Nothing}
       description <- o .:? "description"
       homepage <- o .:? "homepage" >>= \case
         Nothing -> return Nothing
-        Just txt -> return $ parseURIText txt
+        Just (String txt) -> return $ parseURIText txt
+        Just (Array stuff) -> case toList $ catMaybes (getString <$> stuff) of
+          [] -> return Nothing
+          (uri:_) -> return $ parseURIText uri
       let
-        getString = \case {String s -> Just s; _ -> Nothing}
         -- If keywords are a string, split on commas and strip whitespace.
         getKeywords (String s) = fromList $ T.strip <$> T.split (==',') s
         -- If an array, just take the array.
@@ -132,7 +136,7 @@ instance FromJSON VersionInfo where
         getKeywords _ = mempty
       keywords <- map getKeywords $ o .:? "keywords" .!= Null
       return $ PackageMeta description homepage keywords
-    scripts :: Record Value <- getDict "scripts" o
+    scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
       Left err -> throw $ VersionSyntaxError version (show err)
       Right semver -> return $ VersionInfo {

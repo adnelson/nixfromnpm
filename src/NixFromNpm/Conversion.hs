@@ -108,9 +108,6 @@ findExisting maybeName path = do
           vs -> return $ Just (pathToText dir, H.map wrapper $ H.fromList exprs)
       let total = sum $ map (H.size . snd) verMaps
       putStrsLn ["Found ", render total, " existing expressions:"]
-      forM verMaps $ \(name, vers) -> do
-        putStrs ["  ", name, ": "]
-        putStrLn $ mapJoinBy ", " renderSV $ H.keys vers
       return $ H.fromList verMaps
 
 -- | Given the output directory and any number of extensions to load,
