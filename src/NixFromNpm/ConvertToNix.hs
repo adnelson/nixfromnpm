@@ -12,7 +12,8 @@ import Data.Text (Text, replace)
 import Data.Fix
 
 import NixFromNpm.Common hiding (replace)
-import Nix.Types
+import Nix.Types hiding (mkPath)
+import qualified Nix.Types as Nix
 import Nix.Parser
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
@@ -50,7 +51,7 @@ str = mkStr DoubleQuoted
 
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe DistInfo -> NExpr
-distInfoToNix Nothing = mkPath False "./."
+distInfoToNix Nothing = mkPath "./."
 distInfoToNix (Just DistInfo{..}) = do
   let Success fetchurl = parseNixString "pkgs.fetchurl"
       (algo, hash) = case diShasum of
@@ -108,7 +109,7 @@ importWith :: Bool -- ^ True if the path is from the env, e.g. <nixpkgs>
            -> [Binding NExpr] -- ^ Arguments to pass
            -> NExpr -- ^ The resulting nix expression
 importWith isEnv path args = do
-  mkSym "import" `mkApp` mkPath isEnv (pathToString path)
+  mkSym "import" `mkApp` Nix.mkPath isEnv (pathToString path)
                  `mkApp` mkNonRecSet args
 
 -- | We use this a few times: `import <nixpkgs> {}`
@@ -125,22 +126,35 @@ defaultParams = mkFormalSet [("pkgs", Just importNixpkgs),
 defaultInherits :: [Binding NExpr]
 defaultInherits = [Inherit Nothing $ map mkSelector ["pkgs", "nodejsVersion"]]
 
+-- | The name of the subfolder within the output directory that
+-- contains node packages.
+nodePackageDir :: FilePath
+nodePackageDir = "nodePackages"
+
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
 mkTopDefaultNix :: Record FilePath -- ^ Map of extensions being included.
                 -> NExpr -- ^ A generated nix expression.
-mkTopDefaultNix extensionMap = do
-  let -- Make a set of all of the extensions, if we have any.
-      extensionsSet = maybeIf (not $ H.null extensionMap) $ mkNonRecSet $
-        -- Map over the expression map, creating a binding for each pair.
-        flip map (H.toList extensionMap) $ \(name, path) -> do
-          -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
-          name `bindTo` importWith False path defaultInherits
-       -- Equiv. to {rootPath = ./.; extensions = {....};}
-      args = catMaybes [bindTo "extensions" <$> extensionsSet,
-                        Just $ "rootPath" `bindTo` mkPath False "./."]
-      body = mkWith (importWith True "nodeLib" defaultInherits)
-                    (mkSym "generatePackages" `mkApp` mkNonRecSet args)
+mkTopDefaultNix extensions = do
+  let
+    bindRootPath = "rootPath" `bindTo` mkPath ("./" </> nodePackageDir)
+    (lets, args, genPkgs) = case H.keys extensions of
+      [] -> do -- This is a root-level package
+        (["nodeLib" `bindTo`
+            importWith False "./nodeLib"
+              (defaultInherits <> ["self" `bindTo` mkSym "nodeLib"])],
+         [bindRootPath],
+         "nodeLib.generatePackages")
+      (extName:_) -> do
+        (-- Map over the expression map, creating a binding for each pair.
+         flip map (H.toList extensions) $ \(name, path) -> do
+           -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
+           name `bindTo` importWith False path defaultInherits,
+         [bindRootPath, "extensions" `bindTo`
+                          mkList (map mkSym (H.keys extensions))],
+         extName <> ".nodeLib.generatePackages")
+    Success generatePackages = parseNixString (unpack genPkgs)
+    body = mkLet lets $ mkApp generatePackages (mkNonRecSet args)
   mkFunction defaultParams body
 
 -- | Create a `default.nix` file for a particular package.json; this simply

@@ -14,13 +14,14 @@ import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Printf (printf)
+import Shelly (shelly, cp_r)
 
 import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
 import NixFromNpm.ConvertToNix (toDotNix, mkTopDefaultNix, mkPkgJsonDefaultNix,
-                                resolvedPkgToNix)
+                                resolvedPkgToNix, nodePackageDir)
 import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
@@ -45,7 +46,6 @@ data ConversionError
   | FolderDoesNotExist FilePath
   | FileDoesNotExist FilePath
   deriving (Show, Eq, Typeable)
-
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 -- However, the only packages that we want to write are the new ones; that
@@ -83,18 +83,17 @@ findExisting :: (MonadBaseControl IO io, MonadIO io)
                                                    --   versions to nix
                                                    --   expressions.
 findExisting maybeName path = do
-  doesDirectoryExist path >>= \case
+  doesDirectoryExist (path </> nodePackageDir) >>= \case
     False -> case maybeName of
-               Just name -> errorC ["Extension ", pshow name, " at path ",
-                                    pathToText path, " does not exist."]
-               Nothing -> return mempty
-    True -> withDir path $ do
-      let wrapper :: NExpr -> PreExistingPackage
-          wrapper = case maybeName of Nothing -> FromOutput
-                                      Just name -> FromExtension name
+      Just name -> errorC [
+        "Path ", pathToText path, " does not exist or does not ",
+        "contain a `", pathToText nodePackageDir, "` folder"]
+      Nothing -> return mempty
+    True -> withDir (path </> nodePackageDir) $ do
+      let wrapper = maybe FromOutput FromExtension maybeName
       putStrsLn ["Searching for existing expressions in ", pathToText path,
                  "..."]
-      contents <- getDirectoryContents path
+      contents <- getDirectoryContents "."
       verMaps <- map catMaybes $ forM contents $ \dir -> do
         exprs <- doesDirectoryExist dir >>= \case
           True -> withDir dir $ do
@@ -103,11 +102,11 @@ findExisting maybeName path = do
             catMaybes <$> mapM (parseVersion $ pathToText dir) files
           False -> do
             return mempty -- not a directory
-        case exprs of
-          [] -> return Nothing
-          vs -> return $ Just (pathToText dir, H.map wrapper $ H.fromList exprs)
+        return $ case exprs of
+          [] -> Nothing
+          vs -> Just (pathToText dir, H.map wrapper $ H.fromList exprs)
       let total = sum $ map (H.size . snd) verMaps
-      putStrsLn ["Found ", render total, " existing expressions:"]
+      putStrsLn ["Found ", render total, " expressions in ", pathToText path]
       return $ H.fromList verMaps
 
 -- | Given the output directory and any number of extensions to load,
@@ -132,7 +131,8 @@ dumpPkgs :: (MonadIO m, MonadBaseControl IO m)
          -> PackageMap NExpr -- ^ New packages being written.
          -> Record FilePath        -- ^ Libraries being extended.
          -> m ()   -- ^ Generated expressions.
-dumpPkgs path newPackages extensions = do
+dumpPkgs path' newPackages extensions = do
+  let path = path' </> nodePackageDir
   -- If there aren't any new packages, we can stop here.
   if H.null newPackages
     then putStrLn "No new packages created." >> return ()
@@ -160,11 +160,20 @@ dumpPkgs path newPackages extensions = do
                     Right ver -> Just ver -- return the version
             allVersions <- catMaybes . map convert <$> getDirectoryContents "."
             createSymbolicLink (toDotNix $ maximum allVersions) "latest.nix"
-        -- Write the default.nix file for the library.
-        -- We need to build up a record mapping package names to the list of
-        -- versions being defined in this library.
-        let defaultNix = mkTopDefaultNix extensions
-        writeFile "default.nix" $ show $ prettyNix defaultNix
+  withDir path' $ do
+    -- Write the default.nix file for the library.
+    fullPath <- (</> "default.nix") <$> getCurrentDirectory
+    let defaultNix = mkTopDefaultNix extensions
+    when (H.null extensions) $ do
+      putStrsLn ["Generating node libraries in ", pathToText path']
+      pth <- getDataFileName "nix-libs"
+      shelly $ do
+        cp_r (pth </> "buildNodePackage") path'
+        cp_r (pth </> "nodeLib") path'
+    when (not $ H.null extensions) $ do
+      putStrLn "yeeeeeeeeeeeeeeeeeees?"
+    putStrsLn ["Writing top-level file at ", pathToText fullPath]
+    writeFile "default.nix" $ show $ prettyNix defaultNix
 
 -- | Given a set of fetched packages, generates the expressions needed to
 -- build that package and writes them to disk.
