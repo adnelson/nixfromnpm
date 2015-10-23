@@ -2,10 +2,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 module NixFromNpm.Parsers.SemVer (
-    parseSemVer, parseSemVerRange, pSemVerRange, pSemVer
+    parseSemVer, parseSemVerRange, pSemVerRange, pSemVer,
+    fromHaskellVersion
   ) where
 
 import qualified Prelude as P
+import Data.Version (Version(..))
 import NixFromNpm.Parsers.Common
 import NixFromNpm.SemVer
 
@@ -91,3 +93,11 @@ pCaratRange = sstring "^" *> pWildCard
 -- | Top-level parser. Parses a semantic version range.
 pSemVerRange :: Parser SemVerRange
 pSemVerRange = try pHyphen <|> pJoinedSemVerRange
+
+
+-- | Parse a semver from a haskell version. There must be exactly
+-- three numbers in the versionBranch field.
+fromHaskellVersion :: Version -> Either Text SemVer
+fromHaskellVersion v = case versionBranch v of
+  [x, y, z] -> return (x, y, z, []) -- ignoring version tags since deprecated
+  bad -> Left ("Not a SemVer version: " <> mapJoinBy "." pshow bad)

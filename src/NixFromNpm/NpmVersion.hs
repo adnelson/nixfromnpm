@@ -8,6 +8,7 @@ import qualified Data.Text as T
 import NixFromNpm.Common
 import NixFromNpm.SemVer
 import NixFromNpm.GitTypes hiding (Tag)
+import NixFromNpm.Parsers.Common (ParseError)
 
 data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
 
@@ -24,7 +25,7 @@ data NpmVersionError
   = UnsupportedVersionType NpmVersionRange
   | UnsupportedUriScheme String
   | UnsupportedGitSource GitSource
-  | VersionSyntaxError Text String
+  | VersionSyntaxError Text ParseError
   deriving (Show, Eq, Typeable)
 
 instance Exception NpmVersionError
