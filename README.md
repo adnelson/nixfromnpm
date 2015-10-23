@@ -12,7 +12,7 @@ Given the name of one or more packages and an output directory, queries NPM repo
 
 ### Advantages over `npm2nix`
 
-`npm2nix` generates the entire dependency tree for an npm package. This is inefficient, since duplicated packages are built multiple times. The resulting expression is a single monolithic file which is hard to grok, and hard to modify. Furthermore, any modifications performed would have to be done each time the package was regenerated. It also discourages committing of the resulting package into source control, since it's large and has to be continually regenerated whenever changes are made. This means that packages built with it are unlikely to be cached in a nix store or repo.
+`npm2nix` is another tool which can generate nix expressions from an npm package. However, it has several drawbacks. It generates the entire dependency tree for an npm package, without availing itself of results of previous invocations. This is inefficient, since duplicated packages are built multiple times. The resulting expression is a single monolithic file which is hard to grok, and hard to modify. Furthermore, any modifications performed would have to be done each time the package was regenerated. It also discourages committing of the resulting package into source control, since it's large and has to be continually regenerated whenever changes are made. This means that packages built with it are unlikely to be cached in a nix store or repo.
 
 ### Installation
 
