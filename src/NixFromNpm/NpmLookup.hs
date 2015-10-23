@@ -202,7 +202,9 @@ _getPackageInfo pkgName registryUri = do
                 HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
                 err -> throw err
   case eitherDecode jsonStr of
-      Left err -> errorC ["couldn't parse JSON from NPM: ", pack err]
+      Left err -> do
+        let text = decodeUtf8 $ BL8.toStrict jsonStr
+        throw $ InvalidPackageJson text err
       Right info -> return info
 
 -- | Same as _getPackageInfo, but caches results for speed.
@@ -309,8 +311,7 @@ extractPkgJson path = do
   putStrsLn ["Reading information from ", pathToText path]
   pkJson <- liftIO $ B.readFile (encodeString path)
   case eitherDecode $ BL8.fromStrict pkJson of
-    Left err -> errorC ["Invalid package.json file: ", pack err,
-                             "\npackage.json contents:\n", decodeUtf8 pkJson]
+    Left err -> throw $ InvalidPackageJson (decodeUtf8 pkJson) err
     Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
@@ -550,8 +551,10 @@ recurOn name version deptype deps =
                   ]
       return (depName, result)
 
+-- | Current depth, which is 0 if we're at the top level (in which case the
+-- package stack trace would be length 1)
 currentDepth :: NpmFetcher Int
-currentDepth = length <$> gets packageStackTrace
+currentDepth = map (\trace -> length trace - 1) $ gets packageStackTrace
 
 -- | Tells us whether we should fetch development dependencies.
 shouldFetchDevs :: NpmFetcher Bool
