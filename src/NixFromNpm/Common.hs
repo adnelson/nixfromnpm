@@ -35,7 +35,7 @@ module NixFromNpm.Common (
     Name, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL, warn, warns
+    parseURIText, withColor, withUL, warn, warns, assert, fatal
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -54,7 +54,7 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
                                    runStateT, execState, execStateT,
                                    evalState, evalStateT)
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
-import Control.Exception.Lifted
+import Control.Exception.Lifted hiding (assert)
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.Trans.Control
 import Control.Applicative hiding (empty, optional)
@@ -85,6 +85,9 @@ type Path = Text
 
 -- | A record is a lookup table with string keys.
 type Record = HashMap Name
+
+newtype FatalError = Fatal Text deriving (Show, Eq, Typeable)
+instance Exception FatalError
 
 -- | Creates a new hashmap by applying a function to every key in it.
 alterKeys :: (Eq k, Hashable k, Eq k', Hashable k') =>
@@ -185,8 +188,20 @@ withUL action = do
   liftIO $ setSGR [SetUnderlining NoUnderline]
   return result
 
+-- | Print a warning string in red.
 warn :: MonadIO io => Text -> io ()
 warn msg = withColor Red $ putStrsLn ["WARNING: ", msg]
 
+-- | Print a warning string by concatenating strings.
 warns :: MonadIO io => [Text] -> io ()
 warns = warn . concat
+
+-- | Throws the given exception if the test fails.
+assert :: (Monad m, Exception e) => m Bool -> e -> m ()
+assert test err = test >>= \case
+  True -> return ()
+  False -> throw err
+
+-- | Throw a fatal error.
+fatal :: Text -> a
+fatal = throw . Fatal

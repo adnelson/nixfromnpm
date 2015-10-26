@@ -14,7 +14,31 @@ import Options.Applicative
 import NixFromNpm.NpmVersion
 import NixFromNpm.Parsers.NpmVersion
 import NixFromNpm.SemVer
+import NixFromNpm.ConvertToNix (nodePackagesDir)
 import NixFromNpm.Common hiding ((<>))
+
+-- | Errors about node libraries
+data InvalidNodeLib
+  = OutputNotWritable
+  | OutputParentPathDoesn'tExist
+  | OutputParentNotWritable
+  | IsFileNotDirectory
+  | NoPackageDir
+  | NoVersionFile
+  | NoDefaultNix
+  deriving (Show, Eq, Typeable)
+
+instance Exception InvalidNodeLib
+
+data InvalidOption
+  = NpmVersionError NpmVersionError
+  | InvalidNodeLib FilePath InvalidNodeLib
+  | InvalidExtensionSyntax Text
+  | DuplicatedExtensionName Name FilePath FilePath
+  | InvalidURI Text
+  deriving (Show, Eq, Typeable)
+
+instance Exception InvalidOption
 
 -- | Various options we have available for nixfromnpm, as parsed from the
 -- command-line options.
@@ -49,7 +73,7 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
   nfnoGithubToken :: Maybe ByteString -- ^ Github authentication token.
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
@@ -58,8 +82,37 @@ parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
 parseNameAndRange name = case T.split (== '@') name of
   [name] -> return (name, SemVerRange anyVersion)
   [name, range] -> case parseNpmVersionRange range of
-    Left err -> errorC ["Invalid NPM version range ", range, ":\n", pshow err]
+    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
     Right nrange -> return (name, nrange)
+
+-- | Validates an extension folder. The folder must exist, and must contain
+-- a default.nix and a node packages directory, and a .nixfromnpm-version file
+-- which indicates the version of nixfromnpm used to build it.
+validateExtension :: MonadIO io => FilePath -> io FilePath
+validateExtension path = do
+  let assert' test err = assert test (InvalidNodeLib path err)
+  assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
+  assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
+  assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
+  return path
+
+-- | Validate an output folder. An output folder EITHER must not exist, but
+-- its parent directory does and is writable, OR it does exist, is writable,
+-- and follows the extension format.
+validateOutput :: MonadIO io => FilePath -> io FilePath
+validateOutput path = do
+  let assert' test err = assert test (InvalidNodeLib path err)
+  doesDirectoryExist path >>= \case
+    True -> do assert' (isWritable path) OutputNotWritable
+               putStrLn "hey"
+               validateExtension path
+    False -> do
+      let parentPath = parent path
+      assert' (doesDirectoryExist parentPath)
+              OutputParentPathDoesn'tExist
+      assert' (isWritable $ parentPath)
+              OutputParentNotWritable
+      return path
 
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do
@@ -73,9 +126,9 @@ validateOptions opts = do
           False -> errorC ["Path ", pathToText  p', " does not exist"]
           True -> return p'
   packageNames <- mapM parseNameAndRange $ roPkgNames opts
-  extendPaths <- mapM validatePath =<< getExtensions (roExtendPaths opts)
+  extendPaths <- getExtensions (roExtendPaths opts)
   packagePaths <- mapM (validatePath . fromText) $ roPkgPaths opts
-  outputPath <- validatePath . fromText $ roOutputPath opts
+  outputPath <- validateOutput . fromText $ roOutputPath opts
   registries <- mapM validateUrl $ (roRegistries opts <>
                                     if roNoDefaultRegistry opts
                                        then []
@@ -96,23 +149,21 @@ validateOptions opts = do
     })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
-      Nothing -> errorC ["Invalid url: ", rawUrl]
+      Nothing -> throw $ InvalidURI rawUrl
       Just uri -> return uri
     -- Parses the NAME=PATH extension directives.
     getExtensions :: [Text] -> IO (Record FilePath)
-    getExtensions = go mempty where
-      go extensions [] = return extensions
-      go extensions (nameEqPath:paths) = case T.split (== '=') nameEqPath of
+    getExtensions = foldM step mempty where
+      step extensions nameEqPath = case T.split (== '=') nameEqPath of
         [name, path] -> append name path
         [path] -> append (pathToText $ basename $ fromText path) path
-        _ -> errorC ["Extensions must be of the form NAME=PATH (in argument ",
-                     nameEqPath, ")"]
+        _ -> throw $ InvalidExtensionSyntax nameEqPath
         where
           append name path = case H.lookup name extensions of
-            Nothing -> go (H.insert name (fromText path) extensions) paths
-            Just path' -> errorC ["Extension ", name, " is mapped to both ",
-                                  "path ", path, " and path ",
-                                  pathToText path']
+            Nothing -> do validPath <- validateExtension $ fromText path
+                          return $ H.insert name validPath extensions
+            Just path' -> throw $ DuplicatedExtensionName name
+                                    (fromText path) path'
 
 parseOptions :: Maybe ByteString -> Parser RawOptions
 parseOptions githubToken = RawOptions

@@ -16,12 +16,18 @@ import qualified Data.Text as T
 import Text.Printf (printf)
 import Shelly (shelly, cp_r)
 
+
+import qualified Paths_nixfromnpm
 import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
-import NixFromNpm.ConvertToNix (toDotNix, mkTopDefaultNix, mkPkgJsonDefaultNix,
-                                resolvedPkgToNix, nodePackageDir)
+import NixFromNpm.ConvertToNix (toDotNix,
+                                rootDefaultNix,
+                                defaultNixExtending,
+                                mkPkgJsonDefaultNix,
+                                resolvedPkgToNix,
+                                nodePackagesDir)
 import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
@@ -83,13 +89,13 @@ findExisting :: (MonadBaseControl IO io, MonadIO io)
                                                    --   versions to nix
                                                    --   expressions.
 findExisting maybeName path = do
-  doesDirectoryExist (path </> nodePackageDir) >>= \case
+  doesDirectoryExist (path </> nodePackagesDir) >>= \case
     False -> case maybeName of
       Just name -> errorC [
         "Path ", pathToText path, " does not exist or does not ",
-        "contain a `", pathToText nodePackageDir, "` folder"]
+        "contain a `", pathToText nodePackagesDir, "` folder"]
       Nothing -> return mempty
-    True -> withDir (path </> nodePackageDir) $ do
+    True -> withDir (path </> nodePackagesDir) $ do
       let wrapper = maybe FromOutput FromExtension maybeName
       putStrsLn ["Searching for existing expressions in ", pathToText path,
                  "..."]
@@ -124,19 +130,45 @@ preloadPackages = do
     resolved = pmMap toFullyDefined all <> resolved s
     }
 
+-- | Initialize an output directory from scratch. This means:
+-- * Creating a .nixfromnpm-version file storing the current version.
+-- * Copying over the nix node libraries that nixfromnpm provides.
+-- * Creating a default.nix file.
+-- * Creating a nodePackages folder.
+initializeOutput :: NpmFetcher ()
+initializeOutput = do
+  outputPath <- asks nfsOutputPath
+  extensions <- asks nfsExtendPaths
+  createDirectoryIfMissing outputPath
+  withDir outputPath $ do
+    putStrsLn ["Initializing  ", pathToText outputPath]
+    version <- case fromHaskellVersion Paths_nixfromnpm.version of
+      Left err -> fatal err
+      Right v -> return v
+    writeFile ".nixfromnpm-version" $ renderSV version
+    case H.keys extensions of
+      [] -> do -- Then we are creating a new root.
+        writeNix "default.nix" rootDefaultNix
+        putStrsLn ["Generating node libraries in ", pathToText outputPath]
+        pth <- getDataFileName "nix-libs"
+        shelly $ do
+          cp_r (pth </> "buildNodePackage") outputPath
+          cp_r (pth </> "nodeLib") outputPath
+      (extName:_) -> do -- Then we are extending things.
+        writeNix "default.nix" $ defaultNixExtending extName extensions
+
+writeNix :: MonadIO io => FilePath -> NExpr -> io ()
+writeNix path = writeFile path . show . prettyNix
+
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 --   and the names/paths to the libraries being extended.
-dumpPkgs :: (MonadIO m, MonadBaseControl IO m)
-         => FilePath               -- ^ Path to output directory.
-         -> PackageMap NExpr -- ^ New packages being written.
-         -> Record FilePath        -- ^ Libraries being extended.
-         -> m ()   -- ^ Generated expressions.
-dumpPkgs path' newPackages extensions = do
-  let path = path' </> nodePackageDir
-  -- If there aren't any new packages, we can stop here.
-  if H.null newPackages
-    then putStrLn "No new packages created." >> return ()
-    else do
+writeNewPackages :: NpmFetcher ()
+writeNewPackages = takeNewPackages <$> gets resolved >>= \case
+  newPackages
+    | H.null newPackages -> putStrLn "No new packages created."
+    | otherwise -> do
+      outputPath <- asks nfsOutputPath
+      let path = outputPath </> nodePackagesDir
       putStrsLn ["Creating new packages at ", pathToText path]
       createDirectoryIfMissing path
       withDir path $ do
@@ -149,7 +181,7 @@ dumpPkgs path' newPackages extensions = do
             forM_ (H.toList pkgVers) $ \(ver, expr) -> do
               let fullPath = subdir </> toDotNix ver
               putStrsLn ["Writing package file at ", pathToText fullPath]
-              writeFile (toDotNix ver) $ show $ prettyNix expr
+              writeNix (toDotNix ver) expr
             -- Remove the `latest.nix` symlink if it exists.
             whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
             -- Grab the latest version and create a symlink `latest.nix`
@@ -160,34 +192,6 @@ dumpPkgs path' newPackages extensions = do
                     Right ver -> Just ver -- return the version
             allVersions <- catMaybes . map convert <$> getDirectoryContents "."
             createSymbolicLink (toDotNix $ maximum allVersions) "latest.nix"
-  withDir path' $ do
-    -- Write the default.nix file for the library.
-    fullPath <- (</> "default.nix") <$> getCurrentDirectory
-    let defaultNix = mkTopDefaultNix extensions
-    when (H.null extensions) $ do
-      putStrsLn ["Generating node libraries in ", pathToText path']
-      pth <- getDataFileName "nix-libs"
-      shelly $ do
-        cp_r (pth </> "buildNodePackage") path'
-        cp_r (pth </> "nodeLib") path'
-    when (not $ H.null extensions) $ do
-      putStrLn "yeeeeeeeeeeeeeeeeeees?"
-    putStrsLn ["Writing top-level file at ", pathToText fullPath]
-    writeFile "default.nix" $ show $ prettyNix defaultNix
-
--- | Given a set of fetched packages, generates the expressions needed to
--- build that package and writes them to disk.
-dumpPackages :: NpmFetcher ()       -- ^ Writes files to a folder.
-dumpPackages = do
-  path <- asks nfsOutputPath
-  packages <- gets resolved
-  let new = takeNewPackages packages
-  dumpPkgs path new =<< asks nfsExtendPaths
-  -- All of the packages we dumped are no longer new, so we can update them.
-  forM_ (H.toList new) $ \(name, versionMap) ->
-    forM (H.toList versionMap) $ \(version, expr) ->
-       addPackage name version (FromExistingInOutput expr)
-
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
@@ -210,11 +214,10 @@ dumpFromPkgJson path = do
             Just (FromExistingInExtension extName _) -> do
               extendPaths <- asks nfsExtendPaths
               return (extendPaths H.! extName)
-          let fullPath = basePath </> fromText name </> toDotNix version
-              nixexpr = mkPkgJsonDefaultNix fullPath
           defNixPath <- map (</> "default.nix") getCurrentDirectory
           putStrsLn ["Writing package nix file at ", pathToText defNixPath]
-          writeFile "default.nix" $ show $ prettyNix nixexpr
+          let fullPath = basePath </> fromText name </> toDotNix version
+          writeNix "default.nix" $ mkPkgJsonDefaultNix fullPath
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
@@ -229,13 +232,14 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     }
   runNpmFetchWith settings startState $ do
     preloadPackages
+    initializeOutput
     forM nfnoPkgNames $ \(name, range) -> do
       resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
           putStrsLn ["Failed to build ", name, "@", pshow range, ": ", pshow e]
           return (0, 0, 0, [])
-      dumpPackages
+      writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
-      dumpPackages
+      writeNewPackages
   return ()

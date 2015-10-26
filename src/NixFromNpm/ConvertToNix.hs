@@ -128,34 +128,36 @@ defaultInherits = [Inherit Nothing $ map mkSelector ["pkgs", "nodejsVersion"]]
 
 -- | The name of the subfolder within the output directory that
 -- contains node packages.
-nodePackageDir :: FilePath
-nodePackageDir = "nodePackages"
+nodePackagesDir :: FilePath
+nodePackagesDir = "nodePackages"
+
+bindRootPath :: Binding NExpr
+bindRootPath = "rootPath" `bindTo` mkPath ("./" </> nodePackagesDir)
+
+-- | The root-level default.nix file, which does not have any extensions.
+rootDefaultNix :: NExpr
+rootDefaultNix = mkFunction defaultParams body where
+  nodeLibArgs = defaultInherits <> ["self" `bindTo` mkSym "nodeLib"]
+  lets = ["nodeLib" `bindTo` importWith False "./nodeLib" nodeLibArgs]
+  Success genPackages = parseNixString "nodeLib.generatePackages"
+  body = mkLet lets $ mkApp genPackages (mkNonRecSet [bindRootPath])
 
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
-mkTopDefaultNix :: Record FilePath -- ^ Map of extensions being included.
-                -> NExpr -- ^ A generated nix expression.
-mkTopDefaultNix extensions = do
-  let
-    bindRootPath = "rootPath" `bindTo` mkPath ("./" </> nodePackageDir)
-    (lets, args, genPkgs) = case H.keys extensions of
-      [] -> do -- This is a root-level package
-        (["nodeLib" `bindTo`
-            importWith False "./nodeLib"
-              (defaultInherits <> ["self" `bindTo` mkSym "nodeLib"])],
-         [bindRootPath],
-         "nodeLib.generatePackages")
-      (extName:_) -> do
-        (-- Map over the expression map, creating a binding for each pair.
-         flip map (H.toList extensions) $ \(name, path) -> do
-           -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
-           name `bindTo` importWith False path defaultInherits,
-         [bindRootPath, "extensions" `bindTo`
-                          mkList (map mkSym (H.keys extensions))],
-         extName <> ".nodeLib.generatePackages")
+defaultNixExtending :: Name -- ^ Name of first extension.
+                    -> Record FilePath -- ^ Extensions being included.
+                    -> NExpr -- ^ A generated nix expression.
+defaultNixExtending extName extensions = do
+  mkFunction defaultParams body where
+    -- Map over the expression map, creating a binding for each pair.
+    lets = flip map (H.toList extensions) $ \(name, path) -> do
+      -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
+      name `bindTo` importWith False path defaultInherits
+    args = [bindRootPath, "extensions" `bindTo`
+              mkList (map mkSym (H.keys extensions))]
+    genPkgs = extName <> ".nodeLib.generatePackages"
     Success generatePackages = parseNixString (unpack genPkgs)
     body = mkLet lets $ mkApp generatePackages (mkNonRecSet args)
-  mkFunction defaultParams body
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
