@@ -91,6 +91,8 @@ data BrokenPackageReason
   | Reason String
   | GithubError GithubError
   | NotYetImplemented String
+  | UnsatisfiedDependency Name -- This should never happen, but in case
+  | BrokenDependency Name BrokenPackageReason
   deriving (Show, Eq, Typeable)
 
 instance Exception BrokenPackageReason

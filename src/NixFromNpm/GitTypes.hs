@@ -35,7 +35,7 @@ data GitRef
   | BranchName Name
   | TagName Name
   | CommitHash Text
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 refText :: GitRef -> Text
 refText (SomeRef r) = r

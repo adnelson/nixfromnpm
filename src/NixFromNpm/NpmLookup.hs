@@ -16,6 +16,8 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
+import Data.Map (Map)
+import qualified Data.Map as M
 import Numeric (showHex)
 import System.IO.Temp (openTempFile, createTempDirectory)
 
@@ -87,21 +89,36 @@ data NpmFetcherSettings = NpmFetcherSettings {
 
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
-  -- | Set of all of the packages that we have fully resolved.
   resolved :: PackageMap FullyDefinedPackage,
-  -- | Set of all of the package info objects that we have fetched for
-  -- a particular package.
+  -- ^ Set of all of the packages that we have fully resolved.
   pkgInfos :: Record PackageInfo,
-  -- | For cycle detection.
-  currentlyResolving :: PackageMap (),
-  -- | Stack of packages that we are resolving so we can get the path to the
+  -- ^ Set of all of the package info objects that we have fetched for
+  -- a particular package.
+  currentlyResolving :: PackageSet,
+  -- ^ For cycle detection.
+  packageStackTrace :: [(Name, SemVer)],
+  -- ^ Stack of packages that we are resolving so we can get the path to the
   -- current package.
-  packageStackTrace :: [(Name, SemVer)]
-  -- | Depth to which we should fetch dev dependencies. If this value is
-  -- non-zero, dev dependencies will be fetched with this value decremented.
-  -- Otherwise, dev dependencies will not be fetched.
-  -- devDependencyDepth :: Int
+  brokenPackages :: Record (Map NpmVersionRange BrokenPackageReport)
+  -- ^ Record of broken packages.
   }
+
+-- | The report of a broken package; stores why a package broke, and of what
+-- package the package was a dependency.
+data BrokenPackageReport = BrokenPackageReport {
+  bprDependencyOf :: PackageSet,
+  -- ^ Which packages depend on this.
+  bprReason :: BrokenPackageReason
+  -- ^ Reason why it broke.
+  } deriving (Eq, Show)
+
+-- instance Show BrokenPackageReport where
+--   show BrokenPackageReport{..} = do
+--     let depsOf = unpack $ showPairs $ psToList bprDependencyOf
+--     unlines $ catMaybes [
+--       maybeIf (not $ H.null bprDependencyOf) ("Dependency of: " <> depsOf),
+--       Just $ show bprReason
+--       ]
 
 -- | The monad for fetching from NPM.
 type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
@@ -442,28 +459,93 @@ toGithubUri uri = case uriAuthority uri of
     return $ Just $ makeGithubTarballURI owner repo sha
   _ -> return Nothing
 
+-- | Look up a name and version range to see if we have recorded this as being
+-- broken.
+getBroken :: Name -> NpmVersionRange -> NpmFetcher (Maybe BrokenPackageReport)
+getBroken name range = H.lookup name <$> gets brokenPackages >>= \case
+  Nothing -> return Nothing
+  Just brokenMap -> return $ M.lookup range brokenMap
+
+-- | Reports a new broken package.
+addBroken :: Name
+          -> NpmVersionRange
+          -> BrokenPackageReason
+          -> NpmFetcher ()
+addBroken name range why = do
+  broken <- gets brokenPackages
+  let -- Get a map of version ranges to reports for this package.
+      reports = H.lookupDefault mempty name broken
+      -- Get the existing report if it's there; otherwise create one.
+      report = case M.lookup range reports of
+        Nothing -> BrokenPackageReport mempty why
+        Just rep -> rep
+      newBroken = H.insert name (M.insert range report reports) broken
+  modify $ \s -> s {brokenPackages = newBroken}
+
+-- | Records a dependency for a broken package. Assumes the package already
+-- exists in the broken package set; fails otherwise.
+addReport :: Name -- ^ Name of the broken package.
+          -> NpmVersionRange -- ^ Version range of the broken package.
+          -> Name -- ^ Name of the depending package.
+          -> SemVer -- ^ Version of the depending package.
+          -> NpmFetcher () -- ^ Insert it into the broken package set.
+addReport name range depOfName depOfVersion = do
+  update <- H.lookup name <$> gets brokenPackages >>= \case
+     Nothing -> fatal "No report exists for this package"
+     Just reports -> case M.lookup range reports of
+       Nothing -> fatal "No report exists for this package"
+       Just rep -> do
+         let depSet = psInsert depOfName depOfVersion (bprDependencyOf rep)
+             rep' = rep {bprDependencyOf = depSet}
+             reports' = M.insert range rep' reports
+         return $ H.insert name reports'
+  modify $ \s -> s {brokenPackages = update (brokenPackages s)}
+
 -- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
 -- figure out how to resolve the dependency.
 resolveNpmVersionRange :: Name -- ^ Name of the package.
                        -> NpmVersionRange -- ^ Version bounds of the package.
-                       -> NpmFetcher SemVer -- ^ Dependency.
-resolveNpmVersionRange name range = case range of
-  SemVerRange svr -> resolveDep name svr
-  NpmUri uri -> toGithubUri uri >>= \case
-    Just githubUri -> fetchGithub githubUri
-    Nothing -> case uriScheme uri of
-      s | "http" `isPrefixOf` s -> fetchHttp "package" uri
-        | "git" `isPrefixOf` s -> fetchArbitraryGit uri
-        | otherwise -> throw $ UnsupportedUriScheme s
-  GitId src owner repo rev -> case src of
-    Github -> do
-      sha <- gitRefToSha owner repo =<< case rev of
-               Nothing -> getDefaultBranch owner repo
-               Just r -> return r
-      fetchGithub $ makeGithubTarballURI owner repo sha
-    _ -> throw $ UnsupportedGitSource src
-  Tag tag -> resolveByTag tag name
-  vr -> throw $ UnsupportedVersionType range
+                       -> NpmFetcher ResolvedDependency
+                       -- ^ Resolved version, or an error.
+resolveNpmVersionRange pkgName pkgRange = do
+  -- | We need to see if the package has been marked as broken first.
+  getBroken pkgName pkgRange >>= \case
+    -- If it's not broken, we can proceed normally here, and catch an error
+    -- if it breaks.
+    Nothing -> do
+      (Resolved <$> _resolveNpmVersionRange pkgName pkgRange)
+        `catches` [
+        Handler (\reason -> do
+                     addBroken pkgName pkgRange reason
+                     return $ Broken reason),
+        Handler (\(e::GithubError) -> do
+                     addBroken pkgName pkgRange $ GithubError e
+                     return $ Broken $ Reason $ show e)
+        ]
+    -- If it is already marked as broken, we add the upstream name and
+    -- version to the set of packages depending on this broken dependency.
+    Just report -> return $ Broken (bprReason report)
+
+_resolveNpmVersionRange :: Name
+                        -> NpmVersionRange
+                        -> NpmFetcher SemVer
+_resolveNpmVersionRange name range = case range of
+    SemVerRange svr -> resolveDep name svr
+    NpmUri uri -> toGithubUri uri >>= \case
+      Just githubUri -> fetchGithub githubUri
+      Nothing -> case uriScheme uri of
+        s | "http" `isPrefixOf` s -> fetchHttp "package" uri
+          | "git" `isPrefixOf` s -> fetchArbitraryGit uri
+          | otherwise -> throw $ UnsupportedUriScheme s
+    GitId src owner repo rev -> case src of
+      Github -> do
+        sha <- gitRefToSha owner repo =<< case rev of
+                 Nothing -> getDefaultBranch owner repo
+                 Just r -> return r
+        fetchGithub $ makeGithubTarballURI owner repo sha
+      _ -> throw $ UnsupportedGitSource src
+    Tag tag -> resolveByTag tag name
+    vr -> throw $ UnsupportedVersionType range
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
@@ -534,21 +616,15 @@ recurOn name version deptype deps =
       putStrsLn [name, " version ", renderSV version, " has ",
                  descPlural, ": ", showDeps depList]
     forM depList $ \(depName, depRange) -> do
-      -- In case something fails...
-      let failedWarning reason = warns ["Failed to fetch dependency ", depName,
-                                        " version ", pshow depRange, ": ",
-                                        pshow reason]
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair name version]
-      result <- (Resolved <$> resolveNpmVersionRange depName depRange)
-                `catches` [
-                  Handler (\reason -> do
-                            failedWarning reason
-                            return $ Broken reason),
-                  Handler (\(e::GithubError) -> do
-                            failedWarning e
-                            return $ Broken $ Reason $ show e)
-                  ]
+      result <- resolveNpmVersionRange depName depRange
+      case result of
+        Broken reason -> do
+          warns ["Failed to fetch dependency ", depName, " version ",
+                 pshow depRange, ": ", pshow reason]
+          addReport depName depRange name version
+        _ -> return ()
       return (depName, result)
 
 -- | Current depth, which is 0 if we're at the top level (in which case the
@@ -640,7 +716,8 @@ startState = do
     resolved = mempty,
     packageStackTrace = [],
     pkgInfos = H.empty,
-    currentlyResolving = mempty
+    currentlyResolving = mempty,
+    brokenPackages = mempty
     }
 
 runNpmFetchWith :: NpmFetcherSettings
@@ -648,9 +725,10 @@ runNpmFetchWith :: NpmFetcherSettings
                 -> NpmFetcher a
                 -> IO (a, NpmFetcherState)
 runNpmFetchWith settings state action = do
-  (result, newState, _) <- runRWST action settings state
-  return (result, newState)
+  (result, state', _) <- runRWST action settings state
+  return (result, state')
 
 runIt :: NpmFetcher a -> IO a
 runIt action = do
-  fst <$> runNpmFetchWith defaultSettings startState action
+  (res, _) <- runNpmFetchWith defaultSettings startState action
+  return res
