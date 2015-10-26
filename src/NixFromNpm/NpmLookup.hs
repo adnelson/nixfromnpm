@@ -205,6 +205,20 @@ addPackage name version pkg = do
     resolved = pmInsert name version pkg (resolved s)
     }
 
+rmPackage :: Name -> SemVer -> NpmFetcher ()
+rmPackage name version = do
+  modify $ \s -> s { resolved = pmDelete name version (resolved s)}
+
+withoutPackage :: Name -> SemVer -> NpmFetcher a -> NpmFetcher a
+withoutPackage name version action = do
+  existing <- pmLookup name version <$> gets resolved
+  rmPackage name version
+  result <- action
+  case existing of
+    Nothing -> return ()
+    Just pkg -> addPackage name version pkg
+  return result
+
 -- | Get the hex sha256 of a bytestring.
 hexSha256 :: BL8.ByteString -> Shasum
 hexSha256 = SHA256 . pack . showDigest . sha256
@@ -346,7 +360,7 @@ fetchHttp subpath uri = do
   let dist = DistInfo {diUrl = uriToText uri,
                        diShasum = hash}
   -- Add the dist information to the version info and resolve it.
-  resolveVersionInfo $ versionInfo {viDist = Just dist}
+  versionInfoToSemVer $ versionInfo {viDist = Just dist}
 
 -- | Send a curl to github with some extra headers set.
 githubCurl :: FromJSON a => URI -> NpmFetcher a
@@ -639,33 +653,39 @@ shouldFetchDevs = (<) <$> currentDepth <*> asks nfsMaxDevDepth
 -- | A VersionInfo is an abstraction of an NPM package. This will resolve
 -- the version info into an actual package (recurring on the dependencies)
 -- and add it to the resolved package map.
-resolveVersionInfo :: VersionInfo -> NpmFetcher SemVer
+resolveVersionInfo :: VersionInfo -> NpmFetcher (ResolvedPkg, SemVer)
 resolveVersionInfo VersionInfo{..} = do
   let recurOn' = recurOn viName viVersion
+  startResolving viName viVersion
+  deps <- recurOn' Dependency viDependencies
+  devDeps <- do
+    shouldFetch <- shouldFetchDevs
+    case shouldFetch || H.null viDevDependencies of
+      True -> Just <$> recurOn' DevDependency viDevDependencies
+      False -> return Nothing
+  finishResolving viName viVersion
+  let rPkg = ResolvedPkg {
+      rpName = viName,
+      rpVersion = viVersion,
+      rpDistInfo = viDist,
+      rpMeta = viMeta,
+      rpDependencies = deps,
+      rpDevDependencies = devDeps
+      }
+  -- Store this version's info.
+  addPackage viName viVersion $ NewPackage rPkg
+  return (rPkg, viVersion)
+
+versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
+versionInfoToResolved = map fst . resolveVersionInfo
+
+versionInfoToSemVer :: VersionInfo -> NpmFetcher SemVer
+versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
     True -> do -- This is a cycle: allowed for dev dependencies, but we
                -- don't want to loop infinitely so we just return.
-               putStrLn "uh oh"
                return viVersion
-    False -> do
-      startResolving viName viVersion
-      deps <- recurOn' Dependency viDependencies
-      devDeps <- do
-        shouldFetch <- shouldFetchDevs
-        case shouldFetch || H.null viDevDependencies of
-          True -> Just <$> recurOn' DevDependency viDevDependencies
-          False -> return Nothing
-      finishResolving viName viVersion
-      -- Store this version's info.
-      addPackage viName viVersion $ NewPackage $ ResolvedPkg {
-          rpName = viName,
-          rpVersion = viVersion,
-          rpDistInfo = viDist,
-          rpMeta = viMeta,
-          rpDependencies = deps,
-          rpDevDependencies = devDeps
-        }
-      return viVersion
+    False -> snd <$> resolveVersionInfo vInfo
 
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: Name -> SemVerRange -> NpmFetcher SemVer
@@ -682,7 +702,7 @@ _resolveDep name range = do
     [] -> throw (NoMatchingVersion $ SemVerRange range)
     matches -> do
       let versionInfo = notCurrent H.! maximum matches
-      resolveVersionInfo versionInfo
+      versionInfoToSemVer versionInfo
 
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.
@@ -696,7 +716,7 @@ resolveByTag tag pkgName = do
       Nothing -> errorC ["Tag ", tag, " points to version ",
                          renderSV version, ", but no such version of ",
                          pkgName, " exists."]
-      Just versionInfo -> resolveVersionInfo versionInfo
+      Just versionInfo -> versionInfoToSemVer versionInfo
 
 defaultSettings :: NpmFetcherSettings
 defaultSettings = NpmFetcherSettings {

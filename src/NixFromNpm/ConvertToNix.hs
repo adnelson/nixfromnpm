@@ -53,7 +53,7 @@ str = mkStr DoubleQuoted
 
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe DistInfo -> NExpr
-distInfoToNix Nothing = mkPath "./."
+distInfoToNix Nothing = Nix.mkPath False "./."
 distInfoToNix (Just DistInfo{..}) = do
   let Success fetchurl = parseNixString "pkgs.fetchurl"
       (algo, hash) = case diShasum of
@@ -163,8 +163,8 @@ defaultNixExtending extName extensions = do
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
-mkPkgJsonDefaultNix :: FilePath -> NExpr
-mkPkgJsonDefaultNix path = do
+packageJsonDefaultNix :: FilePath -> NExpr
+packageJsonDefaultNix path = do
   mkFunction defaultParams $ importWith False path defaultInherits
 
 bindingsToMap :: [Binding t] -> Record t

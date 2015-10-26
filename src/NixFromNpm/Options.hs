@@ -36,6 +36,8 @@ data InvalidOption
   | InvalidExtensionSyntax Text
   | DuplicatedExtensionName Name FilePath FilePath
   | InvalidURI Text
+  | NoPackageJsonFoundAt FilePath
+  | NotPathToPackageJson FilePath
   deriving (Show, Eq, Typeable)
 
 instance Exception InvalidOption
@@ -75,32 +77,30 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoGithubToken :: Maybe ByteString -- ^ Github authentication token.
   } deriving (Show, Eq)
 
+type Validator = ReaderT FilePath IO
+
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
-
-parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
-parseNameAndRange name = case T.split (== '@') name of
-  [name] -> return (name, SemVerRange anyVersion)
-  [name, range] -> case parseNpmVersionRange range of
-    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
-    Right nrange -> return (name, nrange)
 
 -- | Validates an extension folder. The folder must exist, and must contain
 -- a default.nix and a node packages directory, and a .nixfromnpm-version file
 -- which indicates the version of nixfromnpm used to build it.
-validateExtension :: MonadIO io => FilePath -> io FilePath
-validateExtension path = do
+validateExtension :: FilePath -> Validator FilePath
+validateExtension = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
   assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
   assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
   return path
 
+absPath :: FilePath -> Validator FilePath
+absPath path = (</> path) <$> ask
+
 -- | Validate an output folder. An output folder EITHER must not exist, but
 -- its parent directory does and is writable, OR it does exist, is writable,
 -- and follows the extension format.
-validateOutput :: MonadIO io => FilePath -> io FilePath
-validateOutput path = do
+validateOutput :: FilePath -> Validator FilePath
+validateOutput = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   doesDirectoryExist path >>= \case
     True -> do assert' (isWritable path) OutputNotWritable
@@ -114,45 +114,61 @@ validateOutput path = do
               OutputParentNotWritable
       return path
 
+validateJsPkg :: FilePath -> Validator FilePath
+validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
+  -- If it is a directory, it must be writable and contain a package.json file.
+  True -> do assert (isWritable path) OutputNotWritable
+             assert (doesFileExist (path </> "package.json"))
+                    (NoPackageJsonFoundAt (path </> "package.json"))
+             return path
+  -- If the path isn't a directory, it must be a "package.json" file, and
+  -- must exist, and the folder must be writable.
+  False -> do
+    assert (return $ getFilename path == "package.json")
+           (NotPathToPackageJson path)
+    assert (isWritable (parent path)) OutputNotWritable
+    assert (doesFileExist path) (NoPackageJsonFoundAt path)
+    return (parent path)
+
+parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
+parseNameAndRange name = case T.split (== '@') name of
+  [name] -> return (name, SemVerRange anyVersion)
+  [name, range] -> case parseNpmVersionRange range of
+    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
+    Right nrange -> return (name, nrange)
+
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do
   pwd <- getCurrentDirectory
-  let
-    validatePath path = do
-      let p' = pwd </> path
-      doesFileExist p' >>= \case
-        True -> errorC ["Path ", pathToText p', " is a file, not a directory"]
-        False -> doesDirectoryExist p' >>= \case
-          False -> errorC ["Path ", pathToText  p', " does not exist"]
-          True -> return p'
-  packageNames <- mapM parseNameAndRange $ roPkgNames opts
-  extendPaths <- getExtensions (roExtendPaths opts)
-  packagePaths <- mapM (validatePath . fromText) $ roPkgPaths opts
-  outputPath <- validateOutput . fromText $ roOutputPath opts
-  registries <- mapM validateUrl $ (roRegistries opts <>
-                                    if roNoDefaultRegistry opts
-                                       then []
-                                       else ["https://registry.npmjs.org"])
-  tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  return (NixFromNpmOptions {
-    nfnoOutputPath = outputPath,
-    nfnoExtendPaths = extendPaths,
-    nfnoGithubToken = roGithubToken opts <|> tokenEnv,
-    nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
-    nfnoDevDepth = roDevDepth opts,
-    nfnoTest = roTest opts,
-    nfnoTimeout = roTimeout opts,
-    nfnoPkgNames = packageNames,
-    nfnoRegistries = registries,
-    nfnoPkgPaths = packagePaths,
-    nfnoNoDefaultNix = roNoDefaultNix opts
-    })
+  flip runReaderT pwd $ do
+    packageNames <- mapM parseNameAndRange $ roPkgNames opts
+    extendPaths <- getExtensions (roExtendPaths opts)
+    packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
+    outputPath <- validateOutput . fromText $ roOutputPath opts
+    registries <- mapM validateUrl $ (roRegistries opts <>
+                                      if roNoDefaultRegistry opts
+                                      then []
+                                      else ["https://registry.npmjs.org"])
+    tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+    return (NixFromNpmOptions {
+      nfnoOutputPath = outputPath,
+      nfnoExtendPaths = extendPaths,
+      nfnoGithubToken = roGithubToken opts <|> tokenEnv,
+      nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
+      nfnoDevDepth = roDevDepth opts,
+      nfnoTest = roTest opts,
+      nfnoTimeout = roTimeout opts,
+      nfnoPkgNames = packageNames,
+      nfnoRegistries = registries,
+      nfnoPkgPaths = packagePaths,
+      nfnoNoDefaultNix = roNoDefaultNix opts
+      })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
       Nothing -> throw $ InvalidURI rawUrl
       Just uri -> return uri
     -- Parses the NAME=PATH extension directives.
-    getExtensions :: [Text] -> IO (Record FilePath)
+    getExtensions :: [Text] -> Validator (Record FilePath)
     getExtensions = foldM step mempty where
       step extensions nameEqPath = case T.split (== '=') nameEqPath of
         [name, path] -> append name path

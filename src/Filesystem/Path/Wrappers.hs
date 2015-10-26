@@ -65,8 +65,15 @@ withDir directory action = do
            (setCurrentDirectory cur)
            action
 
-takeBaseName :: FilePath -> Text
-takeBaseName = pathToText . basename
+getFilename :: FilePath -> Text
+getFilename = pathToText . filename
+
+createDirectory :: MonadIO io => FilePath -> io ()
+createDirectory = generalize Dir.createDirectory
+
+copyFile :: MonadIO io => FilePath -> FilePath -> io ()
+copyFile source target = liftIO $ Dir.copyFile (pathToString source)
+                                               (pathToString target)
 
 createDirectoryIfMissing :: MonadIO m => FilePath -> m ()
 createDirectoryIfMissing = liftIO . Dir.createDirectoryIfMissing True .
