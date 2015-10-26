@@ -30,6 +30,8 @@ fixName :: Name -> Name
 fixName = replace "." "-"
 
 -- | Converts a package name and semver into an identifier.
+-- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
+-- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
 toDepName :: Name -> SemVer -> Name
 toDepName name (a, b, c, tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags

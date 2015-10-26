@@ -82,7 +82,7 @@ rec {
       joinSets (
         map (toPackage pkgName) versionFiles ++
         optional hasLatest {
-          "${pkgName}" = callPackage
+          "${replaceDots "-" pkgName}" = callPackage
                            (/. + rootPath + "/${pkgName}/latest.nix") {};
         })));
 
