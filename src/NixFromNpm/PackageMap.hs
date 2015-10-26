@@ -11,6 +11,9 @@ import NixFromNpm.SemVer
 -- a mapping of versions to fully defined packages.
 type PackageMap pkg = Record (HashMap SemVer pkg)
 
+-- | Same thing, but the keys don't map to anything.
+type PackageSet = PackageMap ()
+
 -- | Map a function across a PackageMap.
 pmMap :: (a -> b) -> PackageMap a -> PackageMap b
 pmMap f = H.map (H.map f)
@@ -20,6 +23,27 @@ pmInsert :: Name -> SemVer -> a -> PackageMap a -> PackageMap a
 pmInsert name version val pmap = do
   let existing = H.lookupDefault mempty name pmap
   H.insert name (H.insert version val existing) pmap
+
+-- | Insert into a PackageSet, same as inserting () into a map.
+psInsert :: Name -> SemVer -> PackageSet -> PackageSet
+psInsert name version = pmInsert name version ()
+
+-- | Create a singleton package map.
+pmSingleton :: Name -> SemVer -> a -> PackageMap a
+pmSingleton name version x = H.singleton name (H.singleton version x)
+
+-- | Create a singleton package set.
+psSingleton :: Name -> SemVer -> PackageSet
+psSingleton name version = pmSingleton name version ()
+
+-- | Make a list of package pairs.
+psToList :: PackageSet -> [(Name, SemVer)]
+psToList packageSet = do
+  let keysOnly :: Record [SemVer]
+      keysOnly = H.map H.keys packageSet
+      toPairs :: (Name, [SemVer]) -> [(Name, SemVer)]
+      toPairs (name, versions) = zip (repeat name) versions
+  concatMap toPairs $ H.toList keysOnly
 
 -- | Remove a value from a package map under the given name and version.
 pmDelete :: Name -> SemVer -> PackageMap a -> PackageMap a

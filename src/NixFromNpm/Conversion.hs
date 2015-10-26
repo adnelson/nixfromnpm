@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Printf (printf)
 import Shelly (shelly, cp_r)
-
+import System.Exit
 
 import qualified Paths_nixfromnpm
 import NixFromNpm.Common
@@ -32,26 +32,22 @@ import NixFromNpm.Options
 import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
-import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap)
+import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap, psToList)
 import NixFromNpm.NpmLookup (FullyDefinedPackage(..),
                              NpmFetcher(..),
                              NpmFetcherSettings(..),
                              NpmFetcherState(..),
+                             BrokenPackageReport(..),
+                             getBroken, addBroken,
                              addPackage,
                              toFullyDefined,
                              startState,
                              runNpmFetchWith,
-                             resolveNpmVersionRange,
+                             _resolveNpmVersionRange,
                              resolveVersionInfo,
                              extractPkgJson,
                              defaultSettings,
                              PreExistingPackage(..))
-
-data ConversionError
-  = NoPackagesGenerated
-  | FolderDoesNotExist FilePath
-  | FileDoesNotExist FilePath
-  deriving (Show, Eq, Typeable)
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 -- However, the only packages that we want to write are the new ones; that
@@ -219,7 +215,53 @@ dumpFromPkgJson path = do
           let fullPath = basePath </> fromText name </> toDotNix version
           writeNix "default.nix" $ mkPkgJsonDefaultNix fullPath
 
-dumpPkgFromOptions :: NixFromNpmOptions -> IO ()
+-- | Show all of the broken packages.
+showBrokens :: NpmFetcher ()
+showBrokens = H.toList <$> gets brokenPackages >>= \case
+  [] -> return ()
+  brokens -> do
+    putStrsLn ["Failed to generate expressions for ", pshow (length brokens),
+               " downstream dependencies."]
+    forM_ brokens $ \(name, rangeMap) -> do
+      forM_ (M.toList rangeMap) $ \(range, report) -> do
+        putStrLn $ showRangePair name range
+        let deps = bprDependencyOf report
+        when (H.size deps > 0) $ do
+          putStrsLn ["Dependency of: ", showPairs $ psToList deps]
+        putStrsLn ["Failed to build because: ", pshow (bprReason report)]
+
+-- | See if any of the top-level packages failed to build, and return a
+-- non-ero status if they did.
+checkForBroken :: [(Name, NpmVersionRange)] -> NpmFetcher ExitCode
+checkForBroken inputs = do
+  let findBrokens [] = return []
+      findBrokens ((name, range):others) = getBroken name range >>= \case
+        Nothing -> findBrokens others
+        Just report -> ((name, range, report) :) <$> findBrokens others
+  findBrokens inputs >>= \case
+    [] -> putStrLn "All packages built successfuly." >> return ExitSuccess
+    pkgs -> do
+      putStrLn "The following packages failed to build:"
+      forM_ pkgs $ \(name, range, report) -> do
+        putStrLn $ showRangePair name range
+        putStrsLn ["Failed because: ", pshow $ bprReason report]
+      return $ ExitFailure 1
+
+-- | Traverses down a dependency tree, seeing if the dependencies of a package
+-- are broken.
+checkPackage :: ResolvedPkg -> NpmFetcher (Maybe BrokenPackageReason)
+checkPackage ResolvedPkg{..} = go (H.toList rpDependencies) where
+  go [] = return Nothing -- all done!
+  go ((name, Broken reason):_) = return $ Just (BrokenDependency name reason)
+  go ((name, Resolved ver):rest) = do
+    pmLookup name ver <$> gets resolved >>= \case
+      Nothing -> return $ Just (UnsatisfiedDependency name)
+      Just (NewPackage rpkg) -> checkPackage rpkg >>= \case
+        Nothing -> go rest
+        Just err -> return $ Just err
+      Just _ -> go rest
+
+dumpPkgFromOptions :: NixFromNpmOptions -> IO ExitCode
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   let settings = defaultSettings {
     nfsGithubAuthToken = nfnoGithubToken,
@@ -230,16 +272,19 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsMaxDevDepth = nfnoDevDepth,
     nfsCacheDepth = nfnoCacheDepth
     }
-  runNpmFetchWith settings startState $ do
+  (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages
     initializeOutput
     forM nfnoPkgNames $ \(name, range) -> do
-      resolveNpmVersionRange name range
+      _resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
-          putStrsLn ["Failed to build ", name, "@", pshow range, ": ", pshow e]
+          warns ["Failed to build ", name, "@", pshow range, ": ", pshow e]
+          addBroken name range (Reason $ show e)
           return (0, 0, 0, [])
       writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
       writeNewPackages
-  return ()
+    showBrokens
+    checkForBroken nfnoPkgNames
+  return status

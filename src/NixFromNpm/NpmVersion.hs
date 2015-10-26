@@ -10,7 +10,7 @@ import NixFromNpm.SemVer
 import NixFromNpm.GitTypes hiding (Tag)
 import NixFromNpm.Parsers.Common (ParseError)
 
-data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq)
+data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq, Ord)
 
 data NpmVersionRange
   = SemVerRange SemVerRange
@@ -18,7 +18,7 @@ data NpmVersionRange
   | NpmUri URI
   | GitId GitSource Name Name (Maybe GitRef)
   | LocalPath FilePath
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 
 data NpmVersionError
@@ -42,6 +42,9 @@ instance Show NpmVersionRange where
 
 showPair :: Name -> SemVer -> Text
 showPair name version = name <> "@" <> renderSV version
+
+showPairs :: [(Name, SemVer)] -> Text
+showPairs = mapJoinBy ", " (uncurry showPair)
 
 showRangePair :: Name -> NpmVersionRange -> Text
 showRangePair name range = name <> "@" <> pshow range

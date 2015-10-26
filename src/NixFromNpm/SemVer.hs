@@ -33,7 +33,7 @@ data SemVerRange
   | Leq SemVer                  -- ^ Less than or equal to
   | And SemVerRange SemVerRange -- ^ Conjunction
   | Or SemVerRange SemVerRange  -- ^ Disjunction
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 -- | Create a SemVer with no version tags.
 semver :: Int -> Int -> Int -> SemVer
