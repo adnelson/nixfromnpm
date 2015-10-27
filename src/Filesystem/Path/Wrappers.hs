@@ -3,7 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Filesystem.Path.Wrappers where
 
-import ClassyPrelude hiding (FilePath, unpack)
+import ClassyPrelude hiding (FilePath, unpack, (</>))
 import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
 import System.Directory (Permissions(..))
@@ -117,3 +117,6 @@ getPermissions = generalize Dir.getPermissions
 
 isWritable :: MonadIO io => FilePath -> io Bool
 isWritable = map writable . getPermissions
+
+absPath :: MonadIO io => FilePath -> io FilePath
+absPath path = (</> path) <$> getCurrentDirectory

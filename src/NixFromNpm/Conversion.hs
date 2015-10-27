@@ -23,6 +23,7 @@ import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
 import NixFromNpm.ConvertToNix (toDotNix,
+                                writeNix,
                                 rootDefaultNix,
                                 defaultNixExtending,
                                 packageJsonDefaultNix,
@@ -124,6 +125,7 @@ initializeOutput = do
   createDirectoryIfMissing outputPath
   withDir outputPath $ do
     putStrsLn ["Initializing  ", pathToText outputPath]
+    createDirectoryIfMissing nodePackagesDir
     version <- case fromHaskellVersion Paths_nixfromnpm.version of
       Left err -> fatal err
       Right v -> return v
@@ -134,13 +136,12 @@ initializeOutput = do
         putStrsLn ["Generating node libraries in ", pathToText outputPath]
         pth <- getDataFileName "nix-libs"
         shelly $ do
-          cp_r (pth </> "buildNodePackage") outputPath
-          cp_r (pth </> "nodeLib") outputPath
+          whenM (not <$> doesDirectoryExist (pth </> "buildNodePackage")) $ do
+            cp_r (pth </> "buildNodePackage") outputPath
+          whenM (not <$> doesDirectoryExist (pth </> "nodeLib")) $ do
+            cp_r (pth </> "nodeLib") outputPath
       (extName:_) -> do -- Then we are extending things.
         writeNix "default.nix" $ defaultNixExtending extName extensions
-
-writeNix :: MonadIO io => FilePath -> NExpr -> io ()
-writeNix path = writeFile path . show . prettyNix
 
 updateLatestNix :: MonadIO io => io ()
 updateLatestNix = do
@@ -153,8 +154,10 @@ updateLatestNix = do
         case parseSemVer (T.dropEnd 4 $ pathToText fname) of
           Left _ -> Nothing -- not a semver, so we don't consider it
           Right ver -> Just ver -- return the version
-  allVersions <- catMaybes . map convert <$> getDirectoryContents "."
-  createSymbolicLink (toDotNix $ maximum allVersions) "latest.nix"
+  catMaybes . map convert <$> getDirectoryContents "." >>= \case
+    [] -> return ()
+    versions -> do
+      createSymbolicLink (toDotNix $ maximum versions) "latest.nix"
 
 
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
@@ -185,23 +188,11 @@ writeNewPackages :: NpmFetcher ()
 writeNewPackages = takeNewPackages <$> gets resolved >>= \case
   newPackages
     | H.null newPackages -> putStrLn "No new packages created."
-    | otherwise -> do
-      outputPath <- asks nfsOutputPath
-      let path = outputPath </> nodePackagesDir
-      putStrsLn ["Creating new packages at ", pathToText path]
-      createDirectoryIfMissing path
-      withDir path $ do
-        -- Write the .nix file for each version of this package.
-        forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
-          let subdir = path </> fromText pkgName
-          createDirectoryIfMissing subdir
-          withDir subdir $ do
-            -- Write all of the versions we have generated.
-            forM_ (H.toList pkgVers) $ \(ver, expr) -> do
-              let fullPath = subdir </> toDotNix ver
-              putStrsLn ["Writing package file at ", pathToText fullPath]
-              writeNix (toDotNix ver) expr
-          updateLatestNix
+    | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
+        forM_ (H.toList pkgVers) $ \(ver, expr) -> do
+          writePackage pkgName ver expr
+        dir <- outputDirOf pkgName
+        withDir dir updateLatestNix
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
@@ -245,7 +236,7 @@ checkForBroken inputs = do
         Nothing -> findBrokens others
         Just report -> ((name, range, report) :) <$> findBrokens others
   findBrokens inputs >>= \case
-    [] -> putStrLn "All packages built successfuly." >> return ExitSuccess
+    [] -> putStrLn "Top-level packages built successfully." >> return ExitSuccess
     pkgs -> do
       putStrLn "The following packages failed to build:"
       forM_ pkgs $ \(name, range, report) -> do
@@ -276,7 +267,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsOutputPath = nfnoOutputPath,
     nfsExtendPaths = nfnoExtendPaths,
     nfsMaxDevDepth = nfnoDevDepth,
-    nfsCacheDepth = nfnoCacheDepth
+    nfsCacheDepth = nfnoCacheDepth,
+    nfsRealTimeWrite = nfnoRealTime
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages

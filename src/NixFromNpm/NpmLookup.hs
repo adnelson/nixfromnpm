@@ -27,12 +27,15 @@ import Data.Aeson.Parser
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
-import Shelly hiding (get, (</>), trace)
+import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
+               silently)
 import Network.Curl
 import Nix.Types
 import Data.Digest.Pure.SHA (sha256, showDigest)
 
 import NixFromNpm.Common
+import NixFromNpm.ConvertToNix (resolvedPkgToNix, toDotNix, nodePackagesDir,
+                                writeNix)
 import NixFromNpm.NpmTypes
 import NixFromNpm.GitTypes as Git hiding (Tag)
 import NixFromNpm.SemVer
@@ -81,10 +84,13 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Path we're outputting generated expressions to.
   nfsMaxDevDepth :: Int,
   -- ^ Maximum dev dependency fetch depth.
-  nfsCacheDepth :: Int
+  nfsCacheDepth :: Int,
   -- ^ Depth at which to start using the cache. If this is 0, then we will
   -- always use the cache if we can. If it's 1, then the top-level package
   -- will not be cached, but lower-level packages will. Et cetera.
+  nfsRealTimeWrite :: Bool
+  -- ^ Whether to write packages in real-time as the expressions are generated,
+  -- rather than waiting until the end.
   } deriving (Show, Eq)
 
 -- | The state of the NPM fetcher.
@@ -215,7 +221,7 @@ withoutPackage name version action = do
   rmPackage name version
   result <- action
   case existing of
-    Nothing -> return ()
+    Nothing -> rmPackage name version
     Just pkg -> addPackage name version pkg
   return result
 
@@ -672,9 +678,35 @@ resolveVersionInfo VersionInfo{..} = do
       rpDependencies = deps,
       rpDevDependencies = devDeps
       }
+  -- Write to disk if real-time is enabled.
+  whenM (asks nfsRealTimeWrite) $ do
+    writePackage viName viVersion $ resolvedPkgToNix rPkg
   -- Store this version's info.
   addPackage viName viVersion $ NewPackage rPkg
   return (rPkg, viVersion)
+
+outputDirOf :: Name -- ^ Name of the package
+             -> NpmFetcher FilePath -- ^ Path to where that package's
+                                    -- nix expressions will be stored
+outputDirOf pkgName = do
+  outputDir <- asks nfsOutputPath
+  return $ outputDir </> nodePackagesDir </> fromText pkgName
+
+dotNixPathOf :: Name -- ^ Name of package
+             -> SemVer -- ^ Version of package
+             -> NpmFetcher FilePath
+dotNixPathOf name version = do
+  dir <- outputDirOf name
+  return $ dir </> toDotNix version
+
+-- | Write a resolved package to disk.
+writePackage :: Name -> SemVer -> NExpr -> NpmFetcher ()
+writePackage name version expr = do
+  dirPath <- outputDirOf name
+  dotNixPath <- dotNixPathOf name version
+  createDirectoryIfMissing dirPath
+  putStrsLn ["Writing package file at ", pathToText dotNixPath]
+  writeNix dotNixPath expr
 
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
@@ -694,9 +726,9 @@ _resolveDep name range = do
   pInfo <- getPackageInfo name
   current <- gets currentlyResolving
   -- Filter out packages currently being evaluated.
-  let notCurrent = case H.lookup name current of
-        Nothing -> piVersions pInfo
-        Just cur -> H.difference (piVersions pInfo) cur
+  let notCurrent = piVersions pInfo -- case H.lookup name current of
+--        Nothing -> piVersions pInfo
+--        Just cur -> H.difference (piVersions pInfo) cur
   -- Choose the entry with the highest version that matches the range.
   case filter (matches range) $ H.keys notCurrent of
     [] -> throw (NoMatchingVersion $ SemVerRange range)
@@ -727,7 +759,8 @@ defaultSettings = NpmFetcherSettings {
   nfsExtendPaths = mempty,
   nfsMaxDevDepth = 1,
   nfsCacheDepth = 0,
-  nfsRetries = 1 -- ^ Retry once
+  nfsRetries = 1,
+  nfsRealTimeWrite = False
   }
 
 startState :: NpmFetcherState

@@ -57,7 +57,8 @@ data RawOptions = RawOptions {
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
   roGithubToken :: Maybe ByteString, -- ^ Github authentication token.
-  roNoDefaultRegistry :: Bool -- ^ Disable fetching from npmjs.org.
+  roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
+  roRealTime :: Bool -- ^ Write packages to disk as they are written.
 } deriving (Show, Eq)
 
 -- | Various options we have available for nixfromnpm. Validated
@@ -74,10 +75,9 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
-  nfnoGithubToken :: Maybe ByteString -- ^ Github authentication token.
+  nfnoGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  nfnoRealTime :: Bool -- ^ Write packages to disk as they are written.
   } deriving (Show, Eq)
-
-type Validator = ReaderT FilePath IO
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
@@ -85,7 +85,7 @@ textOption opts = pack <$> strOption opts
 -- | Validates an extension folder. The folder must exist, and must contain
 -- a default.nix and a node packages directory, and a .nixfromnpm-version file
 -- which indicates the version of nixfromnpm used to build it.
-validateExtension :: FilePath -> Validator FilePath
+validateExtension :: FilePath -> IO FilePath
 validateExtension = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
@@ -93,18 +93,14 @@ validateExtension = absPath >=> \path -> do
   assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
   return path
 
-absPath :: FilePath -> Validator FilePath
-absPath path = (</> path) <$> ask
-
 -- | Validate an output folder. An output folder EITHER must not exist, but
 -- its parent directory does and is writable, OR it does exist, is writable,
 -- and follows the extension format.
-validateOutput :: FilePath -> Validator FilePath
+validateOutput :: FilePath -> IO FilePath
 validateOutput = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   doesDirectoryExist path >>= \case
     True -> do assert' (isWritable path) OutputNotWritable
-               putStrLn "hey"
                validateExtension path
     False -> do
       let parentPath = parent path
@@ -114,7 +110,7 @@ validateOutput = absPath >=> \path -> do
               OutputParentNotWritable
       return path
 
-validateJsPkg :: FilePath -> Validator FilePath
+validateJsPkg :: FilePath -> IO FilePath
 validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
   -- If it is a directory, it must be writable and contain a package.json file.
   True -> do assert (isWritable path) OutputNotWritable
@@ -140,35 +136,35 @@ parseNameAndRange name = case T.split (== '@') name of
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do
   pwd <- getCurrentDirectory
-  flip runReaderT pwd $ do
-    packageNames <- mapM parseNameAndRange $ roPkgNames opts
-    extendPaths <- getExtensions (roExtendPaths opts)
-    packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
-    outputPath <- validateOutput . fromText $ roOutputPath opts
-    registries <- mapM validateUrl $ (roRegistries opts <>
-                                      if roNoDefaultRegistry opts
-                                      then []
-                                      else ["https://registry.npmjs.org"])
-    tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-    return (NixFromNpmOptions {
-      nfnoOutputPath = outputPath,
-      nfnoExtendPaths = extendPaths,
-      nfnoGithubToken = roGithubToken opts <|> tokenEnv,
-      nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
-      nfnoDevDepth = roDevDepth opts,
-      nfnoTest = roTest opts,
-      nfnoTimeout = roTimeout opts,
-      nfnoPkgNames = packageNames,
-      nfnoRegistries = registries,
-      nfnoPkgPaths = packagePaths,
-      nfnoNoDefaultNix = roNoDefaultNix opts
-      })
+  packageNames <- mapM parseNameAndRange $ roPkgNames opts
+  extendPaths <- getExtensions (roExtendPaths opts)
+  packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
+  outputPath <- validateOutput . fromText $ roOutputPath opts
+  registries <- mapM validateUrl $ (roRegistries opts <>
+                                    if roNoDefaultRegistry opts
+                                    then []
+                                    else ["https://registry.npmjs.org"])
+  tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+  return (NixFromNpmOptions {
+    nfnoOutputPath = outputPath,
+    nfnoExtendPaths = extendPaths,
+    nfnoGithubToken = roGithubToken opts <|> tokenEnv,
+    nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
+    nfnoDevDepth = roDevDepth opts,
+    nfnoTest = roTest opts,
+    nfnoTimeout = roTimeout opts,
+    nfnoPkgNames = packageNames,
+    nfnoRegistries = registries,
+    nfnoPkgPaths = packagePaths,
+    nfnoNoDefaultNix = roNoDefaultNix opts,
+    nfnoRealTime = roRealTime opts
+    })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
       Nothing -> throw $ InvalidURI rawUrl
       Just uri -> return uri
     -- Parses the NAME=PATH extension directives.
-    getExtensions :: [Text] -> Validator (Record FilePath)
+    getExtensions :: [Text] -> IO (Record FilePath)
     getExtensions = foldM step mempty where
       step extensions nameEqPath = case T.split (== '=') nameEqPath of
         [name, path] -> append name path
@@ -196,6 +192,7 @@ parseOptions githubToken = RawOptions
     <*> timeout
     <*> token
     <*> noDefaultRegistry
+    <*> realTime
   where
     packageName = short 'p'
                    <> long "package"
@@ -255,3 +252,6 @@ parseOptions githubToken = RawOptions
             <|> pure githubToken
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
+    realTime = switch (long "real-time"
+                       <> help "Write packages to disk as they are generated,\
+                               \ rather than at the end.")
