@@ -73,10 +73,11 @@ metaToNix PackageMeta{..} = do
     grab name = maybe [] (\s -> [name `bindTo` str s])
     homepage = grab "homepage" (map uriToText pmHomepage)
     description = grab "description" pmDescription
+    author = grab "author" pmAuthor
     keywords = case pmKeywords of
       ks | null ks -> []
          | otherwise -> ["keywords" `bindTo` mkList (toList (map str ks))]
-  case homepage <> description <> keywords of
+  case homepage <> description <> keywords <> author of
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
 
@@ -93,6 +94,8 @@ resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix rPkg@ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
       deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+      peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
+      optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
       -- Same for dev dependencies.
       devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
       -- | List of arguments that these functions will take.
@@ -105,15 +108,20 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) funcParams'
       -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
-      withNodePackages list = case list of
-        [] -> mkList []
-        _ -> mkWith (mkSym "nodePackages") $ mkList list
+      withNodePackages noneIfEmpty list = case list of
+        [] -> if noneIfEmpty then Nothing else Just $ mkList []
+        _ -> Just $ mkWith (mkSym "nodePackages") $ mkList list
+  let devDepBinding = case devDeps of
+        Nothing -> Nothing
+        Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
   let args = mkNonRecSet $ catMaybes [
         Just $ "name" `bindTo` str rpName,
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
-        Just $ "deps" `bindTo` withNodePackages deps,
-        bindTo "devDependencies" . withNodePackages <$> devDeps,
+        bindTo "deps" <$> withNodePackages False deps,
+        bindTo "peerDependencies" <$> withNodePackages True peerDeps,
+        bindTo "optionalDependencies" <$> withNodePackages True optDeps,
+        devDepBinding,
         bindTo "meta" <$> metaToNix rpMeta
         ]
   mkFunction funcParams $ mkSym "buildNodePackage" `mkApp` args

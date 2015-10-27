@@ -628,10 +628,12 @@ recurOn :: Name -- ^ Name of the package whose dependencies these are.
 recurOn name version deptype deps =
   map H.fromList $ do
     let depList = H.toList deps
-        (desc, descPlural) = case deptype of
-          Dependency -> ("dependency", "dependencies")
-          DevDependency -> ("development dependency",
-                            "development dependencies")
+        app txt (a, b) = (txt <> " " <> a, txt <> " " <> b)
+        getDesc Dependency = ("dependency", "dependencies")
+        getDesc DevDependency = app "development" (getDesc Dependency)
+        getDesc PeerDependency = app "peer" (getDesc Dependency)
+        getDesc OptionalDependency = app "optional" (getDesc Dependency)
+        (desc, descPlural) = getDesc deptype
     when (length depList > 0) $ do
       putStrsLn [name, " version ", renderSV version, " has ",
                  descPlural, ": ", showDeps depList]
@@ -664,6 +666,8 @@ resolveVersionInfo VersionInfo{..} = do
   let recurOn' = recurOn viName viVersion
   startResolving viName viVersion
   deps <- recurOn' Dependency viDependencies
+  peerDeps <- recurOn' PeerDependency viPeerDependencies
+  optDeps <- recurOn' OptionalDependency viOptionalDependencies
   devDeps <- do
     shouldFetch <- shouldFetchDevs
     case shouldFetch || H.null viDevDependencies of
@@ -676,6 +680,8 @@ resolveVersionInfo VersionInfo{..} = do
       rpDistInfo = viDist,
       rpMeta = viMeta,
       rpDependencies = deps,
+      rpPeerDependencies = peerDeps,
+      rpOptionalDependencies = optDeps,
       rpDevDependencies = devDeps
       }
   -- Write to disk if real-time is enabled.
