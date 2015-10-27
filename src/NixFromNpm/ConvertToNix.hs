@@ -13,6 +13,7 @@ import Data.Fix
 
 import NixFromNpm.Common hiding (replace)
 import Nix.Types hiding (mkPath)
+import Nix.Pretty (prettyNix)
 import qualified Nix.Types as Nix
 import Nix.Parser
 import NixFromNpm.NpmTypes
@@ -30,6 +31,8 @@ fixName :: Name -> Name
 fixName = replace "." "-"
 
 -- | Converts a package name and semver into an identifier.
+-- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
+-- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
 toDepName :: Name -> SemVer -> Name
 toDepName name (a, b, c, tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
@@ -41,6 +44,9 @@ toNixExpr name (Resolved semver) = mkSym $ toDepName name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
   [ "name" `bindTo` str name, "reason" `bindTo` str (pack $ show reason)]
 
+writeNix :: MonadIO io => FilePath -> NExpr -> io ()
+writeNix path = writeFile path . show . prettyNix
+
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> FilePath
 toDotNix v = fromText $ renderSV v <> ".nix"
@@ -51,7 +57,7 @@ str = mkStr DoubleQuoted
 
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe DistInfo -> NExpr
-distInfoToNix Nothing = mkPath "./."
+distInfoToNix Nothing = Nix.mkPath False "./."
 distInfoToNix (Just DistInfo{..}) = do
   let Success fetchurl = parseNixString "pkgs.fetchurl"
       (algo, hash) = case diShasum of
@@ -74,18 +80,28 @@ metaToNix PackageMeta{..} = do
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
 
+hasBroken :: ResolvedPkg -> Bool
+hasBroken ResolvedPkg{..} = case rpDevDependencies of
+  Nothing -> any isBroken rpDependencies
+  Just devDeps -> any isBroken rpDependencies || any isBroken devDeps
+  where isBroken = \case {Broken _ -> True; _ -> False}
+
 -- | Converts a resolved package object into a nix expression. The expresion
 -- will be a function where the arguments are its dependencies, and its result
 -- is a call to `buildNodePackage`.
 resolvedPkgToNix :: ResolvedPkg -> NExpr
-resolvedPkgToNix ResolvedPkg{..} = do
+resolvedPkgToNix rPkg@ResolvedPkg{..} = do
   let -- Get a string representation of each dependency in name-version format.
       deps = map (uncurry toNixExpr) $ H.toList rpDependencies
       -- Same for dev dependencies.
       devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
       -- | List of arguments that these functions will take.
-      funcParams' = ["pkgs", "nodePackages", "buildNodePackage",
-                     "brokenPackage"]
+      funcParams' = catMaybes [
+        Just "pkgs",
+        Just "buildNodePackage",
+        Just "nodePackages",
+        maybeIf (hasBroken rPkg) "brokenPackage"
+        ]
       -- None of these have defaults, so put them into pairs with Nothing.
       funcParams = mkFormalSet $ map (\x -> (x, Nothing)) funcParams'
       -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
@@ -161,8 +177,8 @@ defaultNixExtending extName extensions = do
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
-mkPkgJsonDefaultNix :: FilePath -> NExpr
-mkPkgJsonDefaultNix path = do
+packageJsonDefaultNix :: FilePath -> NExpr
+packageJsonDefaultNix path = do
   mkFunction defaultParams $ importWith False path defaultInherits
 
 bindingsToMap :: [Binding t] -> Record t

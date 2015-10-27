@@ -23,9 +23,10 @@ import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
 import NixFromNpm.ConvertToNix (toDotNix,
+                                writeNix,
                                 rootDefaultNix,
                                 defaultNixExtending,
-                                mkPkgJsonDefaultNix,
+                                packageJsonDefaultNix,
                                 resolvedPkgToNix,
                                 nodePackagesDir)
 import NixFromNpm.Options
@@ -33,21 +34,7 @@ import NixFromNpm.NpmTypes
 import NixFromNpm.SemVer
 import NixFromNpm.Parsers.SemVer
 import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap, psToList)
-import NixFromNpm.NpmLookup (FullyDefinedPackage(..),
-                             NpmFetcher(..),
-                             NpmFetcherSettings(..),
-                             NpmFetcherState(..),
-                             BrokenPackageReport(..),
-                             getBroken, addBroken,
-                             addPackage,
-                             toFullyDefined,
-                             startState,
-                             runNpmFetchWith,
-                             _resolveNpmVersionRange,
-                             resolveVersionInfo,
-                             extractPkgJson,
-                             defaultSettings,
-                             PreExistingPackage(..))
+import NixFromNpm.NpmLookup
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 -- However, the only packages that we want to write are the new ones; that
@@ -138,6 +125,7 @@ initializeOutput = do
   createDirectoryIfMissing outputPath
   withDir outputPath $ do
     putStrsLn ["Initializing  ", pathToText outputPath]
+    createDirectoryIfMissing nodePackagesDir
     version <- case fromHaskellVersion Paths_nixfromnpm.version of
       Left err -> fatal err
       Right v -> return v
@@ -148,13 +136,51 @@ initializeOutput = do
         putStrsLn ["Generating node libraries in ", pathToText outputPath]
         pth <- getDataFileName "nix-libs"
         shelly $ do
-          cp_r (pth </> "buildNodePackage") outputPath
-          cp_r (pth </> "nodeLib") outputPath
+          whenM (not <$> doesDirectoryExist (pth </> "buildNodePackage")) $ do
+            cp_r (pth </> "buildNodePackage") outputPath
+          whenM (not <$> doesDirectoryExist (pth </> "nodeLib")) $ do
+            cp_r (pth </> "nodeLib") outputPath
       (extName:_) -> do -- Then we are extending things.
         writeNix "default.nix" $ defaultNixExtending extName extensions
 
-writeNix :: MonadIO io => FilePath -> NExpr -> io ()
-writeNix path = writeFile path . show . prettyNix
+updateLatestNix :: MonadIO io => io ()
+updateLatestNix = do
+  pwd <- getCurrentDirectory
+  -- Remove the `latest.nix` symlink if it exists.
+  whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
+  -- Grab the latest version and create a symlink `latest.nix`
+  -- to that.
+  let convert fname =
+        case parseSemVer (T.dropEnd 4 $ pathToText fname) of
+          Left _ -> Nothing -- not a semver, so we don't consider it
+          Right ver -> Just ver -- return the version
+  catMaybes . map convert <$> getDirectoryContents "." >>= \case
+    [] -> return ()
+    versions -> do
+      createSymbolicLink (toDotNix $ maximum versions) "latest.nix"
+
+
+mergeInto :: (MonadIO io, MonadBaseControl IO io)
+          => FilePath -- ^ Source path, containing store objects
+          -> FilePath -- ^ Target path, also containing store objects
+          -> io ()
+mergeInto source target = withDir (source </> nodePackagesDir) $ do
+  let noDots p = let fn = getFilename p in fn /= "" && T.head fn /= '.'
+  packageDirs <- filter noDots <$> getDirectoryContents "."
+  forM_ packageDirs $ \dir -> do
+    let targetDir = target </> nodePackagesDir </> dir
+    whenM (not <$> doesDirectoryExist targetDir) $ do
+      putStrsLn ["Creating directory ", pathToText targetDir]
+      createDirectory targetDir
+    withDir dir $ do
+      dotNixFiles <- filter (hasExt "nix") <$> getDirectoryContents "."
+      forM_ dotNixFiles $ \f -> do
+        whenM (not <$> doesFileExist (targetDir </> f)) $ do
+          putStrsLn ["Copying ", pathToText f, " to ",
+                     pathToText (targetDir </> f)]
+          copyFile f (targetDir </> f)
+      withDir targetDir updateLatestNix
+
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 --   and the names/paths to the libraries being extended.
@@ -162,32 +188,11 @@ writeNewPackages :: NpmFetcher ()
 writeNewPackages = takeNewPackages <$> gets resolved >>= \case
   newPackages
     | H.null newPackages -> putStrLn "No new packages created."
-    | otherwise -> do
-      outputPath <- asks nfsOutputPath
-      let path = outputPath </> nodePackagesDir
-      putStrsLn ["Creating new packages at ", pathToText path]
-      createDirectoryIfMissing path
-      withDir path $ do
-        -- Write the .nix file for each version of this package.
-        forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
-          let subdir = path </> fromText pkgName
-          createDirectoryIfMissing subdir
-          withDir subdir $ do
-            -- Write all of the versions we have generated.
-            forM_ (H.toList pkgVers) $ \(ver, expr) -> do
-              let fullPath = subdir </> toDotNix ver
-              putStrsLn ["Writing package file at ", pathToText fullPath]
-              writeNix (toDotNix ver) expr
-            -- Remove the `latest.nix` symlink if it exists.
-            whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
-            -- Grab the latest version and create a symlink `latest.nix`
-            -- to that.
-            let convert fname =
-                  case parseSemVer (T.dropEnd 4 $ pathToText fname) of
-                    Left _ -> Nothing -- not a semver, so we don't consider it
-                    Right ver -> Just ver -- return the version
-            allVersions <- catMaybes . map convert <$> getDirectoryContents "."
-            createSymbolicLink (toDotNix $ maximum allVersions) "latest.nix"
+    | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
+        forM_ (H.toList pkgVers) $ \(ver, expr) -> do
+          writePackage pkgName ver expr
+        dir <- outputDirOf pkgName
+        withDir dir updateLatestNix
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
@@ -202,18 +207,10 @@ dumpFromPkgJson path = do
           let (name, version) = (viName verinfo, viVersion verinfo)
           putStrsLn ["Generating expression for package ", name,
                      ", version ", renderSV version]
-          resolveVersionInfo verinfo
-          basePath <- pmLookup name version <$> gets resolved >>= \case
-            Nothing -> errorC ["FATAL: could not build nix file"]
-            Just (FromExistingInOutput _) -> asks nfsOutputPath
-            Just (NewPackage _) -> asks nfsOutputPath
-            Just (FromExistingInExtension extName _) -> do
-              extendPaths <- asks nfsExtendPaths
-              return (extendPaths H.! extName)
-          defNixPath <- map (</> "default.nix") getCurrentDirectory
-          putStrsLn ["Writing package nix file at ", pathToText defNixPath]
-          let fullPath = basePath </> fromText name </> toDotNix version
-          writeNix "default.nix" $ mkPkgJsonDefaultNix fullPath
+          rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
+          writeNix "project.nix" $ resolvedPkgToNix rPkg
+          importPath <- map (</> "project.nix") getCurrentDirectory
+          writeNix "default.nix" $ packageJsonDefaultNix importPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()
@@ -231,7 +228,7 @@ showBrokens = H.toList <$> gets brokenPackages >>= \case
         putStrsLn ["Failed to build because: ", pshow (bprReason report)]
 
 -- | See if any of the top-level packages failed to build, and return a
--- non-ero status if they did.
+-- non-zero status if they did.
 checkForBroken :: [(Name, NpmVersionRange)] -> NpmFetcher ExitCode
 checkForBroken inputs = do
   let findBrokens [] = return []
@@ -239,7 +236,7 @@ checkForBroken inputs = do
         Nothing -> findBrokens others
         Just report -> ((name, range, report) :) <$> findBrokens others
   findBrokens inputs >>= \case
-    [] -> putStrLn "All packages built successfuly." >> return ExitSuccess
+    [] -> putStrLn "Top-level packages built successfully." >> return ExitSuccess
     pkgs -> do
       putStrLn "The following packages failed to build:"
       forM_ pkgs $ \(name, range, report) -> do
@@ -270,7 +267,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsOutputPath = nfnoOutputPath,
     nfsExtendPaths = nfnoExtendPaths,
     nfsMaxDevDepth = nfnoDevDepth,
-    nfsCacheDepth = nfnoCacheDepth
+    nfsCacheDepth = nfnoCacheDepth,
+    nfsRealTimeWrite = nfnoRealTime
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages

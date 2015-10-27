@@ -36,6 +36,8 @@ data InvalidOption
   | InvalidExtensionSyntax Text
   | DuplicatedExtensionName Name FilePath FilePath
   | InvalidURI Text
+  | NoPackageJsonFoundAt FilePath
+  | NotPathToPackageJson FilePath
   deriving (Show, Eq, Typeable)
 
 instance Exception InvalidOption
@@ -55,7 +57,8 @@ data RawOptions = RawOptions {
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
   roGithubToken :: Maybe ByteString, -- ^ Github authentication token.
-  roNoDefaultRegistry :: Bool -- ^ Disable fetching from npmjs.org.
+  roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
+  roRealTime :: Bool -- ^ Write packages to disk as they are written.
 } deriving (Show, Eq)
 
 -- | Various options we have available for nixfromnpm. Validated
@@ -72,24 +75,18 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
-  nfnoGithubToken :: Maybe ByteString -- ^ Github authentication token.
+  nfnoGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  nfnoRealTime :: Bool -- ^ Write packages to disk as they are written.
   } deriving (Show, Eq)
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
 
-parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
-parseNameAndRange name = case T.split (== '@') name of
-  [name] -> return (name, SemVerRange anyVersion)
-  [name, range] -> case parseNpmVersionRange range of
-    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
-    Right nrange -> return (name, nrange)
-
 -- | Validates an extension folder. The folder must exist, and must contain
 -- a default.nix and a node packages directory, and a .nixfromnpm-version file
 -- which indicates the version of nixfromnpm used to build it.
-validateExtension :: MonadIO io => FilePath -> io FilePath
-validateExtension path = do
+validateExtension :: FilePath -> IO FilePath
+validateExtension = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
   assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
@@ -99,12 +96,11 @@ validateExtension path = do
 -- | Validate an output folder. An output folder EITHER must not exist, but
 -- its parent directory does and is writable, OR it does exist, is writable,
 -- and follows the extension format.
-validateOutput :: MonadIO io => FilePath -> io FilePath
-validateOutput path = do
+validateOutput :: FilePath -> IO FilePath
+validateOutput = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   doesDirectoryExist path >>= \case
     True -> do assert' (isWritable path) OutputNotWritable
-               putStrLn "hey"
                validateExtension path
     False -> do
       let parentPath = parent path
@@ -114,25 +110,40 @@ validateOutput path = do
               OutputParentNotWritable
       return path
 
+validateJsPkg :: FilePath -> IO FilePath
+validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
+  -- If it is a directory, it must be writable and contain a package.json file.
+  True -> do assert (isWritable path) OutputNotWritable
+             assert (doesFileExist (path </> "package.json"))
+                    (NoPackageJsonFoundAt (path </> "package.json"))
+             return path
+  -- If the path isn't a directory, it must be a "package.json" file, and
+  -- must exist, and the folder must be writable.
+  False -> do
+    assert (return $ getFilename path == "package.json")
+           (NotPathToPackageJson path)
+    assert (isWritable (parent path)) OutputNotWritable
+    assert (doesFileExist path) (NoPackageJsonFoundAt path)
+    return (parent path)
+
+parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
+parseNameAndRange name = case T.split (== '@') name of
+  [name] -> return (name, SemVerRange anyVersion)
+  [name, range] -> case parseNpmVersionRange range of
+    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
+    Right nrange -> return (name, nrange)
+
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do
   pwd <- getCurrentDirectory
-  let
-    validatePath path = do
-      let p' = pwd </> path
-      doesFileExist p' >>= \case
-        True -> errorC ["Path ", pathToText p', " is a file, not a directory"]
-        False -> doesDirectoryExist p' >>= \case
-          False -> errorC ["Path ", pathToText  p', " does not exist"]
-          True -> return p'
   packageNames <- mapM parseNameAndRange $ roPkgNames opts
   extendPaths <- getExtensions (roExtendPaths opts)
-  packagePaths <- mapM (validatePath . fromText) $ roPkgPaths opts
+  packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
   outputPath <- validateOutput . fromText $ roOutputPath opts
   registries <- mapM validateUrl $ (roRegistries opts <>
                                     if roNoDefaultRegistry opts
-                                       then []
-                                       else ["https://registry.npmjs.org"])
+                                    then []
+                                    else ["https://registry.npmjs.org"])
   tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
   return (NixFromNpmOptions {
     nfnoOutputPath = outputPath,
@@ -145,7 +156,8 @@ validateOptions opts = do
     nfnoPkgNames = packageNames,
     nfnoRegistries = registries,
     nfnoPkgPaths = packagePaths,
-    nfnoNoDefaultNix = roNoDefaultNix opts
+    nfnoNoDefaultNix = roNoDefaultNix opts,
+    nfnoRealTime = roRealTime opts
     })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
@@ -180,6 +192,7 @@ parseOptions githubToken = RawOptions
     <*> timeout
     <*> token
     <*> noDefaultRegistry
+    <*> realTime
   where
     packageName = short 'p'
                    <> long "package"
@@ -239,3 +252,6 @@ parseOptions githubToken = RawOptions
             <|> pure githubToken
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
+    realTime = switch (long "real-time"
+                       <> help "Write packages to disk as they are generated,\
+                               \ rather than at the end.")
