@@ -17,10 +17,8 @@ cabal-version:       >=1.10
 bug-reports:         https://github.com/adnelson/nixfromnpm/issues
 
 data-files:   nix-libs/nodeLib/default.nix
-            , nix-libs/buildNodePackage/default.nix
-            , nix-libs/buildNodePackage/find_package_json_dir.py
-            , nix-libs/buildNodePackage/removeImpureDependencies.js
-            , nix-libs/buildNodePackage/setup-hook.sh
+            , nix-libs/nodeLib/build-node-package.nix
+            , nix-libs/nodeLib/removeImpureDependencies.js
 
 source-repository head
   type:     git

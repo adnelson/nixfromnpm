@@ -33,6 +33,7 @@ data PackageInfo = PackageInfo {
 -- | Metadata about a package.
 data PackageMeta = PackageMeta {
   pmDescription :: Maybe Text,
+  pmAuthor :: Maybe Text,
   pmHomepage :: Maybe URI,
   pmKeywords :: Vector Text
   } deriving (Show, Eq)
@@ -43,7 +44,10 @@ data PackageMeta = PackageMeta {
 -- `ResolvedPkg`.
 data VersionInfo = VersionInfo {
   viDependencies :: Record NpmVersionRange,
+  viPeerDependencies :: Record NpmVersionRange,
+  viOptionalDependencies :: Record NpmVersionRange,
   viDevDependencies :: Record NpmVersionRange,
+  viBundledDependencies :: [Text],
   viDist :: Maybe DistInfo, -- not present if in a package.json file.
   viMain :: Maybe Text,
   viName :: Text,
@@ -69,12 +73,16 @@ data ResolvedPkg = ResolvedPkg {
   rpDistInfo :: Maybe DistInfo,
   rpMeta :: PackageMeta,
   rpDependencies :: Record ResolvedDependency,
+  rpPeerDependencies :: Record ResolvedDependency,
+  rpOptionalDependencies :: Record ResolvedDependency,
   rpDevDependencies :: Maybe (Record ResolvedDependency)
   } deriving (Show, Eq)
 
 -- | Flag for different types of dependencies.
 data DependencyType
   = Dependency    -- ^ Required at runtime.
+  | PeerDependency
+  | OptionalDependency
   | DevDependency -- ^ Only required for development.
   deriving (Show, Eq)
 
@@ -114,8 +122,17 @@ instance Monoid PackageInfo where
 
 instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
-    dependencies <- getDict "dependencies" o
+    dependencies' <- getDict "dependencies" o
     devDependencies <- getDict "devDependencies" o
+    peerDependencies <- getDict "peerDependencies" o
+    optionalDependencies <- getDict "optionalDependencies" o
+    bundledDependencies <- o .:? "bundledDependencies" .!= []
+    -- Loop through the bundled dependencies. If any of them are missing
+    -- from the dependencies record, add it here.
+    let isMissingDep name = not $ H.member name dependencies'
+        missing = filter isMissingDep bundledDependencies
+        missingDependencies = zip missing (repeat $ SemVerRange anyVersion)
+        dependencies = dependencies' <> H.fromList missingDependencies
     dist <- o .:? "dist"
     name <- o .: "name"
     main <- o .:? "main"
@@ -123,6 +140,7 @@ instance FromJSON VersionInfo where
     packageMeta <- do
       let getString = \case {String s -> Just s; _ -> Nothing}
       description <- o .:? "description"
+      author <- o .:? "author" <|> pure Nothing
       homepage <- o .:? "homepage" >>= \case
         Nothing -> return Nothing
         Just (String txt) -> return $ parseURIText txt
@@ -137,13 +155,16 @@ instance FromJSON VersionInfo where
         -- Otherwise, this is an error, but just return an empty array.
         getKeywords _ = mempty
       keywords <- map getKeywords $ o .:? "keywords" .!= Null
-      return $ PackageMeta description homepage keywords
+      return $ PackageMeta description author homepage keywords
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
       Left err -> throw $ VersionSyntaxError version err
       Right semver -> return $ VersionInfo {
         viDependencies = dependencies,
         viDevDependencies = devDependencies,
+        viPeerDependencies = peerDependencies,
+        viOptionalDependencies = optionalDependencies,
+        viBundledDependencies = bundledDependencies,
         viDist = dist,
         viMain = main,
         viName = name,
