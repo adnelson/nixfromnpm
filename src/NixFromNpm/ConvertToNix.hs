@@ -180,14 +180,19 @@ defaultNixExtending extName extensions = do
     args = [bindRootPath, "extensions" `bindTo`
               mkList (map mkSym (H.keys extensions))]
     genPkgs = extName <> ".nodeLib.generatePackages"
-    Success generatePackages = parseNixString (unpack genPkgs)
+    Success generatePackages = parseNixText genPkgs
     body = mkLet lets $ mkApp generatePackages (mkNonRecSet args)
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
-packageJsonDefaultNix :: FilePath -> NExpr
-packageJsonDefaultNix path = do
-  mkFunction defaultParams $ importWith False path defaultInherits
+packageJsonDefaultNix :: FilePath -- ^ Path to the output directory.
+                      -> NExpr
+packageJsonDefaultNix outputPath = do
+  let
+    libBind = "lib" `bindTo` importWith False outputPath defaultInherits
+    Success callPkg = parseNixString "lib.callPackage"
+    call = callPkg `mkApp` mkPath "project.nix" `mkApp` mkNonRecSet []
+  mkFunction defaultParams $ mkLet [libBind] call
 
 bindingsToMap :: [Binding t] -> Record t
 bindingsToMap = foldl' step mempty where

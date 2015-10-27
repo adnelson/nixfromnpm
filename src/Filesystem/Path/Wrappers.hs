@@ -120,3 +120,6 @@ isWritable = map writable . getPermissions
 
 absPath :: MonadIO io => FilePath -> io FilePath
 absPath path = (</> path) <$> getCurrentDirectory
+
+isDirectoryEmpty :: MonadIO io => FilePath -> io Bool
+isDirectoryEmpty = map CP.null . getDirectoryContents
