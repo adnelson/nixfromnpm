@@ -136,8 +136,6 @@ initializeOutput = do
         putStrsLn ["Generating node libraries in ", pathToText outputPath]
         pth <- getDataFileName "nix-libs"
         shelly $ do
-          whenM (not <$> doesDirectoryExist (pth </> "buildNodePackage")) $ do
-            cp_r (pth </> "buildNodePackage") outputPath
           whenM (not <$> doesDirectoryExist (pth </> "nodeLib")) $ do
             cp_r (pth </> "nodeLib") outputPath
       (extName:_) -> do -- Then we are extending things.
@@ -209,8 +207,8 @@ dumpFromPkgJson path = do
                      ", version ", renderSV version]
           rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
           writeNix "project.nix" $ resolvedPkgToNix rPkg
-          importPath <- map (</> "project.nix") getCurrentDirectory
-          writeNix "default.nix" $ packageJsonDefaultNix importPath
+          outputPath <- asks nfsOutputPath
+          writeNix "default.nix" $ packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()

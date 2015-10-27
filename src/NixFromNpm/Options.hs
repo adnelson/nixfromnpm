@@ -88,9 +88,10 @@ textOption opts = pack <$> strOption opts
 validateExtension :: FilePath -> IO FilePath
 validateExtension = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
-  assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
-  assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
-  assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
+  whenM (not <$> isDirectoryEmpty path) $ do
+    assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
+    assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
+    assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
   return path
 
 -- | Validate an output folder. An output folder EITHER must not exist, but
