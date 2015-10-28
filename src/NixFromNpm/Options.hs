@@ -9,12 +9,12 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.HashMap.Strict as H
 
+import Data.SemVer
 import Options.Applicative
 
-import NixFromNpm.NpmVersion
-import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.SemVer
-import NixFromNpm.ConvertToNix (nodePackagesDir)
+import NixFromNpm.Npm.Version
+import NixFromNpm.Npm.Version.Parser (parseNpmVersionRange)
+import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common hiding ((<>))
 
 -- | Errors about node libraries

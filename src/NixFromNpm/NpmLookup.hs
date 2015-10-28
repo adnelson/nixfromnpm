@@ -32,18 +32,15 @@ import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
 import Network.Curl
 import Nix.Types
 import Data.Digest.Pure.SHA (sha256, showDigest)
+import Data.SemVer
+import Data.SemVer.Parser
 
 import NixFromNpm.Common
-import NixFromNpm.ConvertToNix (resolvedPkgToNix, toDotNix, nodePackagesDir,
-                                writeNix)
-import NixFromNpm.NpmTypes
-import NixFromNpm.GitTypes as Git hiding (Tag)
-import NixFromNpm.SemVer
-import NixFromNpm.Parsers.Common hiding (Parser, Error, lines)
-import NixFromNpm.ConvertToNix (nixExprHasDevDeps)
-import NixFromNpm.Parsers.SemVer
-import NixFromNpm.NpmVersion
-import NixFromNpm.Parsers.NpmVersion
+import NixFromNpm.Git.Types as Git hiding (Tag)
+import NixFromNpm.Conversion.ToNix
+import NixFromNpm.Npm.Types
+import NixFromNpm.Npm.Version
+import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.PackageMap
 --------------------------------------------------------------------------
 

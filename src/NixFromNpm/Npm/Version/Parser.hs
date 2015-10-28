@@ -2,16 +2,59 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Tools for parsing NPM version range indicators.
-module NixFromNpm.Parsers.NpmVersion where
+module NixFromNpm.Npm.Version.Parser where
+
+import qualified Prelude as P
+import Text.Parsec hiding (many, (<|>), spaces, parse, State, uncons)
+import qualified Text.Parsec as Parsec
 
 import Data.Aeson
 import qualified Data.Aeson.Types as DAT
 
-import NixFromNpm.SemVer
-import NixFromNpm.Parsers.Common
-import NixFromNpm.Parsers.SemVer
-import NixFromNpm.NpmVersion
-import NixFromNpm.GitTypes hiding (Tag)
+import Data.SemVer
+import Data.SemVer.Parser
+import NixFromNpm.Npm.Version
+import NixFromNpm.Git.Types hiding (Tag)
+
+import NixFromNpm.Common hiding (try)
+
+type Parser = ParsecT String () Identity
+
+-- | Given a parser and a string, attempts to parse the string.
+parse :: Parser a -> Text -> Either ParseError a
+parse p = Parsec.parse p "" . unpack
+
+parseFull :: Parser a -> Text -> Either ParseError a
+parseFull p = Parsec.parse (p <* eof) "" . unpack
+
+-- | Consumes any spaces (not other whitespace).
+spaces :: Parser String
+spaces = many $ char ' '
+
+-- | Consumes at least one space (not other whitespace).
+spaces1 :: Parser String
+spaces1 = many1 $ char ' '
+
+-- | Parses the given string and any trailing spaces.
+sstring :: String -> Parser String
+sstring = lexeme . string
+
+-- | Parses the given character and any trailing spaces.
+schar :: Char -> Parser Char
+schar = lexeme . char
+
+-- | Parses `p` and any trailing spaces.
+lexeme :: Parser a -> Parser a
+lexeme p = p <* spaces
+
+-- | Parses an integer.
+pInt :: Parser Int
+pInt = lexeme pInt'
+
+-- | Parses an integer without consuming trailing spaces.
+pInt' :: Parser Int
+pInt' = P.read <$> many1 digit
+
 
 pUri :: Parser NpmVersionRange
 pUri = try $ fmap NpmUri $ do

@@ -3,7 +3,7 @@
 , MissingH, mtl, network-uri, parsec, shelly, stdenv
 , system-filepath, text, text-render, unordered-containers
 , optparse-applicative, curl, cabal-install, ansi-terminal
-, temporary, SHA, pkgs, lifted-base, transformers
+, temporary, SHA, pkgs, lifted-base, transformers, semver-range
 }:
 
 let
@@ -22,7 +22,7 @@ mkDerivation {
     directory hnix MissingH mtl network-uri parsec shelly
     system-filepath text text-render unordered-containers
     optparse-applicative cabal-install curl SHA temporary lifted-base
-    transformers ansi-terminal
+    transformers ansi-terminal semver-range
   ];
   executableHaskellDepends = with pkgs; [nix cacert];
   testDepends = [
@@ -33,6 +33,8 @@ mkDerivation {
   ];
   shellHook = ''
     export CURL_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+    export semver=${semver-range}
+    export hnix=${hnix}
   '';
   description = "Generate nix expressions from npm packages";
   license = stdenv.lib.licenses.mit;

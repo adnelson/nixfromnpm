@@ -6,4 +6,5 @@ in
 haskellPackages.callPackage ./project.nix {
   pkgs = nixpkgs;
   hnix = haskellPackages.callPackage ../hnix/project.nix {};
+  semver-range = haskellPackages.callPackage ../semver-range/project.nix {};
 }
