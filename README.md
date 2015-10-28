@@ -50,21 +50,13 @@ $ nixfromnpm -p package_name@version_bound -o /some/path
 
 #### Generating an expression from a package.json file
 
-**Note:** this feature is not yet implemented.
-
-You can also generate an expression for a project on the local disk by passing in the path to a `package.json` file. The generated expressions will be placed by default in the same directory as the `package.json` file in a `nix` folder, and a `default.nix` will be created in the directory as well.
+You can also generate an expression for a project on the local disk by passing in the path to a `package.json` file, or a directory containing one. The generated expression will be placed in a file called `project.nix` in the same directory as the `package.json` file, and a `default.nix` will be created in the directory as well which calls into `project.nix`. As with normal usage, the `-o` flag is used to specify a path to where generated expressions will be placed; however, only the *downsteam* dependencies will be put here, while the expression itself will be in the `project.nix` file.
 
 ```bash
-$ nixfromnpm -f /path/to/package.json
+$ nixfromnpm -f /path/to/package.json -o /path/to/dependency/set
 ```
 
-If a different output path is desired, `-o` can be used. The creation of `default.nix` can be disabled with `--no-default-nix`.
-
-```bash
-$ nixfromnpm -f /path/to/package.json -o /path/to/expressions --no-default-nix
-```
-
-This will build the package called `package_name` and put all of the generated expressions in `/some/path`.
+You can give multiple `-f` arguments to build multiple expressions on disk.
 
 #### Development Dependencies
 
@@ -105,6 +97,8 @@ If there is an existing set of packages located in `/path/to/library`, you might
 
 ```bash
 $ nixfromnpm -p package -o /some/path --extend /path/to/library
+# OR
+$ nixfromnpm -f /path/to/package -o /some/path --extend /path/to/library
 ```
 
 This will discover all of the packages in `/path/to/library` and make them available in the generated expressions at `/some/path`, but will not modify the library at all. Extensions can also be specified with `-e`
