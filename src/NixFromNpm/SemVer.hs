@@ -120,6 +120,7 @@ matchesSimple range ver = case range of
 
 matchesTags :: SemVerRange -> [ReleaseTag] -> [ReleaseTag] -> Bool
 matchesTags range rangeTags verTags = case range of
+  Eq _ -> verTags == rangeTags
   Gt _ -> verTags > rangeTags
   Lt _ -> verTags < rangeTags
   Geq _ -> verTags >= rangeTags
