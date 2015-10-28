@@ -1,11 +1,13 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Filesystem.Path.Wrappers where
 
 import ClassyPrelude hiding (FilePath, unpack, (</>))
 import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
+import qualified Data.Text as T
 import System.Directory (Permissions(..))
 import qualified System.Directory as Dir
 import qualified System.Posix.Files as Posix
@@ -102,7 +104,9 @@ removeFile = liftIO . Dir.removeFile . pathToString
 getDirectoryContents :: MonadIO m => FilePath -> m [FilePath]
 getDirectoryContents dir = do
   contents <- liftIO $ Dir.getDirectoryContents $ pathToString dir
-  return $ map decodeString contents
+  -- Filter out the '.' and '..' folders.
+  let noDots p = let fn = getFilename p in fn /= "" && T.head fn /= '.'
+  return $ CP.filter noDots $ map decodeString contents
 
 hasExt :: Text -> FilePath -> Bool
 hasExt ext path = case extension path of

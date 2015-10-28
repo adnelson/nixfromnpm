@@ -134,10 +134,11 @@ initializeOutput = do
       [] -> do -- Then we are creating a new root.
         writeNix "default.nix" rootDefaultNix
         putStrsLn ["Generating node libraries in ", pathToText outputPath]
-        pth <- getDataFileName "nix-libs"
-        shelly $ do
-          whenM (not <$> doesDirectoryExist (pth </> "nodeLib")) $ do
-            cp_r (pth </> "nodeLib") outputPath
+        nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+        createDirectoryIfMissing (outputPath </> "nodeLib")
+        contents <- getDirectoryContents nodeLibPath
+        forM_ contents $ \file ->
+          copyFile (nodeLibPath </> file) (outputPath </> "nodeLib" </> file)
       (extName:_) -> do -- Then we are extending things.
         writeNix "default.nix" $ defaultNixExtending extName extensions
 
@@ -163,8 +164,7 @@ mergeInto :: (MonadIO io, MonadBaseControl IO io)
           -> FilePath -- ^ Target path, also containing store objects
           -> io ()
 mergeInto source target = withDir (source </> nodePackagesDir) $ do
-  let noDots p = let fn = getFilename p in fn /= "" && T.head fn /= '.'
-  packageDirs <- filter noDots <$> getDirectoryContents "."
+  packageDirs <- getDirectoryContents "."
   forM_ packageDirs $ \dir -> do
     let targetDir = target </> nodePackagesDir </> dir
     whenM (not <$> doesDirectoryExist targetDir) $ do

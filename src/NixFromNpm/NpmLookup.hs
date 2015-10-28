@@ -424,24 +424,6 @@ gitRefToSha owner repo ref = case ref of
           fromCommit txt `catch404`
             throw (InvalidGitRef ref)
 
--- | Fetch a package from github. Will convert a branch name into a specific
--- SHA so that the generated URL is deterministic.
-fetchGithub :: URI -> NpmFetcher SemVer
-fetchGithub uri = do
-  (owner, repo) <- case split "/" $ uriPath uri of
-    [_, owner, repo] -> return (pack owner, pack $ dropSuffix ".git" repo)
-    _ -> throw $ InvalidGithubUri uri
-  hash <- case uriFragment uri of
-    -- if there isn't a ref or a tag, use the default branch.
-    "" -> gitRefToSha owner repo =<< getDefaultBranch owner repo
-    -- otherwise, use that as a tag.
-    '#':frag -> return $ pack frag
-    frag -> errorC ["Invalid URL fragment '", pack frag, "'"]
-  -- Use the hash to pull down a zip.
-  let uri = makeGithubTarballURI owner repo hash
-  fetchHttp (fromText (repo <> "-" <> hash)) uri
-
-
 -- | Fetches an arbitrary git repo from a uri.
 fetchArbitraryGit :: URI -> NpmFetcher SemVer
 fetchArbitraryGit uri = throw $
@@ -462,8 +444,17 @@ makeGithubTarballURI owner repo commit = URI {
   uriFragment = ""
   }
 
+tarballNameToRef :: Text -> Text
+tarballNameToRef txt = do
+  let drop ext = T.dropEnd (T.length ext)
+  case txt of
+    _ | ".zip" `isSuffixOf` txt -> drop ".zip" txt
+      | ".tgz" `isSuffixOf` txt -> drop ".tgz" txt
+      | ".tar.gz" `isSuffixOf` txt -> drop ".tar.gz" txt
+      | otherwise -> txt
+
 -- | Convert a URI to a github URI, if it can be.
-toGithubUri :: URI -> NpmFetcher (Maybe URI)
+toGithubUri :: URI -> NpmFetcher (Maybe (FilePath, URI))
 toGithubUri uri = case uriAuthority uri of
   Nothing -> return Nothing
   Just auth | "github.com" `isSuffixOf` (uriRegName auth) -> do
@@ -475,8 +466,15 @@ toGithubUri uri = case uriAuthority uri of
         branch <- getDefaultBranch owner repo
         sha <- gitRefToSha owner repo branch
         return (owner, repo, sha)
-      _ -> throw $ InvalidGithubUri uri
-    return $ Just $ makeGithubTarballURI owner repo sha
+      [_, owner, repo, "archive", ref] -> do
+        let ref' = tarballNameToRef ref
+        hash <- gitRefToSha owner repo (SomeRef ref')
+        return (owner, repo, hash)
+      _ -> do
+        putStrsLn ["hey"]
+        throw $ InvalidGithubUri uri
+    let githubUri = makeGithubTarballURI owner repo sha
+    return $ Just (fromText (repo <> "-" <> sha), githubUri)
   _ -> return Nothing
 
 -- | Look up a name and version range to see if we have recorded this as being
@@ -552,7 +550,8 @@ _resolveNpmVersionRange :: Name
 _resolveNpmVersionRange name range = case range of
     SemVerRange svr -> resolveDep name svr
     NpmUri uri -> toGithubUri uri >>= \case
-      Just githubUri -> fetchGithub githubUri
+      Just (path, githubUri) -> do
+        fetchHttp path githubUri
       Nothing -> case uriScheme uri of
         s | "http" `isPrefixOf` s -> fetchHttp "package" uri
           | "git" `isPrefixOf` s -> fetchArbitraryGit uri
@@ -562,7 +561,8 @@ _resolveNpmVersionRange name range = case range of
         sha <- gitRefToSha owner repo =<< case rev of
                  Nothing -> getDefaultBranch owner repo
                  Just r -> return r
-        fetchGithub $ makeGithubTarballURI owner repo sha
+        let path = fromText (repo <> "-" <> sha)
+        fetchHttp path $ makeGithubTarballURI owner repo sha
       _ -> throw $ UnsupportedGitSource src
     Tag tag -> resolveByTag tag name
     vr -> throw $ UnsupportedVersionType range
