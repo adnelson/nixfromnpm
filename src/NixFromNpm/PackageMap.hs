@@ -4,8 +4,8 @@ module NixFromNpm.PackageMap where
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
 
+import Data.SemVer
 import NixFromNpm.Common
-import NixFromNpm.SemVer
 
 -- | We use this data structure a lot: a mapping of package names to
 -- a mapping of versions to fully defined packages.

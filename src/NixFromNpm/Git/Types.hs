@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-module NixFromNpm.GitTypes where
+module NixFromNpm.Git.Types where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)

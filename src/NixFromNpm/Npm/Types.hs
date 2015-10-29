@@ -2,8 +2,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module NixFromNpm.NpmTypes (
-    module NixFromNpm.NpmVersion,
+module NixFromNpm.Npm.Types (
+    module NixFromNpm.Npm.Version,
     PackageInfo(..), PackageMeta(..), VersionInfo(..),
     DistInfo(..), ResolvedPkg(..), DependencyType(..),
     BrokenPackageReason(..), ResolvedDependency(..),
@@ -16,12 +16,13 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 
+import Data.SemVer
+import Data.SemVer.Parser
+
 import NixFromNpm.Common
-import NixFromNpm.GitTypes (getObject, getDict, GithubError)
-import NixFromNpm.SemVer
-import NixFromNpm.NpmVersion
-import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.Parsers.SemVer
+import NixFromNpm.Git.Types (getObject, getDict, GithubError)
+import NixFromNpm.Npm.Version
+import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.PackageMap
 
 -- | Package information; specifically all of the different versions.

@@ -10,7 +10,7 @@ import System.Exit
 import NixFromNpm.Common hiding (getArgs, (<>))
 import NixFromNpm.Options (NixFromNpmOptions, parseOptions,
                            validateOptions)
-import NixFromNpm.Conversion (dumpPkgFromOptions)
+import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
 
 main :: IO ()
 main = do

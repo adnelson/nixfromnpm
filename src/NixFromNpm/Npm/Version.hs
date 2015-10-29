@@ -1,14 +1,15 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-module NixFromNpm.NpmVersion where
+module NixFromNpm.Npm.Version where
 
 import qualified Data.Text as T
 
+import Data.SemVer
+
 import NixFromNpm.Common
-import NixFromNpm.SemVer
-import NixFromNpm.GitTypes hiding (Tag)
-import NixFromNpm.Parsers.Common (ParseError)
+import NixFromNpm.Git.Types hiding (Tag)
+import Text.Parsec (ParseError)
 
 data GitSource = Github | Bitbucket | Gist | GitLab deriving (Show, Eq, Ord)
 

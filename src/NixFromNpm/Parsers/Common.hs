@@ -13,7 +13,6 @@ import Text.Parsec hiding (many, (<|>), spaces, parse, State, uncons)
 import qualified Text.Parsec as Parsec
 
 import NixFromNpm.Common hiding (try)
-import NixFromNpm.SemVer
 
 type Parser = ParsecT String () Identity
 

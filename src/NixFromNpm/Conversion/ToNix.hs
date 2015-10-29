@@ -4,20 +4,21 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
-module NixFromNpm.ConvertToNix where
+module NixFromNpm.Conversion.ToNix where
 
 import qualified Prelude as P
 import qualified Data.HashMap.Strict as H
 import Data.Text (Text, replace)
-import Data.Fix
+
+import Data.SemVer
 
 import NixFromNpm.Common hiding (replace)
 import Nix.Types hiding (mkPath)
 import Nix.Pretty (prettyNix)
 import qualified Nix.Types as Nix
 import Nix.Parser
-import NixFromNpm.NpmTypes
-import NixFromNpm.SemVer
+
+import NixFromNpm.Npm.Types
 
 callPackage :: NExpr -> NExpr
 callPackage = callPackageWith []
@@ -199,16 +200,3 @@ bindingsToMap = foldl' step mempty where
   step record binding = case binding of
     NamedVar [StaticKey key] obj -> H.insert key obj record
     _ -> record
-
--- | For expressions in a very specific format, we can ask them if their
--- dev dependencies have been defined.
-nixExprHasDevDeps :: NExpr -> Maybe Bool -- ^ Nothing if we don't know
-nixExprHasDevDeps (Fix nexpr) = case nexpr of
-  -- It must be a function type
-  NAbs params (Fix body) -> case body of
-    -- Body must be a call to the `buildNodePackage` function
-    NApp (Fix (NSym "buildNodePackage"))
-         (Fix (NSet bindtype bindings)) -> do
-      Just $ H.member "devDependencies" (bindingsToMap bindings)
-    _ -> Nothing
-  _ -> Nothing

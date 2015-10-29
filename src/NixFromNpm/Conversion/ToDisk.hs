@@ -4,7 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
-module NixFromNpm.Conversion where
+module NixFromNpm.Conversion.ToDisk where
 
 import qualified Prelude as P
 import Data.HashMap.Strict (HashMap)
@@ -17,22 +17,23 @@ import Text.Printf (printf)
 import Shelly (shelly, cp_r)
 import System.Exit
 
+import Data.SemVer
+import Data.SemVer.Parser
+
 import qualified Paths_nixfromnpm
 import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
-import NixFromNpm.ConvertToNix (toDotNix,
-                                writeNix,
-                                rootDefaultNix,
-                                defaultNixExtending,
-                                packageJsonDefaultNix,
-                                resolvedPkgToNix,
-                                nodePackagesDir)
+import NixFromNpm.Conversion.ToNix (toDotNix,
+                                    writeNix,
+                                    rootDefaultNix,
+                                    defaultNixExtending,
+                                    packageJsonDefaultNix,
+                                    resolvedPkgToNix,
+                                    nodePackagesDir)
 import NixFromNpm.Options
-import NixFromNpm.NpmTypes
-import NixFromNpm.SemVer
-import NixFromNpm.Parsers.SemVer
+import NixFromNpm.Npm.Types
 import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap, psToList)
 import NixFromNpm.NpmLookup
 
