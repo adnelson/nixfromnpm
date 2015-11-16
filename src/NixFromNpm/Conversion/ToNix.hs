@@ -28,8 +28,18 @@ callPackageWith args e = mkApp (mkApp (mkSym "callPackage") e)
                                (mkNonRecSet args)
 
 -- | Turns a string into one that can be used as an identifier.
+-- NPM package names can contain dots, so we translate these into dashes.
+-- They can also start with a namespace designator, e.g. "@foobar/baz",
+-- which indicates a package 'baz' under the @foobar. We translate this
+-- into '__ns-foobar__baz'.
 fixName :: Name -> Name
-fixName = replace "." "-"
+fixName = removePrivateNamespace . removeDots
+
+removePrivateNamespace :: Name -> Name
+removePrivateNamespace = replace "@" "__priv-" . replace "/" "__"
+
+removeDots :: Name -> Name
+removeDots = replace "." "-"
 
 -- | Converts a package name and semver into an identifier.
 -- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
@@ -116,7 +126,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
         Nothing -> Nothing
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
   let args = mkNonRecSet $ catMaybes [
-        Just $ "name" `bindTo` str rpName,
+        Just $ "name" `bindTo` str (removePrivateNamespace rpName),
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpDistInfo,
         bindTo "deps" <$> withNodePackages False deps,

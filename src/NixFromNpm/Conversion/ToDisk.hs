@@ -230,12 +230,19 @@ showBrokens = H.toList <$> gets brokenPackages >>= \case
 -- non-zero status if they did.
 checkForBroken :: [(Name, NpmVersionRange)] -> NpmFetcher ExitCode
 checkForBroken inputs = do
+  -- findBrokens will look for any of the packages in
   let findBrokens [] = return []
       findBrokens ((name, range):others) = getBroken name range >>= \case
         Nothing -> findBrokens others
         Just report -> ((name, range, report) :) <$> findBrokens others
   findBrokens inputs >>= \case
-    [] -> putStrLn "Top-level packages built successfully." >> return ExitSuccess
+    [] -> do
+      let p = if length inputs > 1 then "packages" else "package"
+      putStrsLn [
+        "Top-level ", p, " ", mapJoinBy ", " (uncurry showRangePair) inputs,
+        " built successfully."
+        ]
+      return ExitSuccess
     pkgs -> do
       putStrLn "The following packages failed to build:"
       forM_ pkgs $ \(name, range, report) -> do

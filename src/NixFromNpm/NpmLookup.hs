@@ -38,8 +38,12 @@ import Data.SemVer.Parser
 
 import NixFromNpm.Common
 import NixFromNpm.Git.Types as Git hiding (Tag)
-import NixFromNpm.Conversion.ToNix
-import NixFromNpm.Npm.Types
+import NixFromNpm.Conversion.ToNix (fixName, nodePackagesDir, toDotNix,
+                                    writeNix, resolvedPkgToNix)
+import NixFromNpm.Npm.Types (VersionInfo(..), ResolvedPkg(..),
+                             PackageInfo(..), BrokenPackageReason(..),
+                             DependencyType(..), ResolvedDependency(..),
+                             DistInfo(..), Shasum(..))
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.PackageMap
@@ -244,14 +248,17 @@ _getPackageInfo pkgName registryUri = do
       return [("Authorization", "Bearer " <> token)]
   let escape = T.replace "/" "%2f"
   jsonStr <- getHttp (registryUri // escape pkgName) extraHeaders
-             `catch` \case
+             `catches` [
+               Handler (\case
                 HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
-                err -> throw err
+                err -> throw err)
+               ]
   case eitherDecode jsonStr of
       Left err -> do
         let text = decodeUtf8 $ BL8.toStrict jsonStr
         throw $ InvalidPackageJson text err
-      Right info -> return info
+      Right info -> do
+        return info
 
 -- | Same as _getPackageInfo, but caches results for speed.
 getPackageInfo :: Name -> NpmFetcher PackageInfo
@@ -705,7 +712,9 @@ outputDirOf :: Name -- ^ Name of the package
                                     -- nix expressions will be stored
 outputDirOf pkgName = do
   outputDir <- asks nfsOutputPath
-  return $ outputDir </> nodePackagesDir </> fromText pkgName
+  -- Replace any occurrence of / with | so this doesn't become a folder.
+  let folderName = fixName pkgName
+  return $ outputDir </> nodePackagesDir </> fromText folderName
 
 dotNixPathOf :: Name -- ^ Name of package
              -> SemVer -- ^ Version of package
@@ -779,6 +788,18 @@ defaultSettings = NpmFetcherSettings {
   nfsRealTimeWrite = False
   }
 
+settingsFromEnv :: IO NpmFetcherSettings
+settingsFromEnv = do
+  npmTokenEnv <- map encodeUtf8 <$> getEnv "NPM_AUTH_TOKEN"
+  githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+  output <- (</> "nixfromnpm_output") <$> getCurrentDirectory
+  return $ defaultSettings {
+        nfsNpmAuthToken = npmTokenEnv,
+        nfsGithubAuthToken = githubTokenEnv,
+        nfsOutputPath = output
+        }
+
+
 startState :: NpmFetcherState
 startState = do
   NpmFetcherState {
@@ -796,6 +817,15 @@ runNpmFetchWith :: NpmFetcherSettings
 runNpmFetchWith settings state action = do
   (result, state', _) <- runRWST action settings state
   return (result, state')
+
+runWithEnv :: NpmFetcher a -> IO (a, NpmFetcherState)
+runWithEnv action = do
+  settings <- settingsFromEnv
+  runNpmFetchWith settings startState action
+
+evalWithEnv :: NpmFetcher a -> IO a
+evalWithEnv = map fst . runWithEnv
+
 
 runIt :: NpmFetcher a -> IO a
 runIt action = do

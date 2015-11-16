@@ -27,6 +27,7 @@ data NpmVersionError
   | UnsupportedUriScheme String
   | UnsupportedGitSource GitSource
   | VersionSyntaxError Text ParseError
+  | UnrecognizedVersionFormat Text
   deriving (Show, Eq, Typeable)
 
 instance Exception NpmVersionError

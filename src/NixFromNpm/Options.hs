@@ -131,10 +131,22 @@ validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
 
 parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
 parseNameAndRange name = case T.split (== '@') name of
-  [name] -> return (name, SemVerRange anyVersion)
-  [name, range] -> case parseNpmVersionRange range of
+  -- Just a name, no version range
+  [pkgName] | length pkgName > 0 -> return (pkgName, SemVerRange anyVersion)
+  -- A private namespace begins with an '@', so if the package starts with
+  -- '@', don't treat it as a version designator.
+  ["", rest] | length rest > 0 -> do return (name, SemVerRange anyVersion)
+  -- If the @ occurs in the middle, treat it as a name and range identifier.
+  [name, range] | length name > 0 -> case parseNpmVersionRange range of
     Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
     Right nrange -> return (name, nrange)
+  -- If we have one both at the beginning and in the middle, it's a private
+  -- namespace + version bound.
+  ["", name, range] | length name > 0 -> case parseNpmVersionRange range of
+    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
+    Right nrange -> return ("@" <> name, nrange)
+  -- Anything else is invalid.
+  _ -> throw $ NpmVersionError $ UnrecognizedVersionFormat name
 
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do

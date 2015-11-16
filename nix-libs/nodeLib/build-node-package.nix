@@ -11,16 +11,38 @@
   buildNodePackage
 }:
 
+let
+  # The path within $out/lib to find a package. If the package does not
+  # have a namespace, it will simply be in `node_modules`, and otherwise it
+  # will appear in `node_modules/@namespace`.
+  modulePath = pkg: if pkg.namespace == null then "node_modules"
+                    else "node_modules/@${pkg.namespace}";
+
+  # The path to the package within its modulePath. Just appending the name
+  # of the package.
+  pathInModulePath = pkg: "${modulePath pkg}/${pkg.basicName}";
+in
+
 {
-  name, version ? "", src,
+  # Used for private packages. Indicated in the name field of the
+  # package.json, e.g. "@mynamespace/mypackage". Public packages will not
+  # need this.
+  namespace ? null,
 
-  # by default name of nodejs interpreter e.g. "nodejs-${name}"
-  namePrefix ? nodejs.interpreterName + "-",
+  # The name of the package. If it's a private package with a namespace,
+  # this should not contain the namespace.
+  name,
 
-  # Node package name
-  pkgName ?
-    if version != "" then stdenv.lib.removeSuffix "-${version}" name else
-    (builtins.parseDrvName name).name,
+  # Version of the package. This should follow the semver standard, although
+  # we don't explicitly enforce that in this function.
+  version,
+
+  # Source of the package; can be a tarball or a folder on the filesystem.
+  src,
+
+  # by default name of nodejs interpreter e.g. "nodejs-<version>-${name}"
+  namePrefix ? "${nodejs.interpreterName}-${nodejs.version}-" +
+               (if namespace == null then "" else "${namespace}-"),
 
   # List or attribute set of dependencies
   deps ? {},
@@ -36,9 +58,6 @@
 
   # List or set of development dependencies (currently ignored)
   devDependencies ? null,
-
-  # Whether package is binary or library
-  bin ? false,
 
   # Additional flags passed to npm install
   flags ? "",
@@ -67,6 +86,12 @@ let
                        intersectLists isAttrs listToAttrs nameValuePair
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues getVersion flatten remove concatStringsSep;
+
+  # The package name as it appears in the package.json. This contains a
+  # namespace if there is one, so it will be a distinct identifier for
+  # different packages.
+  pkgName = if namespace == null then name else "@${namespace}/${name}";
+
   self = let
     sources = runCommand "node-sources" {} ''
       tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
@@ -179,17 +204,18 @@ let
         # copy is needed if dependency has recursive dependencies,
         # because node can't follow symlinks while resolving recursive deps.
         ${concatMapStrings (dep:
-          if dep.recursiveDeps == [] then ''
-            ln -sv ${dep}/lib/node_modules/${dep.pkgName} node_modules/
-          '' else ''
-            cp -R ${dep}/lib/node_modules/${dep.pkgName} node_modules/
+          let
+            cmd = if dep.recursiveDeps == [] then "ln -sv" else "cp -R";
+          in ''
+            mkdir -p ${modulePath dep}
+            ${cmd} ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
           ''
         ) (attrValues requiredDependencies)}
 
         # Create shims for recursive dependenceies
         ${concatMapStrings (dep: ''
-          mkdir -p node_modules/${dep.pkgName}
-          cat > node_modules/${dep.pkgName}/package.json <<EOF
+          mkdir -p ${modulePath dep}
+          cat > ${pathInModulePath dep}/package.json <<EOF
           {
               "name": "${dep.pkgName}",
               "version": "${getVersion dep}"
@@ -234,22 +260,25 @@ let
 
         # Remove shims
         ${concatMapStrings (dep: ''
-          rm node_modules/${dep.pkgName}/package.json
-          rmdir node_modules/${dep.pkgName}
+          rm ${pathInModulePath dep}/package.json
+          rmdir ${modulePath dep}
         '') (attrValues recursiveDependencies)}
 
-        mkdir -p $out/lib/node_modules
 
-        # Install manual
-        mv node_modules/${pkgName} $out/lib/node_modules
-        rm -fR $out/lib/node_modules/${pkgName}/node_modules
-        cp -r node_modules $out/lib/node_modules/${pkgName}/node_modules
+        # Install the package that we just built.
+        mkdir -p $out/lib/${modulePath self}
+        # Move the folder that was created for this path to $out/lib.
+        mv ${pathInModulePath self} $out/lib/${pathInModulePath self}
+        # Remove the node_modules subfolder from there, and instead put things
+        # in $PWD/node_modules into that folder.
+        rm -rf $out/lib/${pathInModulePath self}/node_modules
+        cp -r node_modules $out/lib/${pathInModulePath self}/node_modules
 
-        if [ -e "$out/lib/node_modules/${pkgName}/man" ]; then
+        if [ -e "$out/lib/${pathInModulePath self}/man" ]; then
           mkdir -p $out/share
-          for dir in "$out/lib/node_modules/${pkgName}/man/"*; do
+          for dir in $out/lib/${pathInModulePath self}/man/*; do          #*/
             mkdir -p $out/share/man/$(basename "$dir")
-            for page in "$dir"/*; do # */ unconfuse nix-mode
+            for page in $dir/*; do                                        #*/
               ln -sv $page $out/share/man/$(basename "$dir")
             done
           done
@@ -257,10 +286,12 @@ let
 
         # Move peer dependencies to node_modules
         ${concatMapStrings (dep: ''
-          mv node_modules/${dep.pkgName} $out/lib/node_modules
+          mkdir -p ${modulePath dep}
+          mv ${pathInModulePath dep} $out/lib/${modulePath dep}
         '') (attrValues _peerDependencies.requiredDeps)}
 
-        # Install binaries and patch shebangs
+        # Install binaries and patch shebangs. These are always found in
+        # node_modules/.bin, regardless of a package namespace.
         mv node_modules/.bin $out/lib/node_modules 2>/dev/null || true
         if [ -d "$out/lib/node_modules/.bin" ]; then
           ln -sv $out/lib/node_modules/.bin $out/bin
@@ -280,7 +311,8 @@ let
       export PATH=${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
       mkdir -p node_modules
       ${concatMapStrings (dep: ''
-        ln -sfv ${dep}/lib/node_modules/${dep.pkgName} node_modules/
+        mkdir -p ${modulePath dep}
+        ln -sfv ${dep}/lib/${pathInModulePath dep} ${pathInModulePath dep}
       '') (attrValues requiredDependencies)}
       ${postShellHook}
     '';
@@ -293,11 +325,16 @@ let
       maintainers = [ stdenv.lib.maintainers.offline ];
     };
 
+    # Propagate pieces of information about the package so that downstream
+    # packages can reflect on them.
     passthru.pkgName = pkgName;
+    passthru.basicName = name;
+    passthru.namespace = namespace;
+    passthru.version = version;
+
     # Add an 'override' attribute, which will call `buildNodePackage` with the
     # given arguments overridden.
-    passthru.override = overridingArgs:
-      buildNodePackage (args // overridingArgs);
+    passthru.override = newArgs: buildNodePackage (args // newArgs);
   } // (removeAttrs args ["deps" "resolvedDeps" "optionalDependencies"
                           "devDependencies"]) // {
     name = "${namePrefix}${name}-${version}";
