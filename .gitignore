@@ -10,3 +10,5 @@ test_result*
 *.tar.gz
 *.tgz
 gcli
+test_priv
+test_priv_out

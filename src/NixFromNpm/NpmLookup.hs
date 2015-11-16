@@ -30,6 +30,7 @@ import qualified Text.Parsec as Parsec
 import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
                silently)
 import Network.Curl
+import Network.URI (escapeURIString, isUnreserved)
 import Nix.Types
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.SemVer
@@ -69,6 +70,8 @@ data NpmFetcherSettings = NpmFetcherSettings {
   nfsRegistries :: [URI],
   -- ^ List of URIs that we can use to query for NPM packages, in order of
   -- preference.
+  nfsNpmAuthToken :: Maybe ByteString,
+  -- ^ Used for authorization when fetching a package from a private npm.
   nfsGithubAuthToken :: Maybe ByteString,
   -- ^ Used for authorization when fetching a package from github.
   nfsRequestTimeout :: Long,
@@ -197,6 +200,7 @@ getHttp uri headers = do
                         ("User-Agent", "nixfromnpm-fetcher")]
   timeout <- asks nfsRequestTimeout
   retries <- asks nfsRetries
+  putStrsLn ["Hitting URI ", uriToText uri]
   getHttpWith timeout retries (headers <> defaultHeaders) uri
 
 ---------------------------------------------------------
@@ -231,7 +235,15 @@ _getPackageInfo :: Name -> URI -> NpmFetcher PackageInfo
 _getPackageInfo pkgName registryUri = do
   putStrsLn ["Querying ", uriToText registryUri,
              " for package ", pkgName, "..."]
-  jsonStr <- getHttp (registryUri // pkgName) []
+  extraHeaders <- asks nfsNpmAuthToken >>= \case
+    Nothing -> do
+      putStrsLn ["No token to use."]
+      return []
+    Just token -> do
+      putStrsLn ["Using token: ", pshow token]
+      return [("Authorization", "Bearer " <> token)]
+  let escape = T.replace "/" "%2f"
+  jsonStr <- getHttp (registryUri // escape pkgName) extraHeaders
              `catch` \case
                 HttpErrorWithCode 404 -> throw (NoMatchingPackage pkgName)
                 err -> throw err
@@ -756,6 +768,7 @@ resolveByTag tag pkgName = do
 defaultSettings :: NpmFetcherSettings
 defaultSettings = NpmFetcherSettings {
   nfsRequestTimeout = 10,
+  nfsNpmAuthToken = Nothing,
   nfsGithubAuthToken = Nothing,
   nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
   nfsOutputPath = error "default setings provide no output path",

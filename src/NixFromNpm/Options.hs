@@ -57,6 +57,7 @@ data RawOptions = RawOptions {
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
   roGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  roNpmToken :: Maybe ByteString, -- ^ NPM authentication token.
   roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
   roRealTime :: Bool -- ^ Write packages to disk as they are written.
 } deriving (Show, Eq)
@@ -76,6 +77,7 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
   nfnoGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  nfnoNpmToken :: Maybe ByteString, -- ^ NPM authentication token.
   nfnoRealTime :: Bool -- ^ Write packages to disk as they are written.
   } deriving (Show, Eq)
 
@@ -143,13 +145,15 @@ validateOptions opts = do
   outputPath <- validateOutput . fromText $ roOutputPath opts
   registries <- mapM validateUrl $ (roRegistries opts <>
                                     if roNoDefaultRegistry opts
-                                    then []
-                                    else ["https://registry.npmjs.org"])
-  tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+                                       then []
+                                       else ["https://registry.npmjs.org"])
+  githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+  npmTokenEnv <- map encodeUtf8 <$> getEnv "NPM_AUTH_TOKEN"
   return (NixFromNpmOptions {
     nfnoOutputPath = outputPath,
     nfnoExtendPaths = extendPaths,
-    nfnoGithubToken = roGithubToken opts <|> tokenEnv,
+    nfnoGithubToken = roGithubToken opts <|> githubTokenEnv,
+    nfnoNpmToken = roGithubToken opts <|> npmTokenEnv,
     nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
     nfnoDevDepth = roDevDepth opts,
     nfnoTest = roTest opts,
@@ -178,8 +182,8 @@ validateOptions opts = do
             Just path' -> throw $ DuplicatedExtensionName name
                                     (fromText path) path'
 
-parseOptions :: Maybe ByteString -> Parser RawOptions
-parseOptions githubToken = RawOptions
+parseOptions :: Parser RawOptions
+parseOptions = RawOptions
     <$> many (textOption packageName)
     <*> packageFiles
     <*> textOption outputDir
@@ -191,7 +195,8 @@ parseOptions githubToken = RawOptions
     <*> isTest
     <*> registries
     <*> timeout
-    <*> token
+    <*> githubToken
+    <*> npmToken
     <*> noDefaultRegistry
     <*> realTime
   where
@@ -245,12 +250,17 @@ parseOptions githubToken = RawOptions
                                     <> metavar "REGISTRY"
                                     <> help ("NPM registry to query (supports "
                                              <> "multiples)"))
-    tokenHelp = ("Token to use for github access (also can be set with " <>
-                 "GITHUB_TOKEN environment variable)")
-    token = (Just . T.encodeUtf8 <$> textOption (long "github-token"
+    tokenHelp _type envVar = concat
+      ["Token to use for ", _type, " access (also can be set with ",
+       envVar, " environment variable)"]
+    githubToken = (Just . T.encodeUtf8 <$> textOption (long "github-token"
                                   <> metavar "TOKEN"
-                                  <> help tokenHelp))
-            <|> pure githubToken
+                                  <> help (tokenHelp "github" "GITHUB_TOKEN")))
+                  <|> pure Nothing
+    npmToken = (Just . T.encodeUtf8 <$> textOption (long "npm-token"
+                                  <> metavar "TOKEN"
+                                  <> help (tokenHelp "npm" "NPM_AUTH_TOKEN")))
+               <|> pure Nothing
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
     realTime = switch (long "real-time"

@@ -14,8 +14,7 @@ import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
 
 main :: IO ()
 main = do
-  maybeToken <- fmap T.encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  let opts = info (helper <*> parseOptions maybeToken)
+  let opts = info (helper <*> parseOptions)
              (fullDesc <> progDesc description <> header headerText)
   parsedOpts <- execParser opts
   validatedOpts <- validateOptions parsedOpts

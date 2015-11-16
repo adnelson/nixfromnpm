@@ -261,6 +261,7 @@ dumpPkgFromOptions :: NixFromNpmOptions -> IO ExitCode
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   let settings = defaultSettings {
     nfsGithubAuthToken = nfnoGithubToken,
+    nfsNpmAuthToken = nfnoNpmToken,
     nfsRegistries = nfnoRegistries,
     nfsRequestTimeout = fromIntegral nfnoTimeout,
     nfsOutputPath = nfnoOutputPath,

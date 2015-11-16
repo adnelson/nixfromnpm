@@ -67,7 +67,7 @@ import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
 import qualified Data.Text as T
-import Filesystem.Path.CurrentOS hiding (concat, null, (<.>))
+import Filesystem.Path.CurrentOS hiding (concat, null, (<.>), empty)
 import GHC.Exts (IsList)
 import Text.Render hiding (renderParens)
 import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
