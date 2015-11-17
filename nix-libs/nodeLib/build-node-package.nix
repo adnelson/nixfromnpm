@@ -41,7 +41,7 @@ in
   src,
 
   # by default name of nodejs interpreter e.g. "nodejs-<version>-${name}"
-  namePrefix ? "${nodejs.interpreterName}-${nodejs.version}-" +
+  namePrefix ? "${nodejs.name}-" +
                (if namespace == null then "" else "${namespace}-"),
 
   # List or attribute set of dependencies
