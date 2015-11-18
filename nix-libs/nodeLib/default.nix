@@ -25,12 +25,17 @@ let
   # Function to remove the first character of a string.
   dropFirstChar = str: concatStrings (tail (stringToCharacters str));
 
-  _pkgs = pkgs // {fetchUrlWithHeaders = pkgs.callPackage ./pyFetchurl {};};
+  fetchUrlWithHeaders = pkgs.callPackage ./pyFetchurl.nix {};
+
+  fetchPrivateNpm = {sha1, namespace, name, version, bearer}:
+    fetchUrlWithHeaders {
+      inherit sha1;
+      url = "http://registry.npmjs.org/@${namespace}/${name}/-/${name}-${version}.tgz";
+      headers.Authentication = "Bearer ${bearer}";
+    };
 in
 
 rec {
-  pkgs = _pkgs;
-
   nodejs = pkgs."nodejs-${replaceDots "_" nodejsVersion}" or (
     throw "The given nodejs version ${nodejsVersion} has not been defined."
   );
@@ -113,15 +118,6 @@ rec {
     isNsDir = name: type: type == "directory" && hasPrefix "@" name;
     # Names of NPM packages defined in this directory.
     namespaceDirs = lsFilter isNsDir (/. + rootPath);
-    # Generate the package expression from a package name and .nix path.
-    toPackage = namespace: name: filepath: let
-      versionRaw = removeSuffix ".nix" filepath; # Raw version, i.e. "1.2.4"
-      # Join with package name to make the variable name.
-      varName = "${replaceDots "-" name}_${replaceDots "-" versionRaw}";
-      fullPath = "${rootPath}/@${namespace}/${name}/${filepath}";
-      in
-      # Return the singleton set which maps that name to the actual expression.
-      {"${varName}" = callPackage (/. + "${fullPath}") {};};
     in
     # For each namespace directory, each package folder in it, and
     # each .nix file in that, create a package from that and then
@@ -159,6 +155,7 @@ rec {
         in deriv;
 
       callPackage = callPackageWith {
+        inherit fetchPrivateNpm;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
       };
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //
