@@ -43,7 +43,7 @@ instance Show NpmVersionRange where
   show (LocalPath pth) = show pth
 
 showPair :: PackageName -> SemVer -> Text
-showPair name version = pshow name <> "@" <> renderSV version
+showPair name version = pshow name <> "@" <> pshow version
 
 showPairs :: [(PackageName, SemVer)] -> Text
 showPairs = mapJoinBy ", " (uncurry showPair)

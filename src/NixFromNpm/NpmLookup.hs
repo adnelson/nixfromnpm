@@ -468,10 +468,12 @@ makeGithubTarballURI owner repo commit = URI {
   uriFragment = ""
   }
 
-tarballNameToRef :: Text -> Text
+-- | Given the name of a tarball, convert it into a git ref, by stripping
+-- off a trailing tar/zip extension.
+tarballNameToRef :: Text -> GitRef
 tarballNameToRef txt = do
   let drop ext = T.dropEnd (T.length ext)
-  case txt of
+  SomeRef $ case txt of
     _ | ".zip" `isSuffixOf` txt -> drop ".zip" txt
       | ".tgz" `isSuffixOf` txt -> drop ".tgz" txt
       | ".tar.gz" `isSuffixOf` txt -> drop ".tar.gz" txt
@@ -495,7 +497,7 @@ toGithubUri uri = case uriAuthority uri of
       [_, owner, repo', "archive", ref] -> do
         let repo = dropSuffix ".git" repo'
         let ref' = tarballNameToRef ref
-        hash <- gitRefToSha owner repo (SomeRef ref')
+        hash <- gitRefToSha owner repo ref'
         return (owner, repo, hash)
       _ -> throwIO $ InvalidGithubUri uri
     let githubUri = makeGithubTarballURI owner repo sha
@@ -550,7 +552,8 @@ addReport name range depOfName depOfVersion = do
   modify $ \s -> s {brokenPackages = update (brokenPackages s)}
 
 -- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
--- figure out how to resolve the dependency.
+-- figure out how to resolve the dependency. Checks the cache first, and does
+-- error handling if @_resolveNpmVersionRange@ fails.
 resolveNpmVersionRange :: PackageName -- ^ Name of the package.
                        -> NpmVersionRange -- ^ Version bounds of the package.
                        -> NpmFetcher ResolvedDependency
@@ -574,6 +577,8 @@ resolveNpmVersionRange pkgName pkgRange = do
     -- version to the set of packages depending on this broken dependency.
     Just report -> return $ Broken (bprReason report)
 
+-- | Resolve a version range. Figures out if it should query NPM, or download
+-- a package from git or http, etc.
 _resolveNpmVersionRange :: PackageName
                         -> NpmVersionRange
                         -> NpmFetcher SemVer
@@ -606,7 +611,7 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
-          versionDots = renderSV bestVersion
+          versionDots = pshow bestVersion
           package = fromJust $ H.lookup bestVersion versions
       putStrs ["Requirement ", pshow name, " version ",
                pack $ show range, " already satisfied: "]
@@ -635,7 +640,7 @@ finishResolving name ver = do
   modify $ \s ->
     s {currentlyResolving = pmDelete name ver $ currentlyResolving s,
        packageStackTrace = P.tail $ packageStackTrace s}
-  putStrsLn ["Finished resolving ", pshow name, " ", renderSV ver]
+  putStrsLn ["Finished resolving ", pshow name, " ", pshow ver]
 
 -- | Print the current package stack trace.
 showTrace :: NpmFetcher ()
@@ -665,7 +670,7 @@ recurOn packageName version deptype deps = do
         getDesc OptionalDependency = app "optional" (getDesc Dependency)
         (desc, descPlural) = getDesc deptype
     when (length depList > 0) $ do
-      putStrsLn [pshow packageName, " version ", renderSV version, " has ",
+      putStrsLn [pshow packageName, " version ", pshow version, " has ",
                  descPlural, ": ", showDeps depList]
     forM depList $ \(depName, depRange) -> do
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
@@ -728,6 +733,8 @@ resolveVersionInfo VersionInfo{..} = do
   addPackage viName viVersion $ NewPackage rPkg
   return (rPkg, viVersion)
 
+-- | Given the name of a package, return the path within the output
+-- folder into which the package will be placed.
 outputDirOf :: PackageName -- ^ Name of the package
             -> NpmFetcher FilePath -- ^ Path to where that package's
                                    -- nix expressions will be stored
@@ -739,6 +746,8 @@ outputDirOf (PackageName pkgName namespace) = do
                                   fixName pkgName]
   return $ outputDir </> nodePackagesDir </> fromText folderName
 
+-- | Given the name and version of a package, return the path within
+-- the output folder into which the version file will be placed.
 dotNixPathOf :: PackageName -- ^ Name of package
              -> SemVer -- ^ Version of package
              -> NpmFetcher FilePath
@@ -755,9 +764,11 @@ writePackage name version expr = do
   putStrsLn ["Writing package file at ", pathToText dotNixPath]
   writeNix dotNixPath expr
 
+-- | Resolve a @VersionInfo@ and get the resulting @ResolvedPkg@.
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
 
+-- | Resolve a @VersionInfo@ and get the resulting @SemVer@.
 versionInfoToSemVer :: VersionInfo -> NpmFetcher SemVer
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
@@ -789,10 +800,13 @@ resolveByTag tag pkgName = do
     Nothing -> throw (NoSuchTag tag)
     Just version -> case H.lookup version $ piVersions pInfo of
       Nothing -> errorC ["Tag ", tag, " points to version ",
-                         renderSV version, ", but no such version of ",
+                         pshow version, ", but no such version of ",
                          pshow pkgName, " exists."]
       Just versionInfo -> versionInfoToSemVer versionInfo
 
+-- | Default settings. The one caveat here is that there's no good way
+-- to default the output path, so that will throw an error if it's not
+-- set.
 defaultSettings :: NpmFetcherSettings
 defaultSettings = NpmFetcherSettings {
   nfsRequestTimeout = 10,
@@ -807,12 +821,15 @@ defaultSettings = NpmFetcherSettings {
   nfsRealTimeWrite = False
   }
 
-
+-- | Pull a ':'-separated list of tokens from the environment and parse
+-- them. Return empty if the environment variable isn't set.
 getNpmTokens :: MonadIO io => io (Record AuthToken)
 getNpmTokens = getEnv "NPM_AUTH_TOKENS" >>= \case
   Nothing -> return mempty
   Just tokens -> parseNpmTokens (T.split (==':') tokens)
 
+-- | The tokens should come in the form of NAMESPACE=TOKEN. This will
+-- take all of the strings of that shape and stick them into a record.
 parseNpmTokens :: MonadIO io => [Text] -> io (Record AuthToken)
 parseNpmTokens = foldM step mempty where
   step tokenMap token = case T.split (=='=') token of
@@ -824,28 +841,31 @@ parseNpmTokens = foldM step mempty where
       warns ["Invalid NPM token: ", token]
       return tokenMap
 
+-- | Use the environment variables to provide better default settings.
 settingsFromEnv :: IO NpmFetcherSettings
 settingsFromEnv = do
   npmTokensEnv <- getNpmTokens
   githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  output <- (</> "nixfromnpm_output") <$> getCurrentDirectory
+  output <- getEnv "NIXFROMNPM_OUTPUT" >>= \case
+    Nothing -> (</> "nixfromnpm_output") <$> getCurrentDirectory
+    Just dir -> return $ fromText dir
   return $ defaultSettings {
         nfsNpmAuthTokens = npmTokensEnv,
         nfsGithubAuthToken = githubTokenEnv,
         nfsOutputPath = output
         }
 
-
+-- | Starting state, with all of the collections empty.
 startState :: NpmFetcherState
-startState = do
-  NpmFetcherState {
-    resolved = mempty,
-    packageStackTrace = [],
-    pkgInfos = H.empty,
-    currentlyResolving = mempty,
-    brokenPackages = mempty
-    }
+startState = NpmFetcherState {
+  resolved = mempty,
+  packageStackTrace = mempty,
+  pkgInfos = H.empty,
+  currentlyResolving = mempty,
+  brokenPackages = mempty
+  }
 
+-- | Run an npmfetcher action with given settings and state.
 runNpmFetchWith :: NpmFetcherSettings
                 -> NpmFetcherState
                 -> NpmFetcher a
@@ -854,16 +874,12 @@ runNpmFetchWith settings state action = do
   (result, state', _) <- runRWST action settings state
   return (result, state')
 
-runWithEnv :: NpmFetcher a -> IO (a, NpmFetcherState)
-runWithEnv action = do
+-- | Same as @runIt@, but throws away the state at the end.
+evalIt :: NpmFetcher a -> IO a
+evalIt = map fst . runIt
+
+-- | Use the environment to get the settings, and run with that.
+runIt :: NpmFetcher a -> IO (a, NpmFetcherState)
+runIt action = do
   settings <- settingsFromEnv
   runNpmFetchWith settings startState action
-
-evalWithEnv :: NpmFetcher a -> IO a
-evalWithEnv = map fst . runWithEnv
-
-
-runIt :: NpmFetcher a -> IO a
-runIt action = do
-  (res, _) <- runNpmFetchWith defaultSettings startState action
-  return res

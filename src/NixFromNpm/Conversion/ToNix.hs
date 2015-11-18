@@ -59,7 +59,7 @@ fixPackageName (PackageName name (Just namespace)) =
 -- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
 -- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
 toDepName :: PackageName -> SemVer -> Name
-toDepName name (a, b, c, tags) = do
+toDepName name (SemVer a b c tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
   fixPackageName name <> "_" <> suffix
 
@@ -75,7 +75,7 @@ writeNix path = writeFile path . show . prettyNix
 
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> FilePath
-toDotNix v = fromText $ renderSV v <> ".nix"
+toDotNix v = fromText $ pshow v <> ".nix"
 
 -- | Creates a doublequoted string from some text.
 str :: Text -> NExpr
@@ -157,7 +157,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
       PackageName name namespace = rpName
   let args = mkNonRecSet $ catMaybes [
         Just $ "name" `bindTo` str name,
-        Just $ "version" `bindTo` (str $ renderSV rpVersion),
+        Just $ "version" `bindTo` (str $ pshow rpVersion),
         Just $ "src" `bindTo` distInfoToNix rpToken rpDistInfo,
         bindTo "namespace" <$> map str namespace,
         bindTo "deps" <$> withNodePackages False deps,

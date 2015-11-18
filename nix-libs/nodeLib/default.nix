@@ -39,7 +39,7 @@ rec {
   nodejs = pkgs."nodejs-${replaceDots "_" nodejsVersion}" or (
     throw "The given nodejs version ${nodejsVersion} has not been defined."
   );
-  buildNodePackage = import ./build-node-package.nix {
+  buildNodePackage = import ./buildNodePackage.nix {
     inherit (pkgs) stdenv runCommand;
     inherit nodejs buildNodePackage;
     neededNatives = [pkgs.python] ++ optionals isLinux [pkgs.utillinux];
@@ -155,7 +155,7 @@ rec {
         in deriv;
 
       callPackage = callPackageWith {
-        inherit fetchPrivateNpm;
+        inherit fetchPrivateNpm fetchUrlWithHeaders;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
       };
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //

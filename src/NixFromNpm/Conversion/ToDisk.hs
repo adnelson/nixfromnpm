@@ -140,8 +140,7 @@ initializeOutput = do
   version <- case fromHaskellVersion Paths_nixfromnpm.version of
     Left err -> fatal err
     Right v -> return v
-  writeFile (outputPath </> ".nixfromnpm-version") $
-    renderSV version
+  writeFile (outputPath </> ".nixfromnpm-version") $ pshow version
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
       writeNix (outputPath </> "default.nix") rootDefaultNix
@@ -217,7 +216,7 @@ dumpFromPkgJson path = do
         verinfo <- extractPkgJson (path </> "package.json")
         let (name, version) = (viName verinfo, viVersion verinfo)
         putStrsLn ["Generating expression for package ", pshow name,
-                   ", version ", renderSV version]
+                   ", version ", pshow version]
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix "project.nix" $ resolvedPkgToNix rPkg
         outputPath <- asks nfsOutputPath
@@ -305,7 +304,7 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
           warns ["Failed to build ", pshow name, "@", pshow range,
                  ": ", pshow e]
           addBroken name range (Reason $ show e)
-          return (0, 0, 0, [])
+          return $ semver 0 0 0
       writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
