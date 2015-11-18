@@ -36,7 +36,7 @@ module NixFromNpm.Common (
     Name, AuthToken, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL, warn, warns, assert, fatal, forMM
+    parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -208,8 +208,6 @@ assert test err = test >>= \case
 fatal :: Text -> a
 fatal = throw . Fatal
 
--- | Map a monadic action over a monadic list.
-forMM :: Monad m => m [a] -> (a -> m b) -> m [b]
-forMM mList action = do
-  list <- mList
-  forM list action
+-- | Like `fatal` but takes a list which it concatenates.
+fatalC :: [Text] -> a
+fatalC = fatal . concat

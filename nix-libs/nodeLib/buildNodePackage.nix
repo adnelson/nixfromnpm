@@ -5,6 +5,8 @@
   runCommand,
   # Derivation for nodejs and npm.
   nodejs,
+  # Custom version of npm.
+  npm ? nodejs,
   # List of required native build inputs.
   neededNatives,
   # Self-reference for overriding purposes.
@@ -164,7 +166,7 @@ let
     # We point the registry at something that doesn't exist. This will
     # mean that NPM will fail if any of the dependencies aren't met, as it
     # will attempt to hit this registry for the missing dependency.
-    "--registry=fakeprotocol://not.a.registry"
+    "--registry=http://wcjkpnweoifhngvwodjkvncpqskdcnple.com"
     # These flags make failure fast, as otherwise NPM will spin for a while.
     "--fetch-retry-mintimeout=0"
     "--fetch-retry-maxtimeout=10"
@@ -205,7 +207,7 @@ let
         # because node can't follow symlinks while resolving recursive deps.
         ${concatMapStrings (dep:
           let
-            cmd = if dep.recursiveDeps == [] then "ln -sv" else "cp -R";
+            cmd = if dep.recursiveDeps == [] then "ln -sv" else "cp -r";
           in ''
             mkdir -p ${modulePath dep}
             ${cmd} ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
@@ -231,7 +233,8 @@ let
     buildPhase = ''
       runHook preBuild
 
-      # If source was a file, repackage it, so npm pre/post publish hooks are not triggered,
+      # If source was a file, repackage it, so npm pre/post publish hooks are
+      # not triggered.
       if [[ -f $src ]]; then
         GZIP=-1 tar -czf $BUILD_DIR/package.tgz ./
         export src=$BUILD_DIR/package.tgz
@@ -308,7 +311,7 @@ let
 
     shellHook = ''
       ${preShellHook}
-      export PATH=${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
+      export PATH=${npm}/bin:${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
       mkdir -p node_modules
       ${concatMapStrings (dep: ''
         mkdir -p ${modulePath dep}
@@ -340,7 +343,8 @@ let
     name = "${namePrefix}${name}-${version}";
 
     # Run the node setup hook when this package is a build input
-    propagatedNativeBuildInputs = (args.propagatedNativeBuildInputs or []) ++ [ nodejs ];
+    propagatedNativeBuildInputs = (args.propagatedNativeBuildInputs or []) ++
+                                  [ npm nodejs ];
 
     nativeBuildInputs =
       (args.nativeBuildInputs or []) ++ neededNatives ++

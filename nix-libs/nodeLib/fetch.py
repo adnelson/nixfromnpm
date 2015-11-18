@@ -1,7 +1,7 @@
 import os
 import requests
 out = os.environ['out']
-url = "http://registry.npmjs.org/@narrativescience/ishmael/-/ishmael-1.0.3.tgz" #os.environ['url']
+url = os.environ['url']
 headers = {"User-Agent": "nix-fetchurl"}
 header_names = os.environ.get("headerNames", "")
 for name in header_names.split():

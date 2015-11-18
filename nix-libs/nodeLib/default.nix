@@ -33,6 +33,11 @@ let
       url = "http://registry.npmjs.org/@${namespace}/${name}/-/${name}-${version}.tgz";
       headers.Authentication = "Bearer ${bearer}";
     };
+
+  # A bootstrapped version of npm,
+  npm3 = let
+    pkgSet = import ./npm-3.4.1 { inherit nodejsVersion pkgs;};
+  in pkgSet.nodePackages.npm_3-4-1;
 in
 
 rec {
@@ -42,6 +47,7 @@ rec {
   buildNodePackage = import ./buildNodePackage.nix {
     inherit (pkgs) stdenv runCommand;
     inherit nodejs buildNodePackage;
+    npm = npm3;
     neededNatives = [pkgs.python] ++ optionals isLinux [pkgs.utillinux];
   };
   # A generic package that will fail to build. This is used to indicate
@@ -155,7 +161,7 @@ rec {
         in deriv;
 
       callPackage = callPackageWith {
-        inherit fetchPrivateNpm fetchUrlWithHeaders;
+        inherit fetchPrivateNpm fetchUrlWithHeaders namespaces;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
       };
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //

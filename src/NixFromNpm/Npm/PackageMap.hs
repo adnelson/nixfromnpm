@@ -25,6 +25,11 @@ instance Hashable PackageName where
   hashWithSalt salt (PackageName name namespace) =
     hashWithSalt salt (name, namespace)
 
+-- | True if the package name has a namespace.
+isNamespaced :: PackageName -> Bool
+isNamespaced = isJust . pnNamespace
+
+-- | Create a package name without a namespace.
 simpleName :: Name -> PackageName
 simpleName = flip PackageName Nothing
 

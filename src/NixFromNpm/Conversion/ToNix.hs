@@ -37,6 +37,16 @@ data ResolvedPkg = ResolvedPkg {
   rpDevDependencies :: Maybe (PRecord ResolvedDependency)
   } deriving (Show, Eq)
 
+-- | True if any of the package's dependencies have namespaces.
+hasNamespacedDependency :: ResolvedPkg -> Bool
+hasNamespacedDependency rPkg = any hasNs (allDeps rPkg) where
+  -- Get all of the dependency sets of the package.
+  allDeps ResolvedPkg{..} = [rpDependencies, rpPeerDependencies,
+                             rpOptionalDependencies,
+                             maybe mempty id rpDevDependencies]
+  -- Look at all of the package names (keys) to see if any are namespaced.
+  hasNs = any isNamespaced . H.keys
+
 callPackage :: NExpr -> NExpr
 callPackage = callPackageWith []
 
@@ -49,23 +59,23 @@ callPackageWith args e = mkApp (mkApp (mkSym "callPackage") e)
 fixName :: Name -> Name
 fixName = replace "." "-"
 
--- | Turn a PackageName into a valid nix identifier.
-fixPackageName :: PackageName -> Name
-fixPackageName (PackageName name Nothing) = fixName name
-fixPackageName (PackageName name (Just namespace)) =
-  concat ["__priv-", namespace, "-", fixName name]
-
--- | Converts a package name and semver into an identifier.
+-- | Converts a package name and semver into an Nix expression.
 -- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
 -- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
-toDepName :: PackageName -> SemVer -> Name
-toDepName name (SemVer a b c tags) = do
+-- Example: "@foo/bar" and 1.2.3 turns into "namespaces.foo.bar_1-2-3"
+toDepExpr :: PackageName -> SemVer -> NExpr
+toDepExpr (PackageName name mNamespace) (SemVer a b c tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
-  fixPackageName name <> "_" <> suffix
+      ident = fixName name <> "_" <> suffix
+  case mNamespace of
+    Nothing -> mkSym ident
+    Just namespace -> do
+      -- Parse out the expression "namespaces.namespace.pkgname"
+      unsafeParseNix ("namespaces." <> namespace <> "." <> ident)
 
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
-toNixExpr name (Resolved semver) = mkSym $ toDepName name semver
+toNixExpr name (Resolved semver) = toDepExpr name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
   [ "name" `bindTo` str (pshow name), "reason" `bindTo` str (pshow reason)]
 
@@ -81,13 +91,19 @@ toDotNix v = fromText $ pshow v <> ".nix"
 str :: Text -> NExpr
 str = mkStr DoubleQuoted
 
+-- | Parse a nix string unsafely (as in, assuming it parses correctly)
+unsafeParseNix :: Text -> NExpr
+unsafeParseNix source = case parseNixText source of
+  Success expr -> expr
+  _ -> fatalC ["Expected string '", source, "' to be valid nix."]
+
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe AuthToken -> Maybe DistInfo -> NExpr
 distInfoToNix _ Nothing = Nix.mkPath False "./."
 distInfoToNix maybToken (Just DistInfo{..}) = do
-  let Success fetchurl = case maybToken of
-        Nothing -> parseNixString "pkgs.fetchurl"
-        Just _ -> parseNixString "pkgs.fetchurlWithHeaders"
+  let fetchurl = case maybToken of
+        Nothing -> unsafeParseNix "pkgs.fetchurl"
+        Just _ -> mkSym "fetchUrlWithHeaders"
       (algo, hash) = case diShasum of
         SHA1 hash' -> ("sha1", hash')
         SHA256 hash' -> ("sha256", hash')
@@ -96,10 +112,9 @@ distInfoToNix maybToken (Just DistInfo{..}) = do
         Just auth -> do
           let -- Equivalent to "headers.Authentication ="
             binder = NamedVar [StaticKey "headers",
-                               StaticKey "Authentication"]
-            header = "Bearer " <> decodeUtf8 auth
+                               StaticKey "Authorization"]
             -- Equiv. to 'headers.Authentication = "Bearer <token>"'
-            binding = binder $ str header
+            binding = binder $ str $ "Bearer " <> decodeUtf8 auth
           [binding]
       bindings =
         ["url" `bindTo` str diUrl, algo `bindTo` str hash]
@@ -132,25 +147,34 @@ hasBroken ResolvedPkg{..} = case rpDevDependencies of
 -- is a call to `buildNodePackage`.
 resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix rPkg@ResolvedPkg{..} = do
-  let -- Get a string representation of each dependency in name-version format.
-      deps = map (uncurry toNixExpr) $ H.toList rpDependencies
-      peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
-      optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
-      -- Same for dev dependencies.
-      devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
-      -- | List of arguments that these functions will take.
-      funcParams' = catMaybes [
-        Just "pkgs",
-        Just "buildNodePackage",
-        Just "nodePackages",
-        maybeIf (hasBroken rPkg) "brokenPackage"
-        ]
-      -- None of these have defaults, so put them into pairs with Nothing.
-      funcParams = mkFormalSet $ map (\x -> (x, Nothing)) funcParams'
-      -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
-      withNodePackages noneIfEmpty list = case list of
-        [] -> if noneIfEmpty then Nothing else Just $ mkList []
-        _ -> Just $ mkWith (mkSym "nodePackages") $ mkList list
+  let
+    -- Get a string representation of each dependency in name-version format.
+    deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+    peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
+    optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
+    -- Same for dev dependencies.
+    devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
+    -- | List of arguments that these functions will take.
+    funcParams' = catMaybes [
+      Just "pkgs",
+      Just "buildNodePackage",
+      Just "nodePackages",
+      -- If the package has any broken dependencies, we will need to include
+      -- this function.
+      maybeIf (hasBroken rPkg) "brokenPackage",
+      -- If the package has a namespace then it will need to set headers
+      -- when fetching. So add that function as a dependency.
+      maybeIf (isNamespaced rpName) "fetchUrlWithHeaders",
+      -- If any of the package's dependencies have namespaces, they will appear
+      -- in the `namespaces` set, so we'll need that as a dependency.
+      maybeIf (hasNamespacedDependency rPkg) "namespaces"
+      ]
+    -- None of these have defaults, so put them into pairs with Nothing.
+    funcParams = mkFormalSet $ map (\x -> (x, Nothing)) funcParams'
+    -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
+    withNodePackages noneIfEmpty list = case list of
+      [] -> if noneIfEmpty then Nothing else Just $ mkList []
+      _ -> Just $ mkWith (mkSym "nodePackages") $ mkList list
   let devDepBinding = case devDeps of
         Nothing -> Nothing
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
@@ -205,7 +229,7 @@ rootDefaultNix :: NExpr
 rootDefaultNix = mkFunction defaultParams body where
   nodeLibArgs = defaultInherits <> ["self" `bindTo` mkSym "nodeLib"]
   lets = ["nodeLib" `bindTo` importWith False "./nodeLib" nodeLibArgs]
-  Success genPackages = parseNixString "nodeLib.generatePackages"
+  genPackages = unsafeParseNix "nodeLib.generatePackages"
   body = mkLet lets $ mkApp genPackages (mkNonRecSet [bindRootPath])
 
 -- | Creates the `default.nix` file that is the top-level expression we are
@@ -222,7 +246,7 @@ defaultNixExtending extName extensions = do
     args = [bindRootPath, "extensions" `bindTo`
               mkList (map mkSym (H.keys extensions))]
     genPkgs = extName <> ".nodeLib.generatePackages"
-    Success generatePackages = parseNixText genPkgs
+    generatePackages = unsafeParseNix genPkgs
     body = mkLet lets $ mkApp generatePackages (mkNonRecSet args)
 
 -- | Create a `default.nix` file for a particular package.json; this simply
@@ -232,7 +256,7 @@ packageJsonDefaultNix :: FilePath -- ^ Path to the output directory.
 packageJsonDefaultNix outputPath = do
   let
     libBind = "lib" `bindTo` importWith False outputPath defaultInherits
-    Success callPkg = parseNixString "lib.callPackage"
+    callPkg = unsafeParseNix "lib.callPackage"
     call = callPkg `mkApp` mkPath "project.nix" `mkApp` mkNonRecSet []
   mkFunction defaultParams $ mkLet [libBind] call
 
