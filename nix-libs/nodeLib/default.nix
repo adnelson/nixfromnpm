@@ -87,7 +87,7 @@ rec {
       varName = "${replaceDots "-" name}_${replaceDots "-" versionRaw}";
       in
       # Return the singleton set which maps that name to the actual expression.
-      {"${varName}" = callPackage (/. + "${rootPath}/${name}/${filepath}") {};};
+      {"${varName}" = callPackage (/. + rootPath + "/${name}/${filepath}") {};};
     in
     # For each directory, and each .nix file in it, create a package from that.
     joinSets (flip map nodeDirs (pkgName: let
@@ -125,7 +125,7 @@ rec {
     joinSets (flip map namespaceDirs (nsDirName: {
       "${dropFirstChar nsDirName}" = discoverPackages {
           inherit callPackage;
-          rootPath = rootPath + "/${nsDirName}";
+          rootPath = /. + rootPath + "/${nsDirName}";
         };
       }));
 
