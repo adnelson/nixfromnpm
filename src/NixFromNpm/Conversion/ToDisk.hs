@@ -78,10 +78,9 @@ parseVersionFiles pkgName folder = do
 findExisting :: (MonadBaseControl IO io, MonadIO io)
              => Maybe Name -- ^ Is `Just` if this is an extension.
              -> FilePath       -- ^ The path to search.
-             -> io (PackageMap PreExistingPackage) -- ^ Mapping of package
-                                                   --   names to maps of
-                                                   --   versions to nix
-                                                   --   expressions.
+             -> io (PackageMap PreExistingPackage)
+             -- ^ Mapping of package names to maps of versions to nix
+             --   expressions.
 findExisting maybeName path = do
   doesDirectoryExist (path </> nodePackagesDir) >>= \case
     False -> case maybeName of
@@ -99,12 +98,9 @@ findExisting maybeName path = do
             -- Check if the directory starts with "@", in which case it's
             -- a namespace.
             ["", namespace] -> do
-              putStrsLn ["found a namespace! ", namespace]
-              res <- forItemsInDir dir $ \dir' -> do
+              forItemsInDir dir $ \dir' -> do
                 let pkgName = PackageName (getFilename dir') (Just namespace)
                 parseVersionFiles pkgName dir'
-              print res
-              return res
             [name] -> do
               let pkgName = simpleName $ getFilename dir
               singleton <$> parseVersionFiles pkgName dir
@@ -139,65 +135,68 @@ initializeOutput = do
   outputPath <- asks nfsOutputPath
   extensions <- asks nfsExtendPaths
   createDirectoryIfMissing outputPath
-  withDir outputPath $ do
-    putStrsLn ["Initializing  ", pathToText outputPath]
-    createDirectoryIfMissing nodePackagesDir
-    version <- case fromHaskellVersion Paths_nixfromnpm.version of
-      Left err -> fatal err
-      Right v -> return v
-    writeFile ".nixfromnpm-version" $ renderSV version
-    case H.keys extensions of
-      [] -> do -- Then we are creating a new root.
-        writeNix "default.nix" rootDefaultNix
-        putStrsLn ["Generating node libraries in ", pathToText outputPath]
-        nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
-        createDirectoryIfMissing (outputPath </> "nodeLib")
-        contents <- getDirectoryContents nodeLibPath
-        forM_ contents $ \file ->
-          copyFile (nodeLibPath </> file) (outputPath </> "nodeLib" </> file)
-      (extName:_) -> do -- Then we are extending things.
-        writeNix "default.nix" $ defaultNixExtending extName extensions
+  putStrsLn ["Initializing  ", pathToText outputPath]
+  createDirectoryIfMissing (outputPath </> nodePackagesDir)
+  version <- case fromHaskellVersion Paths_nixfromnpm.version of
+    Left err -> fatal err
+    Right v -> return v
+  writeFile (outputPath </> ".nixfromnpm-version") $
+    renderSV version
+  case H.keys extensions of
+    [] -> do -- Then we are creating a new root.
+      writeNix (outputPath </> "default.nix") rootDefaultNix
+      putStrsLn ["Generating node libraries in ", pathToText outputPath]
+      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+      createDirectoryIfMissing (outputPath </> "nodeLib")
+      contents <- getDirectoryContents nodeLibPath
+      forM_ contents $ \file ->
+        copyFile (nodeLibPath </> file) (outputPath </> "nodeLib" </> file)
+    (extName:_) -> do -- Then we are extending things.
+      writeNix (outputPath </> "default.nix") $
+        defaultNixExtending extName extensions
 
-updateLatestNix :: MonadIO io => io ()
-updateLatestNix = do
-  pwd <- getCurrentDirectory
+-- | Looks at all nix files in a folder, finds the one with the most
+-- recent version, and creates a `latest.nix` symlink to that file.
+updateLatestNix :: MonadIO io => FilePath -> io ()
+updateLatestNix dir = do
   -- Remove the `latest.nix` symlink if it exists.
-  whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
+  whenM (doesFileExist $ dir </> "latest.nix") $
+    removeFile (dir </> "latest.nix")
   -- Grab the latest version and create a symlink `latest.nix`
   -- to that.
-  let convert fname =
-        case parseSemVer (T.dropEnd 4 $ pathToText fname) of
-          Left _ -> Nothing -- not a semver, so we don't consider it
-          Right ver -> Just ver -- return the version
-  catMaybes . map convert <$> getDirectoryContents "." >>= \case
+  let convert fname = case parseSemVer (getBaseName fname) of
+        Left _ -> Nothing -- not a semver, so we don't consider it
+        Right ver -> Just ver -- return the version
+  catMaybes . map convert <$> listDirFullPaths dir >>= \case
     [] -> return ()
-    versions -> do
-      createSymbolicLink (toDotNix $ maximum versions) "latest.nix"
+    versions -> createSymbolicLink (toDotNix $ maximum versions)
+                                   (dir </> "latest.nix")
 
-
+-- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
           => FilePath -- ^ Source path, containing store objects
           -> FilePath -- ^ Target path, also containing store objects
           -> io ()
-mergeInto source target = withDir (source </> nodePackagesDir) $ do
-  packageDirs <- getDirectoryContents "."
-  forM_ packageDirs $ \dir -> do
-    let targetDir = target </> nodePackagesDir </> dir
+mergeInto source target = do
+  -- Go through all of the packages in the source directory.
+  forItemsInDir_ (source </> nodePackagesDir) $ \srcDir -> do
+    let targetDir = target </> nodePackagesDir </> filename srcDir
+    -- Create a directory for that package, if it doesn't exist.
     whenM (not <$> doesDirectoryExist targetDir) $ do
       putStrsLn ["Creating directory ", pathToText targetDir]
       createDirectory targetDir
-    withDir dir $ do
-      dotNixFiles <- filter (hasExt "nix") <$> getDirectoryContents "."
-      forM_ dotNixFiles $ \f -> do
-        whenM (not <$> doesFileExist (targetDir </> f)) $ do
-          putStrsLn ["Copying ", pathToText f, " to ",
-                     pathToText (targetDir </> f)]
-          copyFile f (targetDir </> f)
-      withDir targetDir updateLatestNix
-
+    -- Copy every version file found in that directory as well.
+    dotNixFiles <- filter (hasExt "nix") <$> listDirFullPaths srcDir
+    forM_ dotNixFiles $ \versionFile -> do
+      let targetVersionFile = targetDir </> filename versionFile
+      whenM (not <$> doesFileExist targetVersionFile) $ do
+        putStrsLn ["Copying ", pathToText versionFile, " to ",
+                   pathToText targetVersionFile]
+        copyFile versionFile targetVersionFile
+    updateLatestNix targetDir
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
---   and the names/paths to the libraries being extended.
+-- and the names/paths to the libraries being extended.
 writeNewPackages :: NpmFetcher ()
 writeNewPackages = takeNewPackages <$> gets resolved >>= \case
   newPackages
@@ -205,26 +204,24 @@ writeNewPackages = takeNewPackages <$> gets resolved >>= \case
     | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
         forM_ (H.toList pkgVers) $ \(ver, expr) -> do
           writePackage pkgName ver expr
-        dir <- outputDirOf pkgName
-        withDir dir updateLatestNix
+        updateLatestNix =<< outputDirOf pkgName
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
 dumpFromPkgJson path = do
   doesDirectoryExist path >>= \case
     False -> errorC ["No such directory ", pathToText path]
-    True -> withDir path $ do
-      doesFileExist "package.json" >>= \case
-        False -> errorC ["No package.json found in ", pathToText path]
-        True -> do
-          verinfo <- extractPkgJson "package.json"
-          let (name, version) = (viName verinfo, viVersion verinfo)
-          putStrsLn ["Generating expression for package ", pshow name,
-                     ", version ", renderSV version]
-          rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
-          writeNix "project.nix" $ resolvedPkgToNix rPkg
-          outputPath <- asks nfsOutputPath
-          writeNix "default.nix" $ packageJsonDefaultNix outputPath
+    True -> doesFileExist (path </> "package.json") >>= \case
+      False -> errorC ["No package.json found in ", pathToText path]
+      True -> do
+        verinfo <- extractPkgJson (path </> "package.json")
+        let (name, version) = (viName verinfo, viVersion verinfo)
+        putStrsLn ["Generating expression for package ", pshow name,
+                   ", version ", renderSV version]
+        rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
+        writeNix "project.nix" $ resolvedPkgToNix rPkg
+        outputPath <- asks nfsOutputPath
+        writeNix "default.nix" $ packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()

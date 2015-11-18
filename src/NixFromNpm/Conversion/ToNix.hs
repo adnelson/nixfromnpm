@@ -69,6 +69,7 @@ toNixExpr name (Resolved semver) = mkSym $ toDepName name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
   [ "name" `bindTo` str (pshow name), "reason" `bindTo` str (pshow reason)]
 
+-- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
 writeNix path = writeFile path . show . prettyNix
 

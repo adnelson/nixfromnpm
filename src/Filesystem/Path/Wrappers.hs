@@ -62,25 +62,30 @@ pathToText pth = case toText pth of
 pathToString :: FilePath -> String
 pathToString = unpack . pathToText
 
--- | Perform an IO action inside of the given directory. Catches exceptions.
-withDir :: (MonadBaseControl IO io, MonadIO io)
-        => FilePath -> io a -> io a
-withDir directory action = do
-  cur <- getCurrentDirectory
-  bracket_ (setCurrentDirectory directory)
-           (setCurrentDirectory cur)
-           action
+-- | Get the contents of a directory, with the directory prepended.
+listDirFullPaths :: MonadIO io => FilePath -> io [FilePath]
+listDirFullPaths dir = map (dir </>) <$> getDirectoryContents dir
 
 -- | Map an action over each item in the directory. The action will be
 -- called with the path to the directory prepended to the item.
 forItemsInDir :: MonadIO io => FilePath -> (FilePath -> io a) -> io [a]
 forItemsInDir dir action = do
-  contents <- getDirectoryContents dir
-  forM contents $ \item -> action (dir </> item)
+  paths <- listDirFullPaths dir
+  forM paths action
+
+-- | Map an action over each item in the directory, and ignore the results.
+forItemsInDir_ :: MonadIO io => FilePath -> (FilePath -> io ()) -> io ()
+forItemsInDir_ dir action = do
+  paths <- listDirFullPaths dir
+  forM_ paths action
 
 -- | Get the base name (filename) of a path, as text.
 getFilename :: FilePath -> Text
 getFilename = pathToText . filename
+
+-- | Get the base name of a path without extension, as text.
+getBaseName :: FilePath -> Text
+getBaseName = pathToText . fst . splitExtension . filename
 
 createDirectory :: MonadIO io => FilePath -> io ()
 createDirectory = generalize Dir.createDirectory
