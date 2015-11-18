@@ -483,20 +483,21 @@ toGithubUri uri = case uriAuthority uri of
   Nothing -> return Nothing
   Just auth | "github.com" `isSuffixOf` (uriRegName auth) -> do
     (owner, repo, sha) <- case T.split (=='/') $ pack (uriPath uri) of
-      ["", owner, repo, "tarball", ref] -> do
+      ["", owner, repo', "tarball", ref] -> do
+        let repo = dropSuffix ".git" repo'
         sha <- gitRefToSha owner repo (SomeRef ref)
         return (owner, repo, sha)
-      ["", owner, repo] -> do
+      ["", owner, repo'] -> do
+        let repo = dropSuffix ".git" repo'
         branch <- getDefaultBranch owner repo
         sha <- gitRefToSha owner repo branch
         return (owner, repo, sha)
-      [_, owner, repo, "archive", ref] -> do
+      [_, owner, repo', "archive", ref] -> do
+        let repo = dropSuffix ".git" repo'
         let ref' = tarballNameToRef ref
         hash <- gitRefToSha owner repo (SomeRef ref')
         return (owner, repo, hash)
-      _ -> do
-        putStrsLn ["hey"]
-        throw $ InvalidGithubUri uri
+      _ -> throwIO $ InvalidGithubUri uri
     let githubUri = makeGithubTarballURI owner repo sha
     return $ Just (fromText (repo <> "-" <> sha), githubUri)
   _ -> return Nothing

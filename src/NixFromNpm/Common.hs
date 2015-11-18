@@ -128,11 +128,11 @@ putStrsLn = putStrLn . concat
 putStrs :: MonadIO m => [Text] -> m ()
 putStrs = putStr . concat
 
--- | Strip the given suffix from the given String.
-dropSuffix :: String -> String -> String
-dropSuffix suffix s | s == suffix = ""
-dropSuffix suffix (c:cs) = c : dropSuffix suffix cs
-dropSuffix suffix "" = ""
+-- | Strip the given suffix from the given string.
+dropSuffix :: Text -> Text -> Text
+dropSuffix suffix input = case T.stripSuffix suffix input of
+  Nothing -> input
+  Just stripped -> stripped
 
 -- | Return a Just value if the argument is True, else Nothing.
 maybeIf :: Bool -> a -> Maybe a
