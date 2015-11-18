@@ -9,6 +9,7 @@ module NixFromNpm.Conversion.ToDisk where
 import qualified Prelude as P
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
+import qualified Data.HashSet as HS
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Text (Text)
@@ -25,7 +26,8 @@ import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
-import NixFromNpm.Conversion.ToNix (toDotNix,
+import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
+                                    toDotNix,
                                     writeNix,
                                     rootDefaultNix,
                                     defaultNixExtending,
@@ -34,7 +36,9 @@ import NixFromNpm.Conversion.ToNix (toDotNix,
                                     nodePackagesDir)
 import NixFromNpm.Options
 import NixFromNpm.Npm.Types
-import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap, psToList)
+import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..),
+                                  pmLookup, pmDelete, pmMap,
+                                  psToList)
 import NixFromNpm.NpmLookup
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
@@ -50,18 +54,24 @@ takeNewPackages startingRec = do
 
 -- | Given the path to a package, finds all of the .nix files which parse
 --   correctly.
-parseVersion :: MonadIO io => Name -> FilePath -> io (Maybe (SemVer, NExpr))
-parseVersion pkgName path = do
-  let (versionTxt, ext) = splitExtension $ filename path
-  case parseSemVer (pathToText versionTxt) of
-    _ | ext /= Just "nix" -> return Nothing -- not a nix file
-    Left _ -> return Nothing -- not a version file
-    Right version -> parseNixString . pack <$> readFile path >>= \case
-      Failure err -> do
-        putStrsLn ["Warning: expression for ", pkgName, " version ",
-                   pathToText versionTxt, " failed to parse:\n", pshow err]
-        return Nothing -- invalid nix, should overwrite
-      Success expr -> return $ Just (version, expr)
+parseVersionFiles :: MonadIO io
+                  => PackageName -- ^ Name of the package this is a version of.
+                  -> FilePath    -- ^ Folder containing .nix files for this
+                                 --   package.
+                  -> io (PackageMap NExpr) -- ^ Version and expression.
+parseVersionFiles pkgName folder = do
+  maybeExprs <- forItemsInDir folder $ \path -> do
+    let (versionTxt, ext) = splitExtension $ filename path
+    case parseSemVer (pathToText versionTxt) of
+      _ | ext /= Just "nix" -> return Nothing -- not a nix file
+      Left _ -> return Nothing -- not a version file
+      Right version -> parseNixString . pack <$> readFile path >>= \case
+        Failure err -> do
+          putStrsLn ["Warning: expression for ", pshow pkgName, " version ",
+                     pathToText versionTxt, " failed to parse:\n", pshow err]
+          return Nothing -- invalid nix, should overwrite
+        Success expr -> return $ Just (version, expr)
+  return $ H.singleton pkgName (H.fromList $ catMaybes maybeExprs)
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 --   expressions findable at that path and returns a map of them.
@@ -79,25 +89,30 @@ findExisting maybeName path = do
         "Path ", pathToText path, " does not exist or does not ",
         "contain a `", pathToText nodePackagesDir, "` folder"]
       Nothing -> return mempty
-    True -> withDir (path </> nodePackagesDir) $ do
+    True -> do
       let wrapper = maybe FromOutput FromExtension maybeName
-      putStrsLn ["Searching for existing expressions in ", pathToText path,
-                 "..."]
-      contents <- getDirectoryContents "."
-      verMaps <- map catMaybes $ forM contents $ \dir -> do
-        exprs <- doesDirectoryExist dir >>= \case
-          True -> withDir dir $ do
-            contents <- getDirectoryContents "."
-            let files = filter (hasExt "nix") contents
-            catMaybes <$> mapM (parseVersion $ pathToText dir) files
-          False -> do
-            return mempty -- not a directory
-        return $ case exprs of
-          [] -> Nothing
-          vs -> Just (pathToText dir, H.map wrapper $ H.fromList exprs)
-      let total = sum $ map (H.size . snd) verMaps
+      putStrsLn ["Searching for existing expressions in ", pathToText path]
+      verMapLists <- forItemsInDir (path </> nodePackagesDir) $ \dir -> do
+        doesDirectoryExist dir >>= \case
+          False -> return mempty -- not a directory
+          True -> case T.split (=='@') $ getFilename dir of
+            -- Check if the directory starts with "@", in which case it's
+            -- a namespace.
+            ["", namespace] -> do
+              putStrsLn ["found a namespace! ", namespace]
+              res <- forItemsInDir dir $ \dir' -> do
+                let pkgName = PackageName (getFilename dir') (Just namespace)
+                parseVersionFiles pkgName dir'
+              print res
+              return res
+            [name] -> do
+              let pkgName = simpleName $ getFilename dir
+              singleton <$> parseVersionFiles pkgName dir
+            _ -> return mempty
+      let verMaps = concat $ concat verMapLists
+          total = sum $ map (sum . map H.size) verMapLists
       putStrsLn ["Found ", render total, " expressions in ", pathToText path]
-      return $ H.fromList verMaps
+      return $ pmMap wrapper verMaps
 
 -- | Given the output directory and any number of extensions to load,
 -- finds any existing packages.
@@ -204,7 +219,7 @@ dumpFromPkgJson path = do
         True -> do
           verinfo <- extractPkgJson "package.json"
           let (name, version) = (viName verinfo, viVersion verinfo)
-          putStrsLn ["Generating expression for package ", name,
+          putStrsLn ["Generating expression for package ", pshow name,
                      ", version ", renderSV version]
           rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
           writeNix "project.nix" $ resolvedPkgToNix rPkg
@@ -220,15 +235,18 @@ showBrokens = H.toList <$> gets brokenPackages >>= \case
                " downstream dependencies."]
     forM_ brokens $ \(name, rangeMap) -> do
       forM_ (M.toList rangeMap) $ \(range, report) -> do
-        putStrLn $ showRangePair name range
-        let deps = bprDependencyOf report
-        when (H.size deps > 0) $ do
-          putStrsLn ["Dependency of: ", showPairs $ psToList deps]
+        putStrsLn ["  ", showRangePair name range]
+        let chains = bprDependencyChains report
+        when (HS.size chains > 0) $ do
+          putStrLn "   Dependency of:"
+          forM_ (HS.toList chains) $ \chain ->
+            putStrsLn ["    ",
+                       mapJoinBy " -> " (uncurry showPair) (reverse chain)]
         putStrsLn ["Failed to build because: ", pshow (bprReason report)]
 
 -- | See if any of the top-level packages failed to build, and return a
 -- non-zero status if they did.
-checkForBroken :: [(Name, NpmVersionRange)] -> NpmFetcher ExitCode
+checkForBroken :: [(PackageName, NpmVersionRange)] -> NpmFetcher ExitCode
 checkForBroken inputs = do
   -- findBrokens will look for any of the packages in
   let findBrokens [] = return []
@@ -265,10 +283,14 @@ checkPackage ResolvedPkg{..} = go (H.toList rpDependencies) where
       Just _ -> go rest
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ExitCode
+dumpPkgFromOptions opts
+  | nfnoPkgNames opts == [] && nfnoPkgPaths opts == [] = do
+      putStrLn "No packages given, nothing to do..."
+      return $ ExitFailure 1
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   let settings = defaultSettings {
     nfsGithubAuthToken = nfnoGithubToken,
-    nfsNpmAuthToken = nfnoNpmToken,
+    nfsNpmAuthTokens = nfnoNpmTokens,
     nfsRegistries = nfnoRegistries,
     nfsRequestTimeout = fromIntegral nfnoTimeout,
     nfsOutputPath = nfnoOutputPath,
@@ -283,7 +305,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     forM nfnoPkgNames $ \(name, range) -> do
       _resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
-          warns ["Failed to build ", name, "@", pshow range, ": ", pshow e]
+          warns ["Failed to build ", pshow name, "@", pshow range,
+                 ": ", pshow e]
           addBroken name range (Reason $ show e)
           return (0, 0, 0, [])
       writeNewPackages

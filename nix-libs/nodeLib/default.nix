@@ -20,10 +20,12 @@ let
                      hasSuffix hasPrefix removeSuffix replaceChars
                      optional optionals;
   inherit (pkgs.stdenv) isLinux;
+
+  _pkgs = pkgs // {fetchUrlWithHeaders = pkgs.callPackage ./pyFetchurl {};};
 in
 
 rec {
-  inherit pkgs;
+  pkgs = _pkgs;
 
   nodejs = pkgs."nodejs-${replaceDots "_" nodejsVersion}" or (
     throw "The given nodejs version ${nodejsVersion} has not been defined."
@@ -59,10 +61,21 @@ rec {
   discoverPackages = {callPackage, rootPath}: let
     # List a directory after filtering the files.
     lsFilter = pred: dir: attrNames (filterAttrs pred (readDir dir));
+    # List of .nix files in a directory.
+    versionFiles = lsFilter (name: type: type == "regular" &&
+                             hasSuffix ".nix" name);
+    getVersions = pkgName:
     # Checks the name and type of a listing to grab non-dotfile dirs.
-    isRegDir = name: type: type == "directory" && !(hasPrefix "." name);
+    isRegDir = name: type: type == "directory" &&
+                           !(hasPrefix "." name) &&
+                           !(hasPrefix "@" name);
+    # Checks if the directory is a namespace, such as @foo.
+    isNamespaceDir = name: type: type == "directory" && hasPrefix "@" name;
     # Names of NPM packages defined in this directory.
     nodeDirs = lsFilter isRegDir (/. + rootPath);
+    # Converts a "namespace" such as @foo/bar into a usable package name,
+    # such as __priv-foo__bar.
+    convertNamespace = replaceStrings ["@" "/"] ["__priv-" "__"];
     # Generate the package expression from a package name and .nix path.
     toPackage = name: filepath: let
       versionRaw = removeSuffix ".nix" filepath; # Raw version, i.e. "1.2.4"
@@ -71,23 +84,20 @@ rec {
       in
       # Return the singleton set which maps that name to the actual expression.
       {"${varName}" = callPackage (/. + rootPath + "/${name}/${filepath}") {};};
-    in
     # For each directory, and each .nix file in it, create a package from that.
-    joinSets (flip map nodeDirs (pkgName: let
+    regularPkgs = joinSets (flip map nodeDirs (pkgName: let
       pkgDir = /. + rootPath + "/${pkgName}";
-      # List of .nix files
-      versionFiles = lsFilter (name: type: type == "regular" &&
-                               hasSuffix ".nix" name)
-                               pkgDir;
       # Check if there is a `latest.nix` file
       hasLatest = lsFilter (n: _: n == "latest.nix") pkgDir != [];
       in
       joinSets (
-        map (toPackage pkgName) versionFiles ++
+        map (toPackage pkgName) versionFiles pkgDir ++
         optional hasLatest {
           "${replaceDots "-" pkgName}" = callPackage
                            (/. + rootPath + "/${pkgName}/latest.nix") {};
         })));
+    # For each namespace directory, for each folder within the namespace,
+    # and each version file there, create a package.
 
 
   # The function that a default.nix can call into which will scan its

@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Filesystem.Path.Wrappers where
 
-import ClassyPrelude hiding (FilePath, unpack, (</>))
+import ClassyPrelude hiding (FilePath, unpack, (</>), readFile)
 import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
 import qualified Data.Text as T
@@ -43,6 +43,10 @@ writeFile path = CP.writeFile (pathToString path)
 readFile :: (MonadIO io, IOData dat) => FilePath -> io dat
 readFile = generalize CP.readFile
 
+-- | Read a data file, as included by cabal.
+readDataFile :: (MonadIO io, IOData dat) => FilePath -> io dat
+readDataFile = getDataFileName >=> readFile
+
 -- | Create a symbolic link at `path2` pointing to `path1`.
 createSymbolicLink :: (MonadIO io) => FilePath -> FilePath -> io ()
 createSymbolicLink path1 path2 = liftIO $ do
@@ -67,6 +71,14 @@ withDir directory action = do
            (setCurrentDirectory cur)
            action
 
+-- | Map an action over each item in the directory. The action will be
+-- called with the path to the directory prepended to the item.
+forItemsInDir :: MonadIO io => FilePath -> (FilePath -> io a) -> io [a]
+forItemsInDir dir action = do
+  contents <- getDirectoryContents dir
+  forM contents $ \item -> action (dir </> item)
+
+-- | Get the base name (filename) of a path, as text.
 getFilename :: FilePath -> Text
 getFilename = pathToText . filename
 

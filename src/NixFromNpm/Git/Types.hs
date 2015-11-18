@@ -75,15 +75,10 @@ instance FromJSON Repo where
     defaultBranch <- o .: "default_branch"
     return $ Repo name defaultBranch
 
--- | Gets a hashmap from an object, or otherwise returns an empty hashmap.
-getDict :: (FromJSON a) => Text -> Object -> Parser (HashMap Text a)
-getDict key o = mapM parseJSON =<< (o .:? key .!= mempty)
-
 getObject :: String -> Value -> Parser (HashMap Text Value)
 getObject _ (Object o) = return o
 getObject msg v =
   typeMismatch ("object (got " <> show v <> ", message " <> msg <> ")") v
-
 
 -- | Convert a vector of tags to a hashmap mapping tag names to SHAs.
 tagListToMap :: Vector Tag -> Record Text

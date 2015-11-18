@@ -19,6 +19,23 @@ import qualified Nix.Types as Nix
 import Nix.Parser
 
 import NixFromNpm.Npm.Types
+import NixFromNpm.Npm.PackageMap
+
+-- | This contains the same information as the .nix file that corresponds
+-- to the package. More or less it tells us everything that we need to build
+-- the package.
+data ResolvedPkg = ResolvedPkg {
+  rpName :: PackageName,
+  rpVersion :: SemVer,
+  rpDistInfo :: Maybe DistInfo,
+  rpToken :: Maybe AuthToken,
+  -- ^ If a token was necessary to fetch the package, include it here.
+  rpMeta :: PackageMeta,
+  rpDependencies :: PRecord ResolvedDependency,
+  rpPeerDependencies :: PRecord ResolvedDependency,
+  rpOptionalDependencies :: PRecord ResolvedDependency,
+  rpDevDependencies :: Maybe (PRecord ResolvedDependency)
+  } deriving (Show, Eq)
 
 callPackage :: NExpr -> NExpr
 callPackage = callPackageWith []
@@ -29,31 +46,28 @@ callPackageWith args e = mkApp (mkApp (mkSym "callPackage") e)
 
 -- | Turns a string into one that can be used as an identifier.
 -- NPM package names can contain dots, so we translate these into dashes.
--- They can also start with a namespace designator, e.g. "@foobar/baz",
--- which indicates a package 'baz' under the @foobar. We translate this
--- into '__ns-foobar__baz'.
 fixName :: Name -> Name
-fixName = removePrivateNamespace . removeDots
+fixName = replace "." "-"
 
-removePrivateNamespace :: Name -> Name
-removePrivateNamespace = replace "@" "__priv-" . replace "/" "__"
-
-removeDots :: Name -> Name
-removeDots = replace "." "-"
+-- | Turn a PackageName into a valid nix identifier.
+fixPackageName :: PackageName -> Name
+fixPackageName (PackageName name Nothing) = fixName name
+fixPackageName (PackageName name (Just namespace)) =
+  concat ["__priv-", namespace, "-", fixName name]
 
 -- | Converts a package name and semver into an identifier.
 -- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
 -- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
-toDepName :: Name -> SemVer -> Name
+toDepName :: PackageName -> SemVer -> Name
 toDepName name (a, b, c, tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
-  fixName name <> "_" <> suffix
+  fixPackageName name <> "_" <> suffix
 
 -- | Converts a ResolvedDependency to a nix expression.
-toNixExpr :: Name -> ResolvedDependency -> NExpr
+toNixExpr :: PackageName -> ResolvedDependency -> NExpr
 toNixExpr name (Resolved semver) = mkSym $ toDepName name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
-  [ "name" `bindTo` str name, "reason" `bindTo` str (pack $ show reason)]
+  [ "name" `bindTo` str (pshow name), "reason" `bindTo` str (pshow reason)]
 
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
 writeNix path = writeFile path . show . prettyNix
@@ -67,14 +81,28 @@ str :: Text -> NExpr
 str = mkStr DoubleQuoted
 
 -- | Converts distinfo into a nix fetchurl call.
-distInfoToNix :: Maybe DistInfo -> NExpr
-distInfoToNix Nothing = Nix.mkPath False "./."
-distInfoToNix (Just DistInfo{..}) = do
-  let Success fetchurl = parseNixString "pkgs.fetchurl"
+distInfoToNix :: Maybe AuthToken -> Maybe DistInfo -> NExpr
+distInfoToNix _ Nothing = Nix.mkPath False "./."
+distInfoToNix maybToken (Just DistInfo{..}) = do
+  let Success fetchurl = case maybToken of
+        Nothing -> parseNixString "pkgs.fetchurl"
+        Just _ -> parseNixString "pkgs.fetchurlWithHeaders"
       (algo, hash) = case diShasum of
         SHA1 hash' -> ("sha1", hash')
         SHA256 hash' -> ("sha256", hash')
-      bindings = ["url" `bindTo` str diUrl, algo `bindTo` str hash]
+      authBinding = case maybToken of
+        Nothing -> []
+        Just auth -> do
+          let -- Equivalent to "headers.Authentication ="
+            binder = NamedVar [StaticKey "headers",
+                               StaticKey "Authentication"]
+            header = "Bearer " <> decodeUtf8 auth
+            -- Equiv. to 'headers.Authentication = "Bearer <token>"'
+            binding = binder $ str header
+          [binding]
+      bindings =
+        ["url" `bindTo` str diUrl, algo `bindTo` str hash]
+        <> authBinding
   fetchurl `mkApp` mkNonRecSet bindings
 
 -- | Converts package meta to a nix expression, if it exists.
@@ -125,10 +153,12 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
   let devDepBinding = case devDeps of
         Nothing -> Nothing
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
+      PackageName name namespace = rpName
   let args = mkNonRecSet $ catMaybes [
-        Just $ "name" `bindTo` str (removePrivateNamespace rpName),
+        Just $ "name" `bindTo` str name,
         Just $ "version" `bindTo` (str $ renderSV rpVersion),
-        Just $ "src" `bindTo` distInfoToNix rpDistInfo,
+        Just $ "src" `bindTo` distInfoToNix rpToken rpDistInfo,
+        bindTo "namespace" <$> map str namespace,
         bindTo "deps" <$> withNodePackages False deps,
         bindTo "peerDependencies" <$> withNodePackages True peerDeps,
         bindTo "optionalDependencies" <$> withNodePackages True optDeps,

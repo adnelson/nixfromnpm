@@ -30,12 +30,13 @@ module NixFromNpm.Common (
     module Network.URI,
     module Filesystem.Path.Wrappers,
     module Text.Render,
+    module Text.Printf,
     module Control.Monad.Trans.Control,
     module System.Console.ANSI,
-    Name, Record, (//),
+    Name, AuthToken, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL, warn, warns, assert, fatal
+    parseURIText, withColor, withUL, warn, warns, assert, fatal, forMM
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -70,6 +71,7 @@ import qualified Data.Text as T
 import Filesystem.Path.CurrentOS hiding (concat, null, (<.>), empty)
 import GHC.Exts (IsList)
 import Text.Render hiding (renderParens)
+import Text.Printf (printf)
 import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
@@ -80,8 +82,8 @@ import Filesystem.Path.Wrappers
 -- | Indicates that the text is some identifier.
 type Name = Text
 
--- | Indicates that the text is some path.
-type Path = Text
+-- | Used to indicate something is meant for authentication.
+type AuthToken = ByteString
 
 -- | A record is a lookup table with string keys.
 type Record = HashMap Name
@@ -205,3 +207,9 @@ assert test err = test >>= \case
 -- | Throw a fatal error.
 fatal :: Text -> a
 fatal = throw . Fatal
+
+-- | Map a monadic action over a monadic list.
+forMM :: Monad m => m [a] -> (a -> m b) -> m [b]
+forMM mList action = do
+  list <- mList
+  forM list action

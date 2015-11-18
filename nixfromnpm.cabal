@@ -19,6 +19,8 @@ bug-reports:         https://github.com/adnelson/nixfromnpm/issues
 data-files:   nix-libs/nodeLib/default.nix
             , nix-libs/nodeLib/build-node-package.nix
             , nix-libs/nodeLib/removeImpureDependencies.js
+            , nix-libs/nodeLib/pyFetchurl.nix
+            , top_packages.txt
 
 source-repository head
   type:     git
