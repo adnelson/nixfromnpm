@@ -700,9 +700,6 @@ resolveVersionInfo :: VersionInfo -- ^ Info about a package at a version.
                    -> NpmFetcher (ResolvedPkg, SemVer)
 resolveVersionInfo VersionInfo{..} = do
   let recurOn' = recurOn viName viVersion
-  authToken <- case pnNamespace viName of
-    Nothing -> return Nothing
-    Just namespace -> H.lookup namespace <$> asks nfsNpmAuthTokens
   startResolving viName viVersion
   deps :: PRecord ResolvedDependency <- recurOn' Dependency viDependencies
   peerDeps <- recurOn' PeerDependency viPeerDependencies
@@ -719,7 +716,6 @@ resolveVersionInfo VersionInfo{..} = do
       rpName = viName,
       rpVersion = viVersion,
       rpDistInfo = viDist,
-      rpToken = authToken,
       rpMeta = viMeta,
       rpDependencies = deps,
       rpPeerDependencies = peerDeps,

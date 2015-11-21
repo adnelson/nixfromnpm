@@ -28,7 +28,6 @@ data ResolvedPkg = ResolvedPkg {
   rpName :: PackageName,
   rpVersion :: SemVer,
   rpDistInfo :: Maybe DistInfo,
-  rpToken :: Maybe AuthToken,
   -- ^ If a token was necessary to fetch the package, include it here.
   rpMeta :: PackageMeta,
   rpDependencies :: PRecord ResolvedDependency,
@@ -91,24 +90,23 @@ unsafeParseNix source = case parseNixText source of
   _ -> fatalC ["Expected string '", source, "' to be valid nix."]
 
 -- | Converts distinfo into a nix fetchurl call.
-distInfoToNix :: Maybe AuthToken -> Maybe DistInfo -> NExpr
+distInfoToNix :: Maybe Name -- `Just` if we are fetching from a namespace.
+              -> Maybe DistInfo -> NExpr
 distInfoToNix _ Nothing = Nix.mkPath False "./."
-distInfoToNix maybToken (Just DistInfo{..}) = do
-  let fetchurl = case maybToken of
+distInfoToNix maybeNamespace (Just DistInfo{..}) = do
+  let fetchurl = case maybeNamespace of
         Nothing -> unsafeParseNix "pkgs.fetchurl"
         Just _ -> mkSym "fetchUrlWithHeaders"
       (algo, hash) = case diShasum of
         SHA1 hash' -> ("sha1", hash')
         SHA256 hash' -> ("sha256", hash')
-      authBinding = case maybToken of
+      authBinding = case maybeNamespace of
         Nothing -> []
-        Just auth -> do
-          let -- Equivalent to "headers.Authentication ="
-            binder = NamedVar [StaticKey "headers",
-                               StaticKey "Authorization"]
-            -- Equiv. to 'headers.Authentication = "Bearer <token>"'
-            binding = binder $ str $ "Bearer " <> decodeUtf8 auth
-          [binding]
+        Just namespace -> do
+          let -- Equivalent to "headers.Authorization ="
+            binder = NamedVar [StaticKey "headers", StaticKey "Authorization"]
+            auth = pshow $ concat ["Bearer ${namespaceTokens.", namespace, "}"]
+          [binder $ unsafeParseNix auth]
       bindings =
         ["url" `bindTo` str diUrl, algo `bindTo` str hash]
         <> authBinding
@@ -140,15 +138,15 @@ hasBroken ResolvedPkg{..} = case rpDevDependencies of
 -- will be a function where the arguments are its dependencies, and its result
 -- is a call to `buildNodePackage`.
 resolvedPkgToNix :: ResolvedPkg -> NExpr
-resolvedPkgToNix rPkg@ResolvedPkg{..} = do
-  let
+resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
+  where
     -- Get a string representation of each dependency in name-version format.
     deps = map (uncurry toNixExpr) $ H.toList rpDependencies
     peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
     optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
     -- Same for dev dependencies.
     devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
-    -- | List of arguments that these functions will take.
+    -- List of arguments that these functions will take.
     funcParams' = catMaybes [
       Just "pkgs",
       Just "buildNodePackage",
@@ -159,6 +157,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
       -- If the package has a namespace then it will need to set headers
       -- when fetching. So add that function as a dependency.
       maybeIf (isNamespaced rpName) "fetchUrlWithHeaders",
+      maybeIf (isNamespaced rpName) "namespaceTokens",
       -- If any of the package's dependencies have namespaces, they will appear
       -- in the `namespaces` set, so we'll need that as a dependency.
       maybeIf (hasNamespacedDependency rPkg) "namespaces"
@@ -169,23 +168,22 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = do
     withNodePackages noneIfEmpty list = case list of
       [] -> if noneIfEmpty then Nothing else Just $ mkList []
       _ -> Just $ mkWith (mkSym "nodePackages") $ mkList list
-  let devDepBinding = case devDeps of
+    devDepBinding = case devDeps of
         Nothing -> Nothing
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
-      PackageName name namespace = rpName
-  let args = mkNonRecSet $ catMaybes [
-        Just $ "name" `bindTo` str name,
-        Just $ "version" `bindTo` (str $ pshow rpVersion),
-        Just $ "src" `bindTo` distInfoToNix rpToken rpDistInfo,
-        bindTo "namespace" <$> map str namespace,
-        bindTo "deps" <$> withNodePackages False deps,
-        bindTo "peerDependencies" <$> withNodePackages True peerDeps,
-        bindTo "optionalDependencies" <$> withNodePackages True optDeps,
-        devDepBinding,
-        bindTo "meta" <$> metaToNix rpMeta
-        ]
-  mkFunction funcParams $ mkSym "buildNodePackage" `mkApp` args
-
+    PackageName name namespace = rpName
+    args = mkNonRecSet $ catMaybes [
+      Just $ "name" `bindTo` str name,
+      Just $ "version" `bindTo` (str $ pshow rpVersion),
+      Just $ "src" `bindTo` distInfoToNix (pnNamespace rpName) rpDistInfo,
+      bindTo "namespace" <$> map str namespace,
+      bindTo "deps" <$> withNodePackages False deps,
+      bindTo "peerDependencies" <$> withNodePackages True peerDeps,
+      bindTo "optionalDependencies" <$> withNodePackages True optDeps,
+      devDepBinding,
+      bindTo "meta" <$> metaToNix rpMeta
+      ]
+    body = mkSym "buildNodePackage" `mkApp` args
 
 -- | Convenience function to generate an `import /path {args}` expression.
 importWith :: Bool -- ^ True if the path is from the env, e.g. <nixpkgs>
