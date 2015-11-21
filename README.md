@@ -117,6 +117,33 @@ $ nixfromnpm -p package -o /some/path --github-token llnl23uinlaskjdno34nedhoaid
 
 This can also be set by a `GITHUB_TOKEN` environment variable.
 
+#### Private NPM namespaces
+
+NPM offers private packaging, where you can specify a *namespace* or
+*scope* under which a package lives. For example, a package might be
+designated as `@foo/bar`, where the package is called `bar` and the
+namespace is called `foo`. `nixfromnpm` supports this, as long as you
+have set up your NPM repo to use authorization tokens (see
+documentation for details). To use this, set an environment variable
+`NPM_AUTH_TOKENS`, with the following format:
+
+```
+mynamespace=mytoken:myothernamespace=myothertoken:...
+```
+
+Where tokens are keyed on namespaces. Then when building the
+expression set, if a namespaced package is encountered, `nixfromnpm`
+will look up the namespace in this environment variable to determine
+what token to use for authentication. The same environment variable is
+read when the packages are built with `nix-build`. The path to the
+package in the generated expressions is slightly different:
+
+```bash
+$ export NPM_AUTH_TOKENS="foo=a1a1a1a1a1a1a1a1a1a"
+$ nixfromnpm -o my_expressions -p '@foo/bar'
+$ nix-build my_expressions -A namespaces.foo.bar
+```
+
 #### Caching of packages
 
 By default, `nixfromnpm` will discover all existing packages in the specified output directory (provided via tha `-o` flag). However, if you would like to generate all of these from scratch, you can disable caching with `--no-cache`.
