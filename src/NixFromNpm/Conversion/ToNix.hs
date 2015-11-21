@@ -47,13 +47,6 @@ hasNamespacedDependency rPkg = any hasNs (allDeps rPkg) where
   -- Look at all of the package names (keys) to see if any are namespaced.
   hasNs = any isNamespaced . H.keys
 
-callPackage :: NExpr -> NExpr
-callPackage = callPackageWith []
-
-callPackageWith :: [Binding NExpr] -> NExpr -> NExpr
-callPackageWith args e = mkApp (mkApp (mkSym "callPackage") e)
-                               (mkNonRecSet args)
-
 -- | Turns a string into one that can be used as an identifier.
 -- NPM package names can contain dots, so we translate these into dashes.
 fixName :: Name -> Name
@@ -136,6 +129,7 @@ metaToNix PackageMeta{..} = do
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
 
+-- | Returns true if any of the resolved package's dependencies were broken.
 hasBroken :: ResolvedPkg -> Bool
 hasBroken ResolvedPkg{..} = case rpDevDependencies of
   Nothing -> any isBroken rpDependencies
@@ -210,11 +204,13 @@ importNixpkgs = importWith True "nixpkgs" []
 -- default.nix files.
 defaultParams :: Formals NExpr
 defaultParams = mkFormalSet [("pkgs", Just importNixpkgs),
+                             ("npm3", Just $ mkBool False),
                              ("nodejsVersion", Just $ str "4.1")]
 
--- | When passing through arguments, we inherit these two things.
+-- | When passing through arguments, we inherit these things.
 defaultInherits :: [Binding NExpr]
-defaultInherits = [Inherit Nothing $ map mkSelector ["pkgs", "nodejsVersion"]]
+defaultInherits = [Inherit Nothing $
+                   map mkSelector ["pkgs", "npm3", "nodejsVersion"]]
 
 -- | The name of the subfolder within the output directory that
 -- contains node packages.

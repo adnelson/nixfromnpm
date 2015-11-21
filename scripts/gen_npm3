@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# This script will create the bootstrapping tarball that packages need
+# to use npm3. This means we don't need to store a binary tarball in
+# source control.
+
+set -e
+
+[[ -z $OUTPUT ]] && {
+  echo "OUTPUT is not set" >&2
+  exit 1
+}
+
+[[ -z $NIXFROMNPM ]] && {
+  # CD into the directory of this file and echo the current directory.
+  _current_path=$(cd $(dirname $0); pwd)
+  # Then set the NIXFROMNPM folder to be that directory's parent.
+  export NIXFROMNPM=$(dirname $_current_path)
+}
+
+TARBALL=$NIXFROMNPM/nix-libs/nodeLib/npm3.tar.gz
+
+fetch_npm3_nix() {
+  # Remove existing expression file
+  [[ -d $OUTPUT ]] && [[ -z $OVERWRITE ]] && {
+    echo "$OUTPUT exists. Won't overwrite unless OVERWRITE is set." >&2
+    exit 1
+  }
+  # Generate output with nixfromnpm
+  nix-shell $NIXFROMNPM --command "cabal run -- -p npm -o $OUTPUT"
+}
+
+# Do a dry-run build to make sure everything will work
+test_npm3_works() {
+  nix-build $OUTPUT \
+    -A nodePackages.npm \
+    --arg npm3 false \
+    --dry-run
+}
+
+# Create the npm3.tar.gz
+gen_npm3_tarball() (
+  cd $OUTPUT && tar -cvf $TARBALL \
+    --exclude=./nodeLib/npm3.tar.gz \
+    --exclude='*latest.nix' \
+    .
+)
+
+echo "Fetching package definitions in $OUTPUT..."
+fetch_npm3_nix
+echo "Testing dependencies are satisfied..."
+test_npm3_works
+echo "Generating tarball in $TARBALL..."
+gen_npm3_tarball
+echo "Done! Tarball is in $TARBALL"

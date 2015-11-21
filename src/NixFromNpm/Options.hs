@@ -62,7 +62,7 @@ data RawOptions = RawOptions {
   roGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
   roNpmTokens :: [Text], -- ^ NPM authentication tokens.
   roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
-  roRealTime :: Bool, -- ^ Write packages to disk as they are written.
+  roNoRealTime :: Bool, -- ^ Write packages to disk as they are written.
   roTopNPackages :: Maybe Int, -- ^ Fetch the top `n` npm packages by popularity.
   roAllTop :: Bool -- ^ If true, fetch all of the top packages we have defined.
 } deriving (Show, Eq)
@@ -196,7 +196,7 @@ validateOptions opts = do
     nfnoRegistries = registries,
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts,
-    nfnoRealTime = roRealTime opts
+    nfnoRealTime = not (roNoRealTime opts)
     })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
@@ -259,7 +259,7 @@ parseOptions = RawOptions
     devDepth = option auto (long "dev-depth"
                             <> metavar "DEPTH"
                             <> help "Depth to which to fetch dev dependencies"
-                            <> value 1)
+                            <> value 0)
     cacheHelp = "Depth at which to use cache. Packages at dependency depth \
                 \DEPTH and lower will be pulled from the cache. If DEPTH \
                 \is negative, the cache will be ignored entirely (same as \
@@ -299,9 +299,9 @@ parseOptions = RawOptions
       <> help (tokenHelp "s" "npm" "NPM_AUTH_TOKENS")
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
-    realTime = switch (long "real-time"
-                       <> help "Write packages to disk as they are generated,\
-                               \ rather than at the end.")
+    realTime = switch (long "no-real-time"
+                       <> help "Write packages to disk at the end rather than \
+                               \ as they are generated.")
     allTop = switch (long "all-top"
                        <> help "Fetch all of the most popular packages that \
                                \nixfromnpm knows about.")

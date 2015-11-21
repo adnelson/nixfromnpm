@@ -58,8 +58,12 @@ in
   # List of optional dependencies to skip
   skipOptionalDependencies ? [],
 
-  # List or set of development dependencies (currently ignored)
+  # List or set of development dependencies (or null).
   devDependencies ? null,
+
+  # If true and devDependencies are not null, the package will be
+  # installed contingent on successfully running tests.
+  doCheck ? devDependencies != null,
 
   # Additional flags passed to npm install
   flags ? "",
@@ -89,11 +93,16 @@ let
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues getVersion flatten remove concatStringsSep;
 
+  # whether we should run tests.
+  shouldTest = doCheck && devDependencies != null;
+
   # The package name as it appears in the package.json. This contains a
   # namespace if there is one, so it will be a distinct identifier for
   # different packages.
   pkgName = if namespace == null then name else "@${namespace}/${name}";
 
+  # We create a `self` object for self-referential expressions. It
+  # bottoms out in a call to `mkDerivation` at the end.
   self = let
     sources = runCommand "node-sources" {} ''
       tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
@@ -115,10 +124,8 @@ let
               platforms ++ (intersectLists filterPlatforms nodejs.meta.platforms)
       ) [] os;
 
-
     toAttrSet = obj: if isAttrs obj then obj else
       (listToAttrs (map (x: nameValuePair x.name x) obj));
-
 
     mapDependencies = deps: filterFunc: let
         attrDeps = toAttrSet deps;
@@ -174,13 +181,19 @@ let
       "--nodedir=${sources}"
     ] ++ (if isList flags then flags else [flags]));
 
+    # A bit of bash to check that variables are set.
+    checkSet = vars: concatStringsSep "\n" (flip map vars (var: ''
+      [[ -z $${var} ]] && { echo "${var} is not set."; exit 1; }
+    ''));
+
     mkDerivationArgs = {
       inherit src;
 
+      # Define some environment variables that we will use in the build.
       prePatch = ''
         export HASHEDNAME=$(echo "$propagatedNativeBuildInputs $name" \
                           | md5sum | awk '{print $1}')
-        export UNIQNAME="''${HASHEDNAME:0:10}-$name"
+        export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
         export BUILD_DIR=$TMPDIR/$UNIQNAME-build
       '';
 
@@ -206,9 +219,7 @@ let
       configurePhase = ''
         runHook preConfigure
         (
-          [[ -z $BUILD_DIR ]] && {
-            echo "BUILD_DIR is not set."
-          }
+          ${checkSet ["BUILD_DIR"]}
           mkdir -p $BUILD_DIR
           cd $BUILD_DIR
           # Symlink or copy dependencies for node modules
@@ -255,6 +266,8 @@ let
 
         # Install package
         (
+          ${checkSet ["BUILD_DIR" "PATCHED_SRC"]}
+
           echo "Building $name in $BUILD_DIR"
           cd $BUILD_DIR
           echo "Npm command:"
