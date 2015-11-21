@@ -25,7 +25,7 @@ let
   # Function to remove the first character of a string.
   dropFirstChar = str: concatStrings (tail (stringToCharacters str));
 
-  fetchUrlWithHeaders = pkgs.callPackage ./pyFetchurl.nix {};
+  fetchUrlWithHeaders = pkgs.callPackage ./fetchUrlWithHeaders.nix {};
 
   fetchPrivateNpm = {sha1, namespace, name, version, bearer}:
     fetchUrlWithHeaders {
@@ -34,10 +34,13 @@ let
       headers.Authentication = "Bearer ${bearer}";
     };
 
-  # A bootstrapped version of npm,
-  npm3 = let
-    pkgSet = import ./npm-3.4.1 { inherit nodejsVersion pkgs;};
-  in pkgSet.nodePackages.npm_3-4-1;
+  # Extracts a tarball containing a bootstrapped version of npm,
+  npm-nix = pkgs.runCommand "npm3" {src=./latest-npm.tar.gz;} ''
+    mkdir -p $out && cd $out && tar -xf $src
+  '';
+
+  # Builds the extracted nix file.
+  npm3 = import npm-nix {inherit pkgs nodejsVersion;};
 in
 
 rec {

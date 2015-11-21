@@ -148,8 +148,9 @@ initializeOutput = do
       nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
       createDirectoryIfMissing (outputPath </> "nodeLib")
       contents <- getDirectoryContents nodeLibPath
-      forM_ contents $ \file ->
-        copyFile (nodeLibPath </> file) (outputPath </> "nodeLib" </> file)
+      forItemsInDir_ nodeLibPath $ \path -> do
+        whenM (isFile path) $ do
+          copyFile path (outputPath </> "nodeLib" </> filename path)
     (extName:_) -> do -- Then we are extending things.
       writeNix (outputPath </> "default.nix") $
         defaultNixExtending extName extensions

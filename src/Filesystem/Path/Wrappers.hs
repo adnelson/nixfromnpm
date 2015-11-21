@@ -79,6 +79,14 @@ forItemsInDir_ dir action = do
   paths <- listDirFullPaths dir
   forM_ paths action
 
+-- | Check if the path is a file (not directory).
+isFile :: MonadIO io => FilePath -> io Bool
+isFile = doesFileExist
+
+-- | Check if the path is a file (not directory).
+isDirectory :: MonadIO io => FilePath -> io Bool
+isDirectory = doesDirectoryExist
+
 -- | Get the base name (filename) of a path, as text.
 getFilename :: FilePath -> Text
 getFilename = pathToText . filename
