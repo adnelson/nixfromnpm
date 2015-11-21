@@ -13,7 +13,7 @@ in
 
 mkDerivation {
   pname = "nixfromnpm";
-  version = "0.5.0";
+  version = "0.7.0";
   # Filter .git and dist files from source
   src = filterSource (n: t: !(elem n [".git" "dist"])) ./.;
   isExecutable = true;
@@ -33,8 +33,6 @@ mkDerivation {
   ];
   shellHook = ''
     export CURL_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
-    export semver=${semver-range}
-    export hnix=${hnix}
   '';
   description = "Generate nix expressions from npm packages";
   license = stdenv.lib.licenses.mit;

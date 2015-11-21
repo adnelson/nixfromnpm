@@ -1,18 +1,20 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module NixFromNpm.Npm.Types (
     module NixFromNpm.Npm.Version,
+    module NixFromNpm.Npm.PackageMap,
     PackageInfo(..), PackageMeta(..), VersionInfo(..),
-    DistInfo(..), ResolvedPkg(..), DependencyType(..),
+    DistInfo(..), DependencyType(..),
     BrokenPackageReason(..), ResolvedDependency(..),
     Shasum(..)
   ) where
 
 import qualified ClassyPrelude as CP
 import Data.Aeson
-import Data.Aeson.Types (Parser, typeMismatch)
+import Data.Aeson.Types as Aeson (Parser, typeMismatch)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 
@@ -20,10 +22,10 @@ import Data.SemVer
 import Data.SemVer.Parser
 
 import NixFromNpm.Common
-import NixFromNpm.Git.Types (getObject, getDict, GithubError)
+import NixFromNpm.Git.Types (getObject, GithubError)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser
-import NixFromNpm.PackageMap
+import NixFromNpm.Npm.PackageMap
 
 -- | Package information; specifically all of the different versions.
 data PackageInfo = PackageInfo {
@@ -44,14 +46,13 @@ data PackageMeta = PackageMeta {
 -- This type can be used as an input to the NpmLookup stuff to produce a
 -- `ResolvedPkg`.
 data VersionInfo = VersionInfo {
-  viDependencies :: Record NpmVersionRange,
-  viPeerDependencies :: Record NpmVersionRange,
-  viOptionalDependencies :: Record NpmVersionRange,
-  viDevDependencies :: Record NpmVersionRange,
-  viBundledDependencies :: [Text],
+  viName :: PackageName,
+  viDependencies :: PRecord NpmVersionRange,
+  viPeerDependencies :: PRecord NpmVersionRange,
+  viOptionalDependencies :: PRecord NpmVersionRange,
+  viDevDependencies :: PRecord NpmVersionRange,
+  viBundledDependencies :: [PackageName],
   viDist :: Maybe DistInfo, -- not present if in a package.json file.
-  viMain :: Maybe Text,
-  viName :: Text,
   viMeta :: PackageMeta,
   viVersion :: SemVer
   } deriving (Show, Eq)
@@ -65,20 +66,6 @@ data DistInfo = DistInfo {
   diShasum :: Shasum
   } deriving (Show, Eq)
 
--- | This contains the same information as the .nix file that corresponds
--- to the package. More or less it tells us everything that we need to build
--- the package.
-data ResolvedPkg = ResolvedPkg {
-  rpName :: Name,
-  rpVersion :: SemVer,
-  rpDistInfo :: Maybe DistInfo,
-  rpMeta :: PackageMeta,
-  rpDependencies :: Record ResolvedDependency,
-  rpPeerDependencies :: Record ResolvedDependency,
-  rpOptionalDependencies :: Record ResolvedDependency,
-  rpDevDependencies :: Maybe (Record ResolvedDependency)
-  } deriving (Show, Eq)
-
 -- | Flag for different types of dependencies.
 data DependencyType
   = Dependency    -- ^ Required at runtime.
@@ -89,7 +76,7 @@ data DependencyType
 
 -- | Reasons why an expression might not have been able to be built.
 data BrokenPackageReason
-  = NoMatchingPackage Name
+  = NoMatchingPackage PackageName
   | NoMatchingVersion NpmVersionRange
   | InvalidNpmVersionRange Text
   | NoSuchTag Name
@@ -100,8 +87,8 @@ data BrokenPackageReason
   | Reason String
   | GithubError GithubError
   | NotYetImplemented String
-  | UnsatisfiedDependency Name -- This should never happen, but in case
-  | BrokenDependency Name BrokenPackageReason
+  | UnsatisfiedDependency PackageName -- This should never happen, but in case
+  | BrokenDependency PackageName BrokenPackageReason
   deriving (Show, Eq, Typeable)
 
 instance Exception BrokenPackageReason
@@ -121,22 +108,38 @@ instance Monoid PackageInfo where
   mempty = PackageInfo mempty mempty
   mappend = (CP.<>)
 
+instance FromJSON PackageName where
+  parseJSON (String name) = case parsePackageName name of
+    Left err -> fail $ unpack err
+    Right pname -> return pname
+  parseJSON v = typeMismatch "Expected a string for a package name" v
+
+-- | Gets a hashmap from an object, or otherwise returns an empty hashmap.
+getDict :: (FromJSON val, FromJSON key, Hashable key, Eq key)
+        => Text -> Object -> Aeson.Parser (HashMap key val)
+getDict key obj = case H.lookup key obj of
+  Nothing -> return mempty
+  Just (Object obj') -> map H.fromList $
+    forM (H.toList obj') $ \(k, v) -> do
+      key <- parseJSON (String k)
+      val <- parseJSON v
+      return (key, val)
+
 instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
-    dependencies' <- getDict "dependencies" o
+    listedDependencies <- getDict "dependencies" o
     devDependencies <- getDict "devDependencies" o
     peerDependencies <- getDict "peerDependencies" o
     optionalDependencies <- getDict "optionalDependencies" o
     bundledDependencies <- o .:? "bundledDependencies" .!= []
     -- Loop through the bundled dependencies. If any of them are missing
     -- from the dependencies record, add it here.
-    let isMissingDep name = not $ H.member name dependencies'
+    let isMissingDep name = not $ H.member name listedDependencies
         missing = filter isMissingDep bundledDependencies
         missingDependencies = zip missing (repeat $ SemVerRange anyVersion)
-        dependencies = dependencies' <> H.fromList missingDependencies
+        dependencies = listedDependencies <> H.fromList missingDependencies
     dist <- o .:? "dist"
-    name <- o .: "name"
-    main <- o .:? "main"
+    pkgName <- o .: "name"
     version <- o .: "version"
     packageMeta <- do
       let getString = \case {String s -> Just s; _ -> Nothing}
@@ -167,8 +170,7 @@ instance FromJSON VersionInfo where
         viOptionalDependencies = optionalDependencies,
         viBundledDependencies = bundledDependencies,
         viDist = dist,
-        viMain = main,
-        viName = name,
+        viName = pkgName,
         viMeta = packageMeta,
         viVersion = semver
       }
@@ -182,7 +184,7 @@ instance FromJSON SemVerRange where
 
 instance FromJSON PackageInfo where
   parseJSON = getObject "package info" >=> \o -> do
-    vs' <- getDict "versions" o
+    vs' :: Record VersionInfo <- getDict "versions" o
     tags' <- getDict "dist-tags" o
     let vs = H.fromList $ map (\vi -> (viVersion vi, vi)) $ H.elems vs'
         convert tags [] = return $ PackageInfo vs (H.fromList tags)
@@ -192,16 +194,8 @@ instance FromJSON PackageInfo where
           Right ver -> convert ((tName, ver):tags) ts
     convert [] $ H.toList tags'
 
-
 instance FromJSON DistInfo where
   parseJSON = getObject "dist info" >=> \o -> do
     tarball <- o .: "tarball"
     shasum <- SHA1 <$> o .: "shasum"
     return $ DistInfo tarball shasum
-
-patchIfMatches :: (a -> Bool) -- ^ Predicate function
-               -> (a -> a) -- ^ Modification function
-               -> a -- ^ Input object
-               -> a -- ^ Patched object
-patchIfMatches pred mod input | pred input = mod input
-                              | otherwise  = input

@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Filesystem.Path.Wrappers where
 
-import ClassyPrelude hiding (FilePath, unpack, (</>))
+import ClassyPrelude hiding (FilePath, unpack, (</>), readFile)
 import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
 import qualified Data.Text as T
@@ -43,6 +43,10 @@ writeFile path = CP.writeFile (pathToString path)
 readFile :: (MonadIO io, IOData dat) => FilePath -> io dat
 readFile = generalize CP.readFile
 
+-- | Read a data file, as included by cabal.
+readDataFile :: (MonadIO io, IOData dat) => FilePath -> io dat
+readDataFile = getDataFileName >=> readFile
+
 -- | Create a symbolic link at `path2` pointing to `path1`.
 createSymbolicLink :: (MonadIO io) => FilePath -> FilePath -> io ()
 createSymbolicLink path1 path2 = liftIO $ do
@@ -58,17 +62,38 @@ pathToText pth = case toText pth of
 pathToString :: FilePath -> String
 pathToString = unpack . pathToText
 
--- | Perform an IO action inside of the given directory. Catches exceptions.
-withDir :: (MonadBaseControl IO io, MonadIO io)
-        => FilePath -> io a -> io a
-withDir directory action = do
-  cur <- getCurrentDirectory
-  bracket_ (setCurrentDirectory directory)
-           (setCurrentDirectory cur)
-           action
+-- | Get the contents of a directory, with the directory prepended.
+listDirFullPaths :: MonadIO io => FilePath -> io [FilePath]
+listDirFullPaths dir = map (dir </>) <$> getDirectoryContents dir
 
+-- | Map an action over each item in the directory. The action will be
+-- called with the path to the directory prepended to the item.
+forItemsInDir :: MonadIO io => FilePath -> (FilePath -> io a) -> io [a]
+forItemsInDir dir action = do
+  paths <- listDirFullPaths dir
+  forM paths action
+
+-- | Map an action over each item in the directory, and ignore the results.
+forItemsInDir_ :: MonadIO io => FilePath -> (FilePath -> io ()) -> io ()
+forItemsInDir_ dir action = do
+  paths <- listDirFullPaths dir
+  forM_ paths action
+
+-- | Check if the path is a file (not directory).
+isFile :: MonadIO io => FilePath -> io Bool
+isFile = doesFileExist
+
+-- | Check if the path is a file (not directory).
+isDirectory :: MonadIO io => FilePath -> io Bool
+isDirectory = doesDirectoryExist
+
+-- | Get the base name (filename) of a path, as text.
 getFilename :: FilePath -> Text
 getFilename = pathToText . filename
+
+-- | Get the base name of a path without extension, as text.
+getBaseName :: FilePath -> Text
+getBaseName = pathToText . fst . splitExtension . filename
 
 createDirectory :: MonadIO io => FilePath -> io ()
 createDirectory = generalize Dir.createDirectory

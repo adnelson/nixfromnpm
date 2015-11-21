@@ -30,12 +30,13 @@ module NixFromNpm.Common (
     module Network.URI,
     module Filesystem.Path.Wrappers,
     module Text.Render,
+    module Text.Printf,
     module Control.Monad.Trans.Control,
     module System.Console.ANSI,
-    Name, Record, (//),
+    Name, AuthToken, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL, warn, warns, assert, fatal
+    parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -67,9 +68,10 @@ import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
 import qualified Data.Text as T
-import Filesystem.Path.CurrentOS hiding (concat, null, (<.>))
+import Filesystem.Path.CurrentOS hiding (concat, null, (<.>), empty)
 import GHC.Exts (IsList)
 import Text.Render hiding (renderParens)
+import Text.Printf (printf)
 import Network.URI (URI(..), URIAuth(..), parseURI, parseAbsoluteURI,
                     parseRelativeReference, relativeTo)
 import qualified Network.URI as NU
@@ -80,8 +82,8 @@ import Filesystem.Path.Wrappers
 -- | Indicates that the text is some identifier.
 type Name = Text
 
--- | Indicates that the text is some path.
-type Path = Text
+-- | Used to indicate something is meant for authentication.
+type AuthToken = ByteString
 
 -- | A record is a lookup table with string keys.
 type Record = HashMap Name
@@ -126,11 +128,11 @@ putStrsLn = putStrLn . concat
 putStrs :: MonadIO m => [Text] -> m ()
 putStrs = putStr . concat
 
--- | Strip the given suffix from the given String.
-dropSuffix :: String -> String -> String
-dropSuffix suffix s | s == suffix = ""
-dropSuffix suffix (c:cs) = c : dropSuffix suffix cs
-dropSuffix suffix "" = ""
+-- | Strip the given suffix from the given string.
+dropSuffix :: Text -> Text -> Text
+dropSuffix suffix input = case T.stripSuffix suffix input of
+  Nothing -> input
+  Just stripped -> stripped
 
 -- | Return a Just value if the argument is True, else Nothing.
 maybeIf :: Bool -> a -> Maybe a
@@ -205,3 +207,7 @@ assert test err = test >>= \case
 -- | Throw a fatal error.
 fatal :: Text -> a
 fatal = throw . Fatal
+
+-- | Like `fatal` but takes a list which it concatenates.
+fatalC :: [Text] -> a
+fatalC = fatal . concat

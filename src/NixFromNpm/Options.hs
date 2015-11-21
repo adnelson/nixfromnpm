@@ -1,10 +1,11 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
-module NixFromNpm.Options (
-  RawOptions(..), NixFromNpmOptions(..),
-  parseOptions, validateOptions
-  ) where
+module NixFromNpm.Options where
+--  RawOptions(..), NixFromNpmOptions(..),
+--  parseOptions, validateOptions
+--  ) where
+import qualified Prelude as P
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.HashMap.Strict as H
@@ -12,6 +13,8 @@ import qualified Data.HashMap.Strict as H
 import Data.SemVer
 import Options.Applicative
 
+import NixFromNpm.NpmLookup (getNpmTokens, parseNpmTokens)
+import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser (parseNpmVersionRange)
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
@@ -56,15 +59,18 @@ data RawOptions = RawOptions {
   roTest :: Bool,             -- ^ Fetch only; don't write expressions.
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
-  roGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  roGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
+  roNpmTokens :: [Text], -- ^ NPM authentication tokens.
   roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
-  roRealTime :: Bool -- ^ Write packages to disk as they are written.
+  roNoRealTime :: Bool, -- ^ Write packages to disk as they are written.
+  roTopNPackages :: Maybe Int, -- ^ Fetch the top `n` npm packages by popularity.
+  roAllTop :: Bool -- ^ If true, fetch all of the top packages we have defined.
 } deriving (Show, Eq)
 
 -- | Various options we have available for nixfromnpm. Validated
 -- versions of what's parsed from the command-line.
 data NixFromNpmOptions = NixFromNpmOptions {
-  nfnoPkgNames :: [(Name, NpmVersionRange)],
+  nfnoPkgNames :: [(PackageName, NpmVersionRange)],
   -- ^ Names/versions of packages to build.
   nfnoPkgPaths :: [FilePath],    -- ^ Path of package.json to build.
   nfnoOutputPath :: FilePath,    -- ^ Path to output built expressions to.
@@ -75,7 +81,8 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
-  nfnoGithubToken :: Maybe ByteString, -- ^ Github authentication token.
+  nfnoGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
+  nfnoNpmTokens :: Record AuthToken, -- ^ NPM authentication token.
   nfnoRealTime :: Bool -- ^ Write packages to disk as they are written.
   } deriving (Show, Eq)
 
@@ -127,38 +134,69 @@ validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
     assert (doesFileExist path) (NoPackageJsonFoundAt path)
     return (parent path)
 
-parseNameAndRange :: MonadIO m => Text -> m (Name, NpmVersionRange)
-parseNameAndRange name = case T.split (== '@') name of
-  [name] -> return (name, SemVerRange anyVersion)
-  [name, range] -> case parseNpmVersionRange range of
-    Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
-    Right nrange -> return (name, nrange)
+-- | A package name can be passed in directly, or a version range can be
+-- specified with a %.
+parseNameAndRange :: MonadIO m => Text -> m (PackageName, NpmVersionRange)
+parseNameAndRange name = do
+  let badFormat err = UnrecognizedVersionFormat (name <> " (" <> err <> ")")
+  case T.split (== '%') name of
+    -- Just a name, no version range
+    [name'] -> case parsePackageName name' of
+      Left err -> throw $ NpmVersionError $ badFormat err
+      Right pkgName -> return (pkgName, SemVerRange anyVersion)
+    -- If a @ occurs in the middle, treat it as a name and range identifier.
+    [name', range] -> case parseNpmVersionRange range of
+      Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
+      Right nrange -> case parsePackageName name' of
+        Left err -> throw $ NpmVersionError $ badFormat err
+        Right pkgName -> return (pkgName, nrange)
+    -- Anything else is invalid.
+    _ -> throw $ NpmVersionError $ badFormat "?"
 
+-- | Get a list of the top n packages. If n is negative, or too large, we'll
+-- return all of the packages we're aware of. If it's too large,
+getTopN :: MonadIO io => Maybe Int -> io [(PackageName, NpmVersionRange)]
+getTopN numPackages = do
+  topPackages <- map T.strip <$> T.lines <$> readDataFile "top_packages.txt"
+  mapM parseNameAndRange $ case numPackages of
+    Nothing -> topPackages
+    Just n -> take n topPackages
+
+-- | Validates the raw options passed in from the command line, and also
+-- translates them into their "full" counterpart, NixFromNpmOptions.
 validateOptions :: RawOptions -> IO NixFromNpmOptions
 validateOptions opts = do
   pwd <- getCurrentDirectory
+  topPackagesToFetch <- case roAllTop opts of
+    True -> getTopN Nothing
+    False -> case roTopNPackages opts of
+      Nothing -> return []
+      Just n -> getTopN (Just n)
   packageNames <- mapM parseNameAndRange $ roPkgNames opts
   extendPaths <- getExtensions (roExtendPaths opts)
   packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
   outputPath <- validateOutput . fromText $ roOutputPath opts
   registries <- mapM validateUrl $ (roRegistries opts <>
                                     if roNoDefaultRegistry opts
-                                    then []
-                                    else ["https://registry.npmjs.org"])
-  tokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+                                       then []
+                                       else ["https://registry.npmjs.org"])
+  githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
+  tokensCommandLine <- parseNpmTokens $ roNpmTokens opts
+  npmTokensEnv <- getNpmTokens
   return (NixFromNpmOptions {
     nfnoOutputPath = outputPath,
     nfnoExtendPaths = extendPaths,
-    nfnoGithubToken = roGithubToken opts <|> tokenEnv,
+    nfnoGithubToken = roGithubToken opts <|> githubTokenEnv,
+    nfnoNpmTokens = tokensCommandLine <> npmTokensEnv,
     nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
     nfnoDevDepth = roDevDepth opts,
     nfnoTest = roTest opts,
     nfnoTimeout = roTimeout opts,
-    nfnoPkgNames = packageNames,
+    nfnoPkgNames = packageNames <> topPackagesToFetch,
     nfnoRegistries = registries,
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts,
-    nfnoRealTime = roRealTime opts
+    nfnoRealTime = not (roNoRealTime opts)
     })
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
@@ -178,9 +216,9 @@ validateOptions opts = do
             Just path' -> throw $ DuplicatedExtensionName name
                                     (fromText path) path'
 
-parseOptions :: Maybe ByteString -> Parser RawOptions
-parseOptions githubToken = RawOptions
-    <$> many (textOption packageName)
+parseOptions :: Parser RawOptions
+parseOptions = RawOptions
+    <$> packageNames
     <*> packageFiles
     <*> textOption outputDir
     <*> noDefaultNix
@@ -191,11 +229,14 @@ parseOptions githubToken = RawOptions
     <*> isTest
     <*> registries
     <*> timeout
-    <*> token
+    <*> githubToken
+    <*> npmTokens
     <*> noDefaultRegistry
     <*> realTime
+    <*> topN
+    <*> allTop
   where
-    packageName = short 'p'
+    packageNames = many $ textOption $ short 'p'
                    <> long "package"
                    <> metavar "NAME"
                    <> help ("Package to generate expression for (supports "
@@ -218,7 +259,7 @@ parseOptions githubToken = RawOptions
     devDepth = option auto (long "dev-depth"
                             <> metavar "DEPTH"
                             <> help "Depth to which to fetch dev dependencies"
-                            <> value 1)
+                            <> value 0)
     cacheHelp = "Depth at which to use cache. Packages at dependency depth \
                 \DEPTH and lower will be pulled from the cache. If DEPTH \
                 \is negative, the cache will be ignored entirely (same as \
@@ -245,14 +286,27 @@ parseOptions githubToken = RawOptions
                                     <> metavar "REGISTRY"
                                     <> help ("NPM registry to query (supports "
                                              <> "multiples)"))
-    tokenHelp = ("Token to use for github access (also can be set with " <>
-                 "GITHUB_TOKEN environment variable)")
-    token = (Just . T.encodeUtf8 <$> textOption (long "github-token"
+    tokenHelp s _type envVar = concat
+      ["Token", s, " to use for ", _type, " access (also can be set with ",
+       envVar, " environment variable)"]
+    githubToken = (Just . T.encodeUtf8 <$> textOption (long "github-token"
                                   <> metavar "TOKEN"
-                                  <> help tokenHelp))
-            <|> pure githubToken
+                                  <> help (tokenHelp "" "github" "GITHUB_TOKEN")))
+                  <|> pure Nothing
+    npmTokens = many $ textOption $
+      long "npm-token"
+      <> metavar "NAMESPACE=TOKEN"
+      <> help (tokenHelp "s" "npm" "NPM_AUTH_TOKENS")
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
-    realTime = switch (long "real-time"
-                       <> help "Write packages to disk as they are generated,\
-                               \ rather than at the end.")
+    realTime = switch (long "no-real-time"
+                       <> help "Write packages to disk at the end rather than \
+                               \ as they are generated.")
+    allTop = switch (long "all-top"
+                       <> help "Fetch all of the most popular packages that \
+                               \nixfromnpm knows about.")
+    topN = (Just . P.read . unpack
+            <$> textOption (long "top-n"
+                            <> metavar "N"
+                            <> help "Fetch the top N packages by popularity."))
+           <|> pure Nothing

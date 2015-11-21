@@ -8,6 +8,7 @@ import qualified Data.Text as T
 import Data.SemVer
 
 import NixFromNpm.Common
+import NixFromNpm.Npm.PackageMap
 import NixFromNpm.Git.Types hiding (Tag)
 import Text.Parsec (ParseError)
 
@@ -21,12 +22,12 @@ data NpmVersionRange
   | LocalPath FilePath
   deriving (Eq, Ord)
 
-
 data NpmVersionError
   = UnsupportedVersionType NpmVersionRange
   | UnsupportedUriScheme String
   | UnsupportedGitSource GitSource
   | VersionSyntaxError Text ParseError
+  | UnrecognizedVersionFormat Text
   deriving (Show, Eq, Typeable)
 
 instance Exception NpmVersionError
@@ -41,14 +42,14 @@ instance Show NpmVersionRange where
   show (GitId src _ _ _) = "git fetch from " <> show src
   show (LocalPath pth) = show pth
 
-showPair :: Name -> SemVer -> Text
-showPair name version = name <> "@" <> renderSV version
+showPair :: PackageName -> SemVer -> Text
+showPair name version = pshow name <> "@" <> pshow version
 
-showPairs :: [(Name, SemVer)] -> Text
+showPairs :: [(PackageName, SemVer)] -> Text
 showPairs = mapJoinBy ", " (uncurry showPair)
 
-showRangePair :: Name -> NpmVersionRange -> Text
-showRangePair name range = name <> "@" <> pshow range
+showRangePair :: PackageName -> NpmVersionRange -> Text
+showRangePair name range = pshow name <> "@" <> pshow range
 
-showDeps :: [(Name, NpmVersionRange)] -> Text
+showDeps :: [(PackageName, NpmVersionRange)] -> Text
 showDeps ranges = mapJoinBy ", " (uncurry showRangePair) ranges

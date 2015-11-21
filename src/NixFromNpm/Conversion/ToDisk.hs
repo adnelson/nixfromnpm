@@ -9,6 +9,7 @@ module NixFromNpm.Conversion.ToDisk where
 import qualified Prelude as P
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as H
+import qualified Data.HashSet as HS
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Text (Text)
@@ -25,7 +26,8 @@ import NixFromNpm.Common
 import Nix.Types
 import Nix.Parser
 import Nix.Pretty (prettyNix)
-import NixFromNpm.Conversion.ToNix (toDotNix,
+import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
+                                    toDotNix,
                                     writeNix,
                                     rootDefaultNix,
                                     defaultNixExtending,
@@ -34,7 +36,9 @@ import NixFromNpm.Conversion.ToNix (toDotNix,
                                     nodePackagesDir)
 import NixFromNpm.Options
 import NixFromNpm.Npm.Types
-import NixFromNpm.PackageMap (PackageMap, pmLookup, pmDelete, pmMap, psToList)
+import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..),
+                                  pmLookup, pmDelete, pmMap,
+                                  psToList)
 import NixFromNpm.NpmLookup
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
@@ -50,28 +54,33 @@ takeNewPackages startingRec = do
 
 -- | Given the path to a package, finds all of the .nix files which parse
 --   correctly.
-parseVersion :: MonadIO io => Name -> FilePath -> io (Maybe (SemVer, NExpr))
-parseVersion pkgName path = do
-  let (versionTxt, ext) = splitExtension $ filename path
-  case parseSemVer (pathToText versionTxt) of
-    _ | ext /= Just "nix" -> return Nothing -- not a nix file
-    Left _ -> return Nothing -- not a version file
-    Right version -> parseNixString . pack <$> readFile path >>= \case
-      Failure err -> do
-        putStrsLn ["Warning: expression for ", pkgName, " version ",
-                   pathToText versionTxt, " failed to parse:\n", pshow err]
-        return Nothing -- invalid nix, should overwrite
-      Success expr -> return $ Just (version, expr)
+parseVersionFiles :: MonadIO io
+                  => PackageName -- ^ Name of the package this is a version of.
+                  -> FilePath    -- ^ Folder containing .nix files for this
+                                 --   package.
+                  -> io (PackageMap NExpr) -- ^ Version and expression.
+parseVersionFiles pkgName folder = do
+  maybeExprs <- forItemsInDir folder $ \path -> do
+    let (versionTxt, ext) = splitExtension $ filename path
+    case parseSemVer (pathToText versionTxt) of
+      _ | ext /= Just "nix" -> return Nothing -- not a nix file
+      Left _ -> return Nothing -- not a version file
+      Right version -> parseNixString . pack <$> readFile path >>= \case
+        Failure err -> do
+          putStrsLn ["Warning: expression for ", pshow pkgName, " version ",
+                     pathToText versionTxt, " failed to parse:\n", pshow err]
+          return Nothing -- invalid nix, should overwrite
+        Success expr -> return $ Just (version, expr)
+  return $ H.singleton pkgName (H.fromList $ catMaybes maybeExprs)
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 --   expressions findable at that path and returns a map of them.
 findExisting :: (MonadBaseControl IO io, MonadIO io)
              => Maybe Name -- ^ Is `Just` if this is an extension.
              -> FilePath       -- ^ The path to search.
-             -> io (PackageMap PreExistingPackage) -- ^ Mapping of package
-                                                   --   names to maps of
-                                                   --   versions to nix
-                                                   --   expressions.
+             -> io (PackageMap PreExistingPackage)
+             -- ^ Mapping of package names to maps of versions to nix
+             --   expressions.
 findExisting maybeName path = do
   doesDirectoryExist (path </> nodePackagesDir) >>= \case
     False -> case maybeName of
@@ -79,25 +88,27 @@ findExisting maybeName path = do
         "Path ", pathToText path, " does not exist or does not ",
         "contain a `", pathToText nodePackagesDir, "` folder"]
       Nothing -> return mempty
-    True -> withDir (path </> nodePackagesDir) $ do
+    True -> do
       let wrapper = maybe FromOutput FromExtension maybeName
-      putStrsLn ["Searching for existing expressions in ", pathToText path,
-                 "..."]
-      contents <- getDirectoryContents "."
-      verMaps <- map catMaybes $ forM contents $ \dir -> do
-        exprs <- doesDirectoryExist dir >>= \case
-          True -> withDir dir $ do
-            contents <- getDirectoryContents "."
-            let files = filter (hasExt "nix") contents
-            catMaybes <$> mapM (parseVersion $ pathToText dir) files
-          False -> do
-            return mempty -- not a directory
-        return $ case exprs of
-          [] -> Nothing
-          vs -> Just (pathToText dir, H.map wrapper $ H.fromList exprs)
-      let total = sum $ map (H.size . snd) verMaps
+      putStrsLn ["Searching for existing expressions in ", pathToText path]
+      verMapLists <- forItemsInDir (path </> nodePackagesDir) $ \dir -> do
+        doesDirectoryExist dir >>= \case
+          False -> return mempty -- not a directory
+          True -> case T.split (=='@') $ getFilename dir of
+            -- Check if the directory starts with "@", in which case it's
+            -- a namespace.
+            ["", namespace] -> do
+              forItemsInDir dir $ \dir' -> do
+                let pkgName = PackageName (getFilename dir') (Just namespace)
+                parseVersionFiles pkgName dir'
+            [name] -> do
+              let pkgName = simpleName $ getFilename dir
+              singleton <$> parseVersionFiles pkgName dir
+            _ -> return mempty
+      let verMaps = concat $ concat verMapLists
+          total = sum $ map (sum . map H.size) verMapLists
       putStrsLn ["Found ", render total, " expressions in ", pathToText path]
-      return $ H.fromList verMaps
+      return $ pmMap wrapper verMaps
 
 -- | Given the output directory and any number of extensions to load,
 -- finds any existing packages.
@@ -124,65 +135,68 @@ initializeOutput = do
   outputPath <- asks nfsOutputPath
   extensions <- asks nfsExtendPaths
   createDirectoryIfMissing outputPath
-  withDir outputPath $ do
-    putStrsLn ["Initializing  ", pathToText outputPath]
-    createDirectoryIfMissing nodePackagesDir
-    version <- case fromHaskellVersion Paths_nixfromnpm.version of
-      Left err -> fatal err
-      Right v -> return v
-    writeFile ".nixfromnpm-version" $ renderSV version
-    case H.keys extensions of
-      [] -> do -- Then we are creating a new root.
-        writeNix "default.nix" rootDefaultNix
-        putStrsLn ["Generating node libraries in ", pathToText outputPath]
-        nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
-        createDirectoryIfMissing (outputPath </> "nodeLib")
-        contents <- getDirectoryContents nodeLibPath
-        forM_ contents $ \file ->
-          copyFile (nodeLibPath </> file) (outputPath </> "nodeLib" </> file)
-      (extName:_) -> do -- Then we are extending things.
-        writeNix "default.nix" $ defaultNixExtending extName extensions
+  putStrsLn ["Initializing  ", pathToText outputPath]
+  createDirectoryIfMissing (outputPath </> nodePackagesDir)
+  version <- case fromHaskellVersion Paths_nixfromnpm.version of
+    Left err -> fatal err
+    Right v -> return v
+  writeFile (outputPath </> ".nixfromnpm-version") $ pshow version
+  case H.keys extensions of
+    [] -> do -- Then we are creating a new root.
+      writeNix (outputPath </> "default.nix") rootDefaultNix
+      putStrsLn ["Generating node libraries in ", pathToText outputPath]
+      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+      createDirectoryIfMissing (outputPath </> "nodeLib")
+      contents <- getDirectoryContents nodeLibPath
+      forItemsInDir_ nodeLibPath $ \path -> do
+        whenM (isFile path) $ do
+          copyFile path (outputPath </> "nodeLib" </> filename path)
+    (extName:_) -> do -- Then we are extending things.
+      writeNix (outputPath </> "default.nix") $
+        defaultNixExtending extName extensions
 
-updateLatestNix :: MonadIO io => io ()
-updateLatestNix = do
-  pwd <- getCurrentDirectory
+-- | Looks at all nix files in a folder, finds the one with the most
+-- recent version, and creates a `latest.nix` symlink to that file.
+updateLatestNix :: MonadIO io => FilePath -> io ()
+updateLatestNix dir = do
   -- Remove the `latest.nix` symlink if it exists.
-  whenM (doesFileExist "latest.nix") $ removeFile "latest.nix"
+  whenM (doesFileExist $ dir </> "latest.nix") $
+    removeFile (dir </> "latest.nix")
   -- Grab the latest version and create a symlink `latest.nix`
   -- to that.
-  let convert fname =
-        case parseSemVer (T.dropEnd 4 $ pathToText fname) of
-          Left _ -> Nothing -- not a semver, so we don't consider it
-          Right ver -> Just ver -- return the version
-  catMaybes . map convert <$> getDirectoryContents "." >>= \case
+  let convert fname = case parseSemVer (getBaseName fname) of
+        Left _ -> Nothing -- not a semver, so we don't consider it
+        Right ver -> Just ver -- return the version
+  catMaybes . map convert <$> listDirFullPaths dir >>= \case
     [] -> return ()
-    versions -> do
-      createSymbolicLink (toDotNix $ maximum versions) "latest.nix"
+    versions -> createSymbolicLink (toDotNix $ maximum versions)
+                                   (dir </> "latest.nix")
 
-
+-- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
           => FilePath -- ^ Source path, containing store objects
           -> FilePath -- ^ Target path, also containing store objects
           -> io ()
-mergeInto source target = withDir (source </> nodePackagesDir) $ do
-  packageDirs <- getDirectoryContents "."
-  forM_ packageDirs $ \dir -> do
-    let targetDir = target </> nodePackagesDir </> dir
+mergeInto source target = do
+  -- Go through all of the packages in the source directory.
+  forItemsInDir_ (source </> nodePackagesDir) $ \srcDir -> do
+    let targetDir = target </> nodePackagesDir </> filename srcDir
+    -- Create a directory for that package, if it doesn't exist.
     whenM (not <$> doesDirectoryExist targetDir) $ do
       putStrsLn ["Creating directory ", pathToText targetDir]
       createDirectory targetDir
-    withDir dir $ do
-      dotNixFiles <- filter (hasExt "nix") <$> getDirectoryContents "."
-      forM_ dotNixFiles $ \f -> do
-        whenM (not <$> doesFileExist (targetDir </> f)) $ do
-          putStrsLn ["Copying ", pathToText f, " to ",
-                     pathToText (targetDir </> f)]
-          copyFile f (targetDir </> f)
-      withDir targetDir updateLatestNix
-
+    -- Copy every version file found in that directory as well.
+    dotNixFiles <- filter (hasExt "nix") <$> listDirFullPaths srcDir
+    forM_ dotNixFiles $ \versionFile -> do
+      let targetVersionFile = targetDir </> filename versionFile
+      whenM (not <$> doesFileExist targetVersionFile) $ do
+        putStrsLn ["Copying ", pathToText versionFile, " to ",
+                   pathToText targetVersionFile]
+        copyFile versionFile targetVersionFile
+    updateLatestNix targetDir
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
---   and the names/paths to the libraries being extended.
+-- and the names/paths to the libraries being extended.
 writeNewPackages :: NpmFetcher ()
 writeNewPackages = takeNewPackages <$> gets resolved >>= \case
   newPackages
@@ -190,26 +204,24 @@ writeNewPackages = takeNewPackages <$> gets resolved >>= \case
     | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
         forM_ (H.toList pkgVers) $ \(ver, expr) -> do
           writePackage pkgName ver expr
-        dir <- outputDirOf pkgName
-        withDir dir updateLatestNix
+        updateLatestNix =<< outputDirOf pkgName
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
 dumpFromPkgJson path = do
   doesDirectoryExist path >>= \case
     False -> errorC ["No such directory ", pathToText path]
-    True -> withDir path $ do
-      doesFileExist "package.json" >>= \case
-        False -> errorC ["No package.json found in ", pathToText path]
-        True -> do
-          verinfo <- extractPkgJson "package.json"
-          let (name, version) = (viName verinfo, viVersion verinfo)
-          putStrsLn ["Generating expression for package ", name,
-                     ", version ", renderSV version]
-          rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
-          writeNix "project.nix" $ resolvedPkgToNix rPkg
-          outputPath <- asks nfsOutputPath
-          writeNix "default.nix" $ packageJsonDefaultNix outputPath
+    True -> doesFileExist (path </> "package.json") >>= \case
+      False -> errorC ["No package.json found in ", pathToText path]
+      True -> do
+        verinfo <- extractPkgJson (path </> "package.json")
+        let (name, version) = (viName verinfo, viVersion verinfo)
+        putStrsLn ["Generating expression for package ", pshow name,
+                   ", version ", pshow version]
+        rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
+        writeNix "project.nix" $ resolvedPkgToNix rPkg
+        outputPath <- asks nfsOutputPath
+        writeNix "default.nix" $ packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()
@@ -220,22 +232,32 @@ showBrokens = H.toList <$> gets brokenPackages >>= \case
                " downstream dependencies."]
     forM_ brokens $ \(name, rangeMap) -> do
       forM_ (M.toList rangeMap) $ \(range, report) -> do
-        putStrLn $ showRangePair name range
-        let deps = bprDependencyOf report
-        when (H.size deps > 0) $ do
-          putStrsLn ["Dependency of: ", showPairs $ psToList deps]
+        putStrsLn ["  ", showRangePair name range]
+        let chains = bprDependencyChains report
+        when (HS.size chains > 0) $ do
+          putStrLn "   Dependency of:"
+          forM_ (HS.toList chains) $ \chain ->
+            putStrsLn ["    ",
+                       mapJoinBy " -> " (uncurry showPair) (reverse chain)]
         putStrsLn ["Failed to build because: ", pshow (bprReason report)]
 
 -- | See if any of the top-level packages failed to build, and return a
 -- non-zero status if they did.
-checkForBroken :: [(Name, NpmVersionRange)] -> NpmFetcher ExitCode
+checkForBroken :: [(PackageName, NpmVersionRange)] -> NpmFetcher ExitCode
 checkForBroken inputs = do
+  -- findBrokens will look for any of the packages in
   let findBrokens [] = return []
       findBrokens ((name, range):others) = getBroken name range >>= \case
         Nothing -> findBrokens others
         Just report -> ((name, range, report) :) <$> findBrokens others
   findBrokens inputs >>= \case
-    [] -> putStrLn "Top-level packages built successfully." >> return ExitSuccess
+    [] -> do
+      let p = if length inputs > 1 then "packages" else "package"
+      putStrsLn [
+        "Top-level ", p, " ", mapJoinBy ", " (uncurry showRangePair) inputs,
+        " built successfully."
+        ]
+      return ExitSuccess
     pkgs -> do
       putStrLn "The following packages failed to build:"
       forM_ pkgs $ \(name, range, report) -> do
@@ -258,9 +280,14 @@ checkPackage ResolvedPkg{..} = go (H.toList rpDependencies) where
       Just _ -> go rest
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ExitCode
+dumpPkgFromOptions opts
+  | nfnoPkgNames opts == [] && nfnoPkgPaths opts == [] = do
+      putStrLn "No packages given, nothing to do..."
+      return $ ExitFailure 1
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   let settings = defaultSettings {
     nfsGithubAuthToken = nfnoGithubToken,
+    nfsNpmAuthTokens = nfnoNpmTokens,
     nfsRegistries = nfnoRegistries,
     nfsRequestTimeout = fromIntegral nfnoTimeout,
     nfsOutputPath = nfnoOutputPath,
@@ -275,9 +302,10 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     forM nfnoPkgNames $ \(name, range) -> do
       _resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
-          warns ["Failed to build ", name, "@", pshow range, ": ", pshow e]
+          warns ["Failed to build ", pshow name, "@", pshow range,
+                 ": ", pshow e]
           addBroken name range (Reason $ show e)
-          return (0, 0, 0, [])
+          return $ semver 0 0 0
       writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
