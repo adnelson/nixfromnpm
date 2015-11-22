@@ -89,14 +89,19 @@ rec {
   brokenPackage = {name, reason}:
     let
      deriv = pkgs.stdenv.mkDerivation {
-        name = "broken-${name}";
+        name = "BROKEN-${name}";
         buildCommand = ''
           echo "Package ${name} is broken: ${reason}"
           exit 1
         '';
         passthru.withoutTests = deriv;
         passthru.pkgName = name;
+        passthru.basicName = "BROKEN";
+        passthru.namespace = null;
         passthru.version = "BROKEN";
+        passthru.override = _: deriv;
+        passthru.recursiveDeps = [];
+        passthru.peerDependencies = {};
       };
     in
     deriv;
@@ -196,7 +201,8 @@ rec {
       };
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //
                      discoverPackages {inherit callPackage rootPath;};
-      namespaces = discoverNamespacePackages {inherit callPackage rootPath;};
+      namespaces = joinSets (map (e: e.namespaces) extensions) //
+                   discoverNamespacePackages {inherit callPackage rootPath;};
     in {
       inherit nodePackages callPackage namespaces namespaceTokens pkgs;
       nodeLib = self;

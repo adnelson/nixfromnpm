@@ -354,15 +354,17 @@ prefetchSha256 uri = do
 
 -- | Shell out to tar to pull the package.json out of a tarball.
 extractVersionInfo :: FilePath -- ^ Path to the downloaded tarball.
-                   -> FilePath -- ^ Subpath containing package.json file.
                    -> NpmFetcher VersionInfo -- ^ The version info object.
-extractVersionInfo tarballPath subpath = do
+extractVersionInfo tarballPath = do
   temp <- tempDir "pkg-json-extract"
   putStrsLn ["Extracting ", pathToText tarballPath, " to tempdir ",
              pathToText temp]
-  shelly $ run_ "tar" ["-xf", pathToText tarballPath, "-C",
-                       pathToText temp]
-  result <- extractPkgJson $ temp </> subpath </> "package.json"
+  shelly $ run_ "tar" ["-xf", pathToText tarballPath, "-C", pathToText temp]
+  result <- listDirFullPaths temp >>= \case
+    -- Either the directory must have a single folder with a package.json
+    [folder] -> extractPkgJson $ folder </> "package.json"
+    -- Or it must itself contain a package.json.
+    _ -> extractPkgJson $ temp </> "package.json"
   removeDirectoryRecursive temp
   return result
 
@@ -377,14 +379,13 @@ extractPkgJson path = do
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
-fetchHttp :: FilePath -- ^ Subpath in which to find the package.json.
-          -> URI -- ^ The URI to fetch.
+fetchHttp :: URI -- ^ The URI to fetch.
           -> NpmFetcher SemVer -- ^ The package at that URI.
-fetchHttp subpath uri = do
+fetchHttp uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- prefetchSha256 uri
   -- Extract the tarball to a temp directory and parse the package.json.
-  versionInfo <- extractVersionInfo tarballPath subpath
+  versionInfo <- extractVersionInfo tarballPath
   removeFile tarballPath
   -- Create the DistInfo.
   let dist = DistInfo {diUrl = uriToText uri,
@@ -418,6 +419,11 @@ getDefaultBranch owner repo = do
   putStrs ["Querying github for default branch of ", repo, "..."]
   BranchName . rDefaultBranch <$> githubCurl (makeGithubURI owner repo)
 
+-- | Attempts to convert an arbitrary github reference into a full
+-- github commit hash. Tries the following in order:
+-- * See if it's a branch name; if so get the hash of the branch head.
+-- * See if it's a tag name; if so get the hash of the tagged commit.
+-- * See if it's a commit hash; if so just return it.
 gitRefToSha :: Name -- ^ Repo owner
             -> Name -- ^ Repo name
             -> GitRef -- ^ Github ref
@@ -479,11 +485,10 @@ tarballNameToRef txt = do
       | ".tar.gz" `isSuffixOf` txt -> drop ".tar.gz" txt
       | otherwise -> txt
 
--- | Convert a URI to a github URI, if it can be.
-toGithubUri :: URI -> NpmFetcher (Maybe (FilePath, URI))
-toGithubUri uri = case uriAuthority uri of
-  Nothing -> return Nothing
-  Just auth | "github.com" `isSuffixOf` (uriRegName auth) -> do
+-- | Fetch from a github URI. The URI must point to github.
+fromGithubUri :: URI -> NpmFetcher SemVer
+fromGithubUri uri = resolveUri `catch` \(e::GithubError) -> fetchHttp uri where
+  resolveUri = do
     (owner, repo, sha) <- case T.split (=='/') $ pack (uriPath uri) of
       ["", owner, repo', "tarball", ref] -> do
         let repo = dropSuffix ".git" repo'
@@ -500,9 +505,7 @@ toGithubUri uri = case uriAuthority uri of
         hash <- gitRefToSha owner repo ref'
         return (owner, repo, hash)
       _ -> throwIO $ InvalidGithubUri uri
-    let githubUri = makeGithubTarballURI owner repo sha
-    return $ Just (fromText (repo <> "-" <> sha), githubUri)
-  _ -> return Nothing
+    fetchHttp $ makeGithubTarballURI owner repo sha
 
 -- | Look up a name and version range to see if we have recorded this as being
 -- broken.
@@ -583,24 +586,26 @@ _resolveNpmVersionRange :: PackageName
                         -> NpmVersionRange
                         -> NpmFetcher SemVer
 _resolveNpmVersionRange name range = case range of
-    SemVerRange svr -> resolveDep name svr
-    NpmUri uri -> toGithubUri uri >>= \case
-      Just (path, githubUri) -> do
-        fetchHttp path githubUri
-      Nothing -> case uriScheme uri of
-        s | "http" `isPrefixOf` s -> fetchHttp "package" uri
-          | "git" `isPrefixOf` s -> fetchArbitraryGit uri
-          | otherwise -> throw $ UnsupportedUriScheme s
-    GitId src owner repo rev -> case src of
-      Github -> do
-        sha <- gitRefToSha owner repo =<< case rev of
-                 Nothing -> getDefaultBranch owner repo
-                 Just r -> return r
-        let path = fromText (repo <> "-" <> sha)
-        fetchHttp path $ makeGithubTarballURI owner repo sha
-      _ -> throw $ UnsupportedGitSource src
-    Tag tag -> resolveByTag tag name
-    vr -> throw $ UnsupportedVersionType range
+  SemVerRange svr -> resolveDep name svr
+  NpmUri uri | isGithubUri uri -> fromGithubUri uri
+             | otherwise -> case uriScheme uri of
+      s | "http" `isPrefixOf` s -> fetchHttp uri
+        | "git" `isPrefixOf` s -> fetchArbitraryGit uri
+        | otherwise -> throw $ UnsupportedUriScheme s
+  GitId src owner repo rev -> case src of
+    Github -> do
+      sha <- gitRefToSha owner repo =<< case rev of
+               Nothing -> getDefaultBranch owner repo
+               Just r -> return r
+      let path = fromText (repo <> "-" <> sha)
+      fetchHttp $ makeGithubTarballURI owner repo sha
+    _ -> throw $ UnsupportedGitSource src
+  Tag tag -> resolveByTag tag name
+  vr -> throw $ UnsupportedVersionType range
+  where
+    isGithubUri uri = case uriAuthority uri of
+      Just auth -> "github.com" `isSuffixOf` uriRegName auth
+      Nothing -> False
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
@@ -751,6 +756,24 @@ dotNixPathOf name version = do
   dir <- outputDirOf name
   return $ dir </> toDotNix version
 
+-- | Looks at all nix files in a folder, finds the one with the most
+-- recent version, and creates a `latest.nix` symlink to that file.
+updateLatestNix :: MonadIO io => FilePath -> io ()
+updateLatestNix dir = do
+  -- Remove the `latest.nix` symlink if it exists.
+  whenM (doesFileExist $ dir </> "latest.nix") $
+    removeFile (dir </> "latest.nix")
+  -- Grab the latest version and create a symlink `latest.nix`
+  -- to that.
+  let convert fname = case parseSemVer (getBaseName fname) of
+        Left _ -> Nothing -- not a semver, so we don't consider it
+        Right ver -> Just ver -- return the version
+  catMaybes . map convert <$> listDirFullPaths dir >>= \case
+    [] -> return ()
+    versions -> do
+      let latest = maximum versions
+      createSymbolicLink (toDotNix latest) (dir </> "latest.nix")
+
 -- | Write a resolved package to disk.
 writePackage :: PackageName -> SemVer -> NExpr -> NpmFetcher ()
 writePackage name version expr = do
@@ -759,6 +782,7 @@ writePackage name version expr = do
   createDirectoryIfMissing dirPath
   putStrsLn ["Writing package file at ", pathToText dotNixPath]
   writeNix dotNixPath expr
+  updateLatestNix dirPath
 
 -- | Resolve a @VersionInfo@ and get the resulting @ResolvedPkg@.
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg

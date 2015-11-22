@@ -155,23 +155,6 @@ initializeOutput = do
       writeNix (outputPath </> "default.nix") $
         defaultNixExtending extName extensions
 
--- | Looks at all nix files in a folder, finds the one with the most
--- recent version, and creates a `latest.nix` symlink to that file.
-updateLatestNix :: MonadIO io => FilePath -> io ()
-updateLatestNix dir = do
-  -- Remove the `latest.nix` symlink if it exists.
-  whenM (doesFileExist $ dir </> "latest.nix") $
-    removeFile (dir </> "latest.nix")
-  -- Grab the latest version and create a symlink `latest.nix`
-  -- to that.
-  let convert fname = case parseSemVer (getBaseName fname) of
-        Left _ -> Nothing -- not a semver, so we don't consider it
-        Right ver -> Just ver -- return the version
-  catMaybes . map convert <$> listDirFullPaths dir >>= \case
-    [] -> return ()
-    versions -> createSymbolicLink (toDotNix $ maximum versions)
-                                   (dir </> "latest.nix")
-
 -- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
           => FilePath -- ^ Source path, containing store objects
@@ -194,6 +177,18 @@ mergeInto source target = do
                    pathToText targetVersionFile]
         copyFile versionFile targetVersionFile
     updateLatestNix targetDir
+
+-- | Update all of the latest.nix symlinks in an output folder.
+updateLatestNixes :: MonadIO io => FilePath -> io ()
+updateLatestNixes outputDir = do
+  whenM (doesDirectoryExist (outputDir </> nodePackagesDir)) $ do
+    forItemsInDir_ (outputDir </> nodePackagesDir) $ \pkgDir -> do
+      if "@" `isPrefixOf` getFilename pkgDir
+      -- If the directory starts with '@', then it's a namespace
+      -- directory and we should recur on its contents.
+      then forItemsInDir_ pkgDir updateLatestNix
+      -- Otherwise, just update the latest.nix in this directory.
+      else updateLatestNix pkgDir
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
@@ -252,11 +247,11 @@ checkForBroken inputs = do
         Just report -> ((name, range, report) :) <$> findBrokens others
   findBrokens inputs >>= \case
     [] -> do
-      let p = if length inputs > 1 then "packages" else "package"
-      putStrsLn [
-        "Top-level ", p, " ", mapJoinBy ", " (uncurry showRangePair) inputs,
-        " built successfully."
-        ]
+      putStrsLn $ case inputs of
+        [] -> ["No packages to build."]
+        [(p,v)] -> ["Package ", showRangePair p v, " built successfully."]
+        pkgs -> ["Packages ", mapJoinBy ", " (uncurry showRangePair) inputs,
+                 " built successfully."]
       return ExitSuccess
     pkgs -> do
       putStrLn "The following packages failed to build:"
@@ -281,7 +276,9 @@ checkPackage ResolvedPkg{..} = go (H.toList rpDependencies) where
 
 dumpPkgFromOptions :: NixFromNpmOptions -> IO ExitCode
 dumpPkgFromOptions opts
-  | nfnoPkgNames opts == [] && nfnoPkgPaths opts == [] = do
+  | nfnoPkgNames opts == [] &&
+    nfnoPkgPaths opts == [] &&
+    nfnoExtendPaths opts == mempty = do
       putStrLn "No packages given, nothing to do..."
       return $ ExitFailure 1
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
@@ -306,10 +303,10 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
                  ": ", pshow e]
           addBroken name range (Reason $ show e)
           return $ semver 0 0 0
-      writeNewPackages
+      whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
-      writeNewPackages
+      whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
     showBrokens
     checkForBroken nfnoPkgNames
   return status

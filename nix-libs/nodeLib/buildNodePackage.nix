@@ -228,7 +228,7 @@ let
           ${
             let
               link = dep: ''
-                ${if dep.recursiveDeps == [] then "ln -sv" else "cp -R"} \
+                ${if dep.recursiveDeps == [] then "ln -sfv" else "cp -rf"} \
                   ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
               '';
             in
@@ -255,6 +255,9 @@ let
          "description":"Dummy package file for building $name",
          "repository":{"type":"git","url":"http://$UNIQNAME.com"}}
         EOF
+
+          # Create dummy readme
+          echo "Dummy package" > README.md
         )
 
         export HOME=$BUILD_DIR
@@ -270,8 +273,6 @@ let
 
           echo "Building $name in $BUILD_DIR"
           cd $BUILD_DIR
-          echo "Npm command:"
-          echo HOME=$PWD npm install $PATCHED_SRC ${npmFlags}
           HOME=$PWD npm install $PATCHED_SRC ${npmFlags} || {
             npm list
             exit 1
