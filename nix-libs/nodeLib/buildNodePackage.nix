@@ -189,8 +189,10 @@ let
     mkDerivationArgs = {
       inherit src;
 
+      prePhases = ["setVariables"];
+
       # Define some environment variables that we will use in the build.
-      prePatch = ''
+      setVariables = ''
         export HASHEDNAME=$(echo "$propagatedNativeBuildInputs $name" \
                           | md5sum | awk '{print $1}')
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
@@ -208,12 +210,14 @@ let
         # We do not handle shrinkwraps yet
         rm npm-shrinkwrap.json 2>/dev/null || true
 
+        # Perform postPatch steps prior to building the tarball.
+        runHook postPatch
+
         # Repackage source into a tarball, so npm pre/post publish hooks are
         # not triggered,
         mkdir -p $BUILD_DIR
         GZIP=-1 tar -czf $BUILD_DIR/package.tgz ./
         export PATCHED_SRC=$BUILD_DIR/package.tgz
-        runHook postPatch
       '';
 
       configurePhase = ''
@@ -240,11 +244,12 @@ let
 
           # Create shims for recursive dependenceies
           ${concatMapStrings (dep: ''
-            mkdir -p ${modulePath dep}
+            echo "Creating shim for recursive dependency ${dep.pkgName}"
+            mkdir -pv ${pathInModulePath dep}
             cat > ${pathInModulePath dep}/package.json <<EOF
             {
                 "name": "${dep.pkgName}",
-                "version": "${getVersion dep}"
+                "version": "${dep.version}"
             }
             EOF
           '') (attrValues recursiveDependencies)}
@@ -290,8 +295,8 @@ let
 
           # Remove shims
           ${concatMapStrings (dep: ''
-            rm ${pathInModulePath dep}/package.json
-            rmdir ${modulePath dep}
+            echo "Removing shim for recursive dependency ${dep.pkgName}"
+            rm -rvf ${pathInModulePath dep}/package.json
           '') (attrValues recursiveDependencies)}
 
           # Install the package that we just built.

@@ -127,7 +127,8 @@ preloadPackages = do
 
 -- | Initialize an output directory from scratch. This means:
 -- * Creating a .nixfromnpm-version file storing the current version.
--- * Copying over the nix node libraries that nixfromnpm provides.
+-- * If we aren't extending anything, copying over the nix node
+--   libraries that nixfromnpm provides.
 -- * Creating a default.nix file.
 -- * Creating a nodePackages folder.
 initializeOutput :: NpmFetcher ()
@@ -151,7 +152,7 @@ initializeOutput = do
       forItemsInDir_ nodeLibPath $ \path -> do
         whenM (isFile path) $ do
           copyFile path (outputPath </> "nodeLib" </> filename path)
-    (extName:_) -> do -- Then we are extending things.
+    extName:_ -> do -- Then we are extending things.
       writeNix (outputPath </> "default.nix") $
         defaultNixExtending extName extensions
 
