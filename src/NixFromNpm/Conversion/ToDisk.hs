@@ -215,9 +215,9 @@ dumpFromPkgJson path = do
         putStrsLn ["Generating expression for package ", pshow name,
                    ", version ", pshow version]
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
-        writeNix "project.nix" $ resolvedPkgToNix rPkg
+        writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
         outputPath <- asks nfsOutputPath
-        writeNix "default.nix" $ packageJsonDefaultNix outputPath
+        writeNix (path </> "default.nix") $ packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()

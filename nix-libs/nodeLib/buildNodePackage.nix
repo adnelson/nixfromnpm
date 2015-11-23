@@ -26,14 +26,15 @@ let
 in
 
 {
-  # Used for private packages. Indicated in the name field of the
-  # package.json, e.g. "@mynamespace/mypackage". Public packages will not
-  # need this.
-  namespace ? null,
-
   # The name of the package. If it's a private package with a namespace,
   # this should not contain the namespace.
   name,
+
+  # Used for private packages. Indicated in the name field of the
+  # package.json, e.g. if the name in that file is "@mynamespace/mypackage",
+  # then the namespace is 'mynamespace' and the name is 'mypackage'. Public
+  # packages will not need this.
+  namespace ? null,
 
   # Version of the package. This should follow the semver standard, although
   # we don't explicitly enforce that in this function.
@@ -42,50 +43,65 @@ in
   # Source of the package; can be a tarball or a folder on the filesystem.
   src,
 
-  # by default name of nodejs interpreter e.g. "nodejs-<version>-${name}"
+  # The prefix to the name as it appears in `nix-env -q` and the nix store. By
+  # default, the name of nodejs interpreter e.g. "nodejs-<version>-${name}".
   namePrefix ? "${nodejs.name}-" +
                (if namespace == null then "" else "${namespace}-"),
 
-  # List or attribute set of dependencies
+  # List or attribute set of (runtime) dependencies.
   deps ? {},
 
-  # List or attribute set of peer depencies
+  # List or attribute set of peer dependencies. See:
+  # https://nodejs.org/en/blog/npm/peer-dependencies/
   peerDependencies ? {},
 
-  # List or attribute set of optional dependencies
+  # List or attribute set of optional dependencies.
   optionalDependencies ? {},
 
-  # List of optional dependencies to skip
+  # List of optional dependencies to skip. List of strings, where a string
+  # should contain the `name` of the derivation to skip (not a version or
+  # namespace).
   skipOptionalDependencies ? [],
 
-  # List or set of development dependencies (or null).
+  # List or set of development dependencies (or null). These will only be
+  # installed when `installDevDependencies` is true, which is provided by
+  # the `.env` attribute.
   devDependencies ? null,
 
-  # If true and devDependencies are not null, the package will be
+  # Install the dev dependencies. It's an error to set this to be true if
+  # `devDependencies` is null.
+  installDevDependencies ? false,
+
+  # If true and devDependencies are defined, the package will only be
   # installed contingent on successfully running tests.
-  doCheck ? devDependencies != null,
+  doCheck ? false,
 
-  # Additional flags passed to npm install
-  flags ? "",
-
-  # Command to be run before shell hook
-  preShellHook ? "",
-
-  # Command to be run after shell hook
-  postShellHook ? "",
+  # Additional flags passed to npm install. A list of strings.
+  extraNpmFlags ? [],
 
   # Same as https://docs.npmjs.com/files/package.json#os
   os ? [],
 
-  # Same as https://docs.npmjs.com/files/package.json#cpu
-  cpu ? [],
-
-  # Attribute set of already resolved deps (internal),
-  # for avoiding infinite recursion
+  # Attribute set of already resolved dependencies, for avoiding infinite
+  # recursion. Used internally (don't use this argument explicitly).
   resolvedDeps ? {},
 
+  # Any remaining flags are passed through to mkDerivation.
   ...
 } @ args:
+
+let
+  # The package name as it appears in the package.json. This contains a
+  # namespace if there is one, so it will be a distinct identifier for
+  # different packages.
+  pkgName = if namespace == null then "${name}@${version}"
+            else "@${namespace}/${name}@${version}";
+in
+
+if installDevDependencies && (devDependencies == null)
+then throw ("${pkgName}: Can't install dev dependencies because " +
+            "they're not defined. Please provide a devDependencies argument.")
+else
 
 let
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists isList flip
@@ -93,13 +109,14 @@ let
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues getVersion flatten remove concatStringsSep;
 
-  # whether we should run tests.
-  shouldTest = doCheck && devDependencies != null;
+  # These arguments are intended as directives to this function and not
+  # to be passed through to mkDerivation. They are removed below.
+  attrsToRemove = ["deps" "resolvedDeps" "optionalDependencies" "flags"
+                   "devDependencies" "os" "skipOptionalDependencies"
+                   "installDevDependencies" "version" "namespace"];
 
-  # The package name as it appears in the package.json. This contains a
-  # namespace if there is one, so it will be a distinct identifier for
-  # different packages.
-  pkgName = if namespace == null then name else "@${namespace}/${name}";
+  # Whether we should run tests.
+  shouldTest = doCheck && installDevDependencies;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
@@ -143,8 +160,7 @@ let
       };
 
     # Filter out self-referential dependencies.
-    _dependencies = mapDependencies deps (name: dep:
-      dep.pkgName != pkgName);
+    _dependencies = mapDependencies deps (name: dep: dep.pkgName != pkgName);
 
     # Filter out self-referential peer dependencies.
     _peerDependencies = mapDependencies peerDependencies (name: dep:
@@ -153,20 +169,32 @@ let
     # Filter out any optional dependencies which don't build correctly.
     _optionalDependencies = mapDependencies optionalDependencies (name: dep:
       (builtins.tryEval dep).success &&
-      !(elem dep.pkgName skipOptionalDependencies)
+      !(elem dep.basicName skipOptionalDependencies)
     );
+
+    # Grab development dependencies if we are told to.
+    _devDependencies = let
+        filterFunc = name: dep: dep.pkgName != pkgName;
+        depSet = if installDevDependencies then devDependencies else [];
+      in
+      mapDependencies depSet filterFunc;
 
     # Required dependencies are those that we haven't filtered yet.
     requiredDependencies =
+      _devDependencies.requiredDeps //
       _dependencies.requiredDeps //
       _optionalDependencies.requiredDeps //
       _peerDependencies.requiredDeps;
 
+    # Recursive dependencies. These are turned into "shims" or fake packages,
+    # which allows us to have dependency cycles, something npm allows.
     recursiveDependencies =
+      _devDependencies.recursiveDeps //
       _dependencies.recursiveDeps //
       _optionalDependencies.recursiveDeps //
       _peerDependencies.recursiveDeps;
 
+    # Flags that we will pass to `npm install`.
     npmFlags = concatStringsSep " " ([
       # We point the registry at something that doesn't exist. This will
       # mean that NPM will fail if any of the dependencies aren't met, as it
@@ -178,17 +206,22 @@ let
       # This will disable any user-level npm configuration.
       "--userconfig=/dev/null"
       # This flag is used for packages which link against the node headers.
-      "--nodedir=${sources}"
-    ] ++ (if isList flags then flags else [flags]));
+      "--nodedir=${sources}"] ++
+      # This flag will tell npm to run `npm test`.
+      (if shouldTest then ["--npat"] else []) ++
+      # Add any extra headers that the user has passed in.
+      extraNpmFlags);
 
     # A bit of bash to check that variables are set.
     checkSet = vars: concatStringsSep "\n" (flip map vars (var: ''
       [[ -z $${var} ]] && { echo "${var} is not set."; exit 1; }
     ''));
 
+    # These are the arguments that we will pass to `stdenv.mkDerivation`.
     mkDerivationArgs = {
       inherit src;
 
+      # Tell mkDerivation to run `setVariables` prior to other phases.
       prePhases = ["setVariables"];
 
       # Define some environment variables that we will use in the build.
@@ -199,6 +232,7 @@ let
         export BUILD_DIR=$TMPDIR/$UNIQNAME-build
       '';
 
+      # Patch the source before building the package.
       patchPhase = ''
         runHook prePatch
         patchShebangs $PWD
@@ -220,6 +254,8 @@ let
         export PATCHED_SRC=$BUILD_DIR/package.tgz
       '';
 
+      # Set up the environment for building by creating links to or copies of
+      # all of the dependencies.
       configurePhase = ''
         runHook preConfigure
         (
@@ -269,6 +305,8 @@ let
         runHook postConfigure
       '';
 
+      # Run npm to install. Cross your fingers here, because if something's
+      # going to fail, this is probably where.
       buildPhase = ''
         runHook preBuild
 
@@ -278,6 +316,8 @@ let
 
           echo "Building $name in $BUILD_DIR"
           cd $BUILD_DIR
+          # NPM reads the `HOME` environment variable and fails if it doesn't
+          # exist, so set it here.
           HOME=$PWD npm install $PATCHED_SRC ${npmFlags} || {
             npm list
             exit 1
@@ -287,6 +327,8 @@ let
         runHook postBuild
       '';
 
+      # After building, we will have constructed a node_modules folder in the
+      # BUILD_DIR. We can take what was built and drop it into $out.
       installPhase = ''
         runHook preInstall
 
@@ -339,17 +381,18 @@ let
       '';
 
       shellHook = ''
-        ${preShellHook}
+        runHook preShellHook
         export PATH=${npm}/bin:${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
         mkdir -p node_modules
         ${concatMapStrings (dep: ''
           mkdir -p ${modulePath dep}
           ln -sfv ${dep}/lib/${pathInModulePath dep} ${pathInModulePath dep}
         '') (attrValues requiredDependencies)}
-        ${postShellHook}
+        runHook postShellHook
       '';
 
-      # Stipping does not make a lot of sense in node packages
+      # No need to strip debug information from executables (search in this
+      # doc for details: https://nixos.org/wiki/NixPkgs_Standard_Environment).
       dontStrip = true;
 
       meta = {
@@ -360,21 +403,29 @@ let
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
       passthru.pkgName = pkgName;
+      # The basic name is the name without namespace or version.
       passthru.basicName = name;
       passthru.namespace = namespace;
       passthru.version = version;
       passthru.peerDependencies = _peerDependencies.requiredDeps;
-      passthru.recursiveDeps =
-        (flatten (
-          map (dep: remove name dep.recursiveDeps) (attrValues requiredDependencies)
-        )) ++
-        (attrNames recursiveDependencies);
+      passthru.recursiveDeps = let
+          required = attrValues requiredDependencies;
+          recursive = attrNames recursiveDependencies;
+        in
+        flatten (map (dep: remove name dep.recursiveDeps) required) ++
+        recursive;
 
-      # Add an 'override' attribute, which will call `buildNodePackage` with the
+      # The `env` attribute is meant to be used with `nix-shell` (although
+      # that's not required). It will build the package with its dev
+      # dependencies. This means that the package must have dev dependencies
+      # defined, or it will error.
+      passthru.env =
+        buildNodePackage (args // {installDevDependencies = true;});
+
+      # An 'override' attribute, which will call `buildNodePackage` with the
       # given arguments overridden.
       passthru.override = newArgs: buildNodePackage (args // newArgs);
-    } // (removeAttrs args ["deps" "resolvedDeps" "optionalDependencies"
-                            "devDependencies"]) // {
+    } // (removeAttrs args attrsToRemove) // {
       name = "${namePrefix}${name}-${version}";
 
       # Run the node setup hook when this package is a build input
