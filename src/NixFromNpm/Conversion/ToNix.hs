@@ -200,10 +200,11 @@ importNixpkgs = importWith True "nixpkgs" []
 
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
-defaultParams :: Formals NExpr
-defaultParams = mkFormalSet [("pkgs", Just importNixpkgs),
-                             ("npm3", Just $ mkBool False),
-                             ("nodejsVersion", Just $ str "4.1")]
+defaultParams :: Bool -- Whether to use npm3 or not
+              -> Formals NExpr
+defaultParams npm3 = mkFormalSet [("pkgs", Just importNixpkgs),
+                                  ("npm3", Just $ mkBool npm3),
+                                  ("nodejsVersion", Just $ str "4.1")]
 
 -- | When passing through arguments, we inherit these things.
 defaultInherits :: [Binding NExpr]
@@ -219,8 +220,8 @@ bindRootPath :: Binding NExpr
 bindRootPath = "rootPath" `bindTo` mkPath ("./" </> nodePackagesDir)
 
 -- | The root-level default.nix file, which does not have any extensions.
-rootDefaultNix :: NExpr
-rootDefaultNix = mkFunction defaultParams body where
+rootDefaultNix :: Bool -> NExpr
+rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
   nodeLibArgs = defaultInherits <> ["self" `bindTo` mkSym "nodeLib"]
   lets = ["nodeLib" `bindTo` importWith False "./nodeLib" nodeLibArgs]
   genPackages = unsafeParseNix "nodeLib.generatePackages"
@@ -230,9 +231,10 @@ rootDefaultNix = mkFunction defaultParams body where
 -- generating.
 defaultNixExtending :: Name -- ^ Name of first extension.
                     -> Record FilePath -- ^ Extensions being included.
+                    -> Bool -- ^ Whether to use npm3
                     -> NExpr -- ^ A generated nix expression.
-defaultNixExtending extName extensions = do
-  mkFunction defaultParams body where
+defaultNixExtending extName extensions npm3 = do
+  mkFunction (defaultParams npm3) body where
     -- Map over the expression map, creating a binding for each pair.
     lets = flip map (H.toList extensions) $ \(name, path) -> do
       -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
@@ -246,13 +248,14 @@ defaultNixExtending extName extensions = do
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
 packageJsonDefaultNix :: FilePath -- ^ Path to the output directory.
+                      -> Bool -- ^ Whether to use npm3
                       -> NExpr
-packageJsonDefaultNix outputPath = do
+packageJsonDefaultNix outputPath npm3 = do
   let
     libBind = "lib" `bindTo` importWith False outputPath defaultInherits
     callPkg = unsafeParseNix "lib.callPackage"
     call = callPkg `mkApp` mkPath "project.nix" `mkApp` mkNonRecSet []
-  mkFunction defaultParams $ mkLet [libBind] call
+  mkFunction (defaultParams npm3) $ mkLet [libBind] call
 
 bindingsToMap :: [Binding t] -> Record t
 bindingsToMap = foldl' step mempty where

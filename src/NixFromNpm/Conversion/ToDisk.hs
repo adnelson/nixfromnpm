@@ -142,9 +142,10 @@ initializeOutput = do
     Left err -> fatal err
     Right v -> return v
   writeFile (outputPath </> ".nixfromnpm-version") $ pshow version
+  npm3 <- asks nfsNpm3
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
-      writeNix (outputPath </> "default.nix") rootDefaultNix
+      writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
       putStrsLn ["Generating node libraries in ", pathToText outputPath]
       nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
       createDirectoryIfMissing (outputPath </> "nodeLib")
@@ -154,7 +155,7 @@ initializeOutput = do
           copyFile path (outputPath </> "nodeLib" </> filename path)
     extName:_ -> do -- Then we are extending things.
       writeNix (outputPath </> "default.nix") $
-        defaultNixExtending extName extensions
+        defaultNixExtending extName extensions npm3
 
 -- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
@@ -177,7 +178,7 @@ mergeInto source target = do
         putStrsLn ["Copying ", pathToText versionFile, " to ",
                    pathToText targetVersionFile]
         copyFile versionFile targetVersionFile
-    updateLatestNix targetDir
+    updateLatestNix' targetDir
 
 -- | Update all of the latest.nix symlinks in an output folder.
 updateLatestNixes :: MonadIO io => FilePath -> io ()
@@ -187,9 +188,9 @@ updateLatestNixes outputDir = do
       if "@" `isPrefixOf` getFilename pkgDir
       -- If the directory starts with '@', then it's a namespace
       -- directory and we should recur on its contents.
-      then forItemsInDir_ pkgDir updateLatestNix
+      then forItemsInDir_ pkgDir $ updateLatestNix'
       -- Otherwise, just update the latest.nix in this directory.
-      else updateLatestNix pkgDir
+      else updateLatestNix' pkgDir
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
@@ -200,7 +201,7 @@ writeNewPackages = takeNewPackages <$> gets resolved >>= \case
     | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
         forM_ (H.toList pkgVers) $ \(ver, expr) -> do
           writePackage pkgName ver expr
-        updateLatestNix =<< outputDirOf pkgName
+        updateLatestNix' =<< outputDirOf pkgName
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()
@@ -210,14 +211,18 @@ dumpFromPkgJson path = do
     True -> doesFileExist (path </> "package.json") >>= \case
       False -> errorC ["No package.json found in ", pathToText path]
       True -> do
+        -- Parse a VersionInfo object from the package.json file.
         verinfo <- extractPkgJson (path </> "package.json")
         let (name, version) = (viName verinfo, viVersion verinfo)
         putStrsLn ["Generating expression for package ", pshow name,
                    ", version ", pshow version]
+        -- Convert this to a ResolvedPkg by resolving its dependencies.
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
         outputPath <- asks nfsOutputPath
-        writeNix (path </> "default.nix") $ packageJsonDefaultNix outputPath
+        npm3 <- asks nfsNpm3
+        writeNix (path </> "default.nix") $
+          packageJsonDefaultNix outputPath npm3
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()
@@ -292,7 +297,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsExtendPaths = nfnoExtendPaths,
     nfsMaxDevDepth = nfnoDevDepth,
     nfsCacheDepth = nfnoCacheDepth,
-    nfsRealTimeWrite = nfnoRealTime
+    nfsRealTimeWrite = nfnoRealTime,
+    nfsNpm3 = nfnoNpm3
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages

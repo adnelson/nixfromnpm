@@ -43,10 +43,10 @@ let
 
   # Builds the extracted nix file. Since of course it can't use npm3,
   # being that it hasn't been built yet, we disable npm3 for this.
-  _npm3 = import npm3-src {
+  _npm3 = (import npm3-src {
     inherit pkgs nodejsVersion;
     npm3 = false;
-   };
+   }).nodePackages.npm;
 
   # Parse the `NPM_AUTH_TOKENS` environment variable to discover
   # namespace-token associations and turn them into an attribute set
@@ -206,5 +206,6 @@ rec {
     in {
       inherit nodePackages callPackage namespaces namespaceTokens pkgs;
       nodeLib = self;
+      npm3 = _npm3;
     };
 }

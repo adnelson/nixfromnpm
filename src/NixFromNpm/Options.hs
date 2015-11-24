@@ -62,9 +62,10 @@ data RawOptions = RawOptions {
   roGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
   roNpmTokens :: [Text], -- ^ NPM authentication tokens.
   roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
-  roNoRealTime :: Bool, -- ^ Write packages to disk as they are written.
+  roNoRealTime :: Bool, -- ^ Don't write packages to disk as they are written.
   roTopNPackages :: Maybe Int, -- ^ Fetch the top `n` npm packages by popularity.
-  roAllTop :: Bool -- ^ If true, fetch all of the top packages we have defined.
+  roAllTop :: Bool, -- ^ If true, fetch all the top packages we have defined.
+  roNoNpm3 :: Bool -- ^ If true, do not default to npm3 in generated nix files.
 } deriving (Show, Eq)
 
 -- | Various options we have available for nixfromnpm. Validated
@@ -83,9 +84,11 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
   nfnoGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
   nfnoNpmTokens :: Record AuthToken, -- ^ NPM authentication token.
-  nfnoRealTime :: Bool -- ^ Write packages to disk as they are written.
+  nfnoRealTime :: Bool, -- ^ Write packages to disk as they are written.
+  nfnoNpm3 :: Bool -- ^ Use npm3 by default in generated nix files.
   } deriving (Show, Eq)
 
+-- | Same as `strOption` but for Text.
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
 
@@ -118,6 +121,7 @@ validateOutput = absPath >=> \path -> do
               OutputParentNotWritable
       return path
 
+-- | Check that a path to a package.json file or its parent directory is valid.
 validateJsPkg :: FilePath -> IO FilePath
 validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
   -- If it is a directory, it must be writable and contain a package.json file.
@@ -183,7 +187,7 @@ validateOptions opts = do
   githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
   tokensCommandLine <- parseNpmTokens $ roNpmTokens opts
   npmTokensEnv <- getNpmTokens
-  return (NixFromNpmOptions {
+  return $ NixFromNpmOptions {
     nfnoOutputPath = outputPath,
     nfnoExtendPaths = extendPaths,
     nfnoGithubToken = roGithubToken opts <|> githubTokenEnv,
@@ -196,8 +200,9 @@ validateOptions opts = do
     nfnoRegistries = registries,
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts,
-    nfnoRealTime = not (roNoRealTime opts)
-    })
+    nfnoRealTime = not $ roNoRealTime opts,
+    nfnoNpm3 = not $ roNoNpm3 opts
+    }
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
       Nothing -> throw $ InvalidURI rawUrl
@@ -216,6 +221,9 @@ validateOptions opts = do
             Just path' -> throw $ DuplicatedExtensionName name
                                     (fromText path) path'
 
+
+-- | Parses the raw command-line options into the intermediate form that is
+-- used to construct a NixFromNpmOptions object.
 parseOptions :: Parser RawOptions
 parseOptions = RawOptions
     <$> packageNames
@@ -232,9 +240,10 @@ parseOptions = RawOptions
     <*> githubToken
     <*> npmTokens
     <*> noDefaultRegistry
-    <*> realTime
+    <*> noRealTime
     <*> topN
     <*> allTop
+    <*> noNpm3
   where
     packageNames = many $ textOption $ short 'p'
                    <> long "package"
@@ -299,7 +308,7 @@ parseOptions = RawOptions
       <> help (tokenHelp "s" "npm" "NPM_AUTH_TOKENS")
     noDefaultRegistry = switch (long "no-default-registry"
                         <> help "Do not include default npmjs.org registry")
-    realTime = switch (long "no-real-time"
+    noRealTime = switch (long "no-real-time"
                        <> help "Write packages to disk at the end rather than \
                                \ as they are generated.")
     allTop = switch (long "all-top"
@@ -310,3 +319,6 @@ parseOptions = RawOptions
                             <> metavar "N"
                             <> help "Fetch the top N packages by popularity."))
            <|> pure Nothing
+    noNpm3 = switch (long "no-npm3"
+                       <> help "Do not use npm3 by default in generated nix \
+                               \expressions.")

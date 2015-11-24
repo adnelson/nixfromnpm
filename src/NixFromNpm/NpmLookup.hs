@@ -94,9 +94,11 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Depth at which to start using the cache. If this is 0, then we will
   -- always use the cache if we can. If it's 1, then the top-level package
   -- will not be cached, but lower-level packages will. Et cetera.
-  nfsRealTimeWrite :: Bool
+  nfsRealTimeWrite :: Bool,
   -- ^ Whether to write packages in real-time as the expressions are generated,
   -- rather than waiting until the end.
+  nfsNpm3 :: Bool
+  -- ^ Whether generated packages should use npm3 by default.
   } deriving (Show, Eq)
 
 -- | The state of the NPM fetcher.
@@ -743,8 +745,7 @@ outputDirOf (PackageName pkgName namespace) = do
   outputDir <- asks nfsOutputPath
   let folderName = case namespace of
         Nothing -> fixName pkgName
-        Just namespace -> concat ["@", namespace, "/",
-                                  fixName pkgName]
+        Just namespace -> concat ["@", namespace, "/", fixName pkgName]
   return $ outputDir </> nodePackagesDir </> fromText folderName
 
 -- | Given the name and version of a package, return the path within
@@ -758,8 +759,11 @@ dotNixPathOf name version = do
 
 -- | Looks at all nix files in a folder, finds the one with the most
 -- recent version, and creates a `latest.nix` symlink to that file.
-updateLatestNix :: MonadIO io => FilePath -> io ()
-updateLatestNix dir = do
+updateLatestNix :: MonadIO io
+                => Maybe PackageName -- ^ Package which we're updating
+                -> FilePath -- ^ Directory containing .nix files
+                -> io ()
+updateLatestNix maybePkgName dir = do
   -- Remove the `latest.nix` symlink if it exists.
   whenM (doesFileExist $ dir </> "latest.nix") $
     removeFile (dir </> "latest.nix")
@@ -772,7 +776,15 @@ updateLatestNix dir = do
     [] -> return ()
     versions -> do
       let latest = maximum versions
+          label = case maybePkgName of
+            Nothing -> getFilename dir
+            Just pkgName -> pshow pkgName
+      putStrsLn ["Latest version of ", label, " is ", pshow latest]
       createSymbolicLink (toDotNix latest) (dir </> "latest.nix")
+
+-- | Where we're deriving the name from the path.
+updateLatestNix' :: MonadIO io => FilePath -> io ()
+updateLatestNix' = updateLatestNix Nothing
 
 -- | Write a resolved package to disk.
 writePackage :: PackageName -> SemVer -> NExpr -> NpmFetcher ()
@@ -782,7 +794,7 @@ writePackage name version expr = do
   createDirectoryIfMissing dirPath
   putStrsLn ["Writing package file at ", pathToText dotNixPath]
   writeNix dotNixPath expr
-  updateLatestNix dirPath
+  updateLatestNix (Just name) dirPath
 
 -- | Resolve a @VersionInfo@ and get the resulting @ResolvedPkg@.
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
@@ -838,7 +850,8 @@ defaultSettings = NpmFetcherSettings {
   nfsMaxDevDepth = 1,
   nfsCacheDepth = 0,
   nfsRetries = 1,
-  nfsRealTimeWrite = False
+  nfsRealTimeWrite = False,
+  nfsNpm3 = True
   }
 
 -- | Pull a ':'-separated list of tokens from the environment and parse
