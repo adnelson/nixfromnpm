@@ -104,6 +104,7 @@ then throw ("${pkgName}: Can't install dev dependencies because " +
 else
 
 let
+  inherit (builtins) trace;
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists isList flip
                        intersectLists isAttrs listToAttrs nameValuePair
                        mapAttrs filterAttrs attrNames elem concatMapStrings
@@ -199,7 +200,7 @@ let
       # We point the registry at something that doesn't exist. This will
       # mean that NPM will fail if any of the dependencies aren't met, as it
       # will attempt to hit this registry for the missing dependency.
-      "--registry=fakeprotocol://notaregistry.$UNIQNAME.derp"
+      "--registry=http://notaregistry.$UNIQNAME.derp"
       # These flags make failure fast, as otherwise NPM will spin for a while.
       "--fetch-retry-mintimeout=0"
       "--fetch-retry-maxtimeout=10"
@@ -246,6 +247,10 @@ let
 
         # Perform postPatch steps prior to building the tarball.
         runHook postPatch
+
+        # Store the package.json source so that if the build fails we can refer
+        # to it.
+        export PACKAGE_JSON=$(cat package.json)
 
         # Repackage source into a tarball, so npm pre/post publish hooks are
         # not triggered,
@@ -318,7 +323,21 @@ let
           cd $BUILD_DIR
           # NPM reads the `HOME` environment variable and fails if it doesn't
           # exist, so set it here.
-          HOME=$PWD npm install $PATCHED_SRC ${npmFlags} || {
+          (HOME=$PWD npm install $PATCHED_SRC ${npmFlags}) || {
+            echo
+            echo
+            echo "NPM installation failed!"
+            echo "The command was:"
+            echo HOME=$PWD npm install $PATCHED_SRC ${npmFlags}
+            echo
+            echo
+            echo
+            # Drop the package's package.json file that we picked up before;
+            # the `npm list` command will read this file and tell us if any
+            # dependencies are missing or invalid (which is probably the reason
+            # for failure).
+            echo "$PACKAGE_JSON" > package.json
+            echo "The following output might be helpful in understanding why:"
             npm list
             exit 1
           }
@@ -402,29 +421,28 @@ let
 
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
-      passthru.pkgName = pkgName;
-      # The basic name is the name without namespace or version.
-      passthru.basicName = name;
-      passthru.namespace = namespace;
-      passthru.version = version;
-      passthru.peerDependencies = _peerDependencies.requiredDeps;
-      passthru.recursiveDeps = let
+      passthru = {
+        inherit pkgName namespace version;
+        # The basic name is the name without namespace or version.
+        basicName = name;
+        peerDependencies = _peerDependencies.requiredDeps;
+        recursiveDeps = let
           required = attrValues requiredDependencies;
           recursive = attrNames recursiveDependencies;
         in
-        flatten (map (dep: remove name dep.recursiveDeps) required) ++
-        recursive;
+          flatten (map (dep: remove name dep.recursiveDeps) required) ++
+          recursive;
 
-      # The `env` attribute is meant to be used with `nix-shell` (although
-      # that's not required). It will build the package with its dev
-      # dependencies. This means that the package must have dev dependencies
-      # defined, or it will error.
-      passthru.env =
-        buildNodePackage (args // {installDevDependencies = true;});
+        # The `env` attribute is meant to be used with `nix-shell` (although
+        # that's not required). It will build the package with its dev
+        # dependencies. This means that the package must have dev dependencies
+        # defined, or it will error.
+        env = buildNodePackage (args // {installDevDependencies = true;});
 
-      # An 'override' attribute, which will call `buildNodePackage` with the
-      # given arguments overridden.
-      passthru.override = newArgs: buildNodePackage (args // newArgs);
+        # An 'override' attribute, which will call `buildNodePackage` with the
+        # given arguments overridden.
+        override = newArgs: buildNodePackage (args // newArgs);
+      };
     } // (removeAttrs args attrsToRemove) // {
       name = "${namePrefix}${name}-${version}";
 
