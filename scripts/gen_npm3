@@ -2,13 +2,15 @@
 # This script will create the bootstrapping tarball that packages need
 # to use npm3. This means we don't need to store a binary tarball in
 # source control.
+#
+# Usage:
+# $ ./gen_npm3      # Generate in a temporary directory
+# $ TMPDIR=/path/to/tmpdir ./gen_npm3
 
 set -e
 
-[[ -z $OUTPUT ]] && {
-  echo "OUTPUT is not set" >&2
-  exit 1
-}
+[[ -z $TMPDIR ]] && export TMPDIR=/tmp
+OUTPUT=$(mktemp -d $TMPDIR/gen-npm3-XXXX)
 
 [[ -z $NIXFROMNPM ]] && {
   # CD into the directory of this file and echo the current directory.
@@ -20,11 +22,6 @@ set -e
 TARBALL=$NIXFROMNPM/nix-libs/nodeLib/npm3.tar.gz
 
 fetch_npm3_nix() {
-  # Remove existing expression file
-  [[ -d $OUTPUT ]] && [[ -z $OVERWRITE ]] && {
-    echo "$OUTPUT exists. Won't overwrite unless OVERWRITE is set." >&2
-    exit 1
-  }
   # Generate output with nixfromnpm
   nix-shell $NIXFROMNPM --command "cabal run -- -p npm -o $OUTPUT"
 }
@@ -39,9 +36,8 @@ test_npm3_works() {
 
 # Create the npm3.tar.gz
 gen_npm3_tarball() (
-  cd $OUTPUT && tar -cvf $TARBALL \
+  cd $OUTPUT && tar -cf $TARBALL \
     --exclude=./nodeLib/npm3.tar.gz \
-    --exclude='*latest.nix' \
     .
 )
 
@@ -52,3 +48,4 @@ test_npm3_works
 echo "Generating tarball in $TARBALL..."
 gen_npm3_tarball
 echo "Done! Tarball is in $TARBALL"
+rm -rf $OUTPUT
