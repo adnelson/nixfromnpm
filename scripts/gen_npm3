@@ -22,8 +22,9 @@ OUTPUT=$(mktemp -d $TMPDIR/gen-npm3-XXXX)
 TARBALL=$NIXFROMNPM/nix-libs/nodeLib/npm3.tar.gz
 
 fetch_npm3_nix() {
+  local command="cabal configure; cabal run -- -p npm -o $OUTPUT"
   # Generate output with nixfromnpm
-  nix-shell $NIXFROMNPM --command "cabal run -- -p npm -o $OUTPUT"
+  nix-shell $NIXFROMNPM --command "$command"
 }
 
 # Do a dry-run build to make sure everything will work
