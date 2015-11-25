@@ -79,6 +79,7 @@ rec {
     throw "The given nodejs version ${nodejsVersion} has not been defined."
   );
   buildNodePackage = import ./buildNodePackage.nix ({
+    inherit pkgs;
     inherit (pkgs) stdenv runCommand;
     inherit nodejs buildNodePackage;
     neededNatives = [pkgs.python] ++ optionals isLinux [pkgs.utillinux];

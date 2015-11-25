@@ -1,6 +1,8 @@
 {
   # Provides the mkDerivation function.
   stdenv,
+  # System packages.
+  pkgs,
   # Lets us run a command.
   runCommand,
   # Derivation for nodejs and npm.
@@ -23,6 +25,9 @@ let
   # The path to the package within its modulePath. Just appending the name
   # of the package.
   pathInModulePath = pkg: "${modulePath pkg}/${pkg.basicName}";
+
+  # The path to a package within an npm cache.
+  pathInNpmCache = pkg: ".npm/${pkg.basicName}/${pkg.version}";
 in
 
 {
@@ -68,13 +73,12 @@ in
   # the `.env` attribute.
   devDependencies ? null,
 
-  # Install the dev dependencies. It's an error to set this to be true if
-  # `devDependencies` is null.
-  installDevDependencies ? false,
-
   # If true and devDependencies are defined, the package will only be
   # installed contingent on successfully running tests.
   doCheck ? false,
+
+  # Test command.
+  checkPhase ? "npm test",
 
   # Additional flags passed to npm install. A list of strings.
   extraNpmFlags ? [],
@@ -98,9 +102,9 @@ let
             else "@${namespace}/${name}@${version}";
 in
 
-if installDevDependencies && (devDependencies == null)
-then throw ("${pkgName}: Can't install dev dependencies because " +
-            "they're not defined. Please provide a devDependencies argument.")
+if doCheck && (devDependencies == null)
+then throw ("${pkgName}: Can't run tests because devDependencies have " +
+            "not been defined.")
 else
 
 let
@@ -115,9 +119,6 @@ let
                    "devDependencies" "os" "skipOptionalDependencies"
                    "doCheck"
                    "installDevDependencies" "version" "namespace"];
-
-  # Whether we should run tests.
-  shouldTest = doCheck && installDevDependencies;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
@@ -176,7 +177,7 @@ let
     # Grab development dependencies if we are told to.
     _devDependencies = let
         filterFunc = name: dep: dep.pkgName != pkgName;
-        depSet = if installDevDependencies then devDependencies else [];
+        depSet = if doCheck then devDependencies else [];
       in
       mapDependencies depSet filterFunc;
 
@@ -207,9 +208,8 @@ let
       # This will disable any user-level npm configuration.
       "--userconfig=/dev/null"
       # This flag is used for packages which link against the node headers.
-      "--nodedir=${sources}"] ++
-      # This flag will tell npm to run `npm test`.
-      (if shouldTest then ["--npat"] else []) ++
+      "--nodedir=${sources}"
+      ] ++
       # Add any extra headers that the user has passed in.
       extraNpmFlags);
 
@@ -218,146 +218,142 @@ let
       [[ -z $${var} ]] && { echo "${var} is not set."; exit 1; }
     ''));
 
+    patchPhase = ''
+      runHook prePatch
+      patchShebangs $PWD
 
+      # Remove any impure dependencies from the package.json (see script
+      # for details)
+      node ${./removeImpureDependencies.js}
 
+      # We do not handle shrinkwraps yet
+      rm npm-shrinkwrap.json 2>/dev/null || true
 
+      runHook postPatch
+    '';
 
+    configurePhase = ''
+      runHook preConfigure
+      # Create the cache directory
+      mkdir -p .npm
 
-      pPhase = ''
-        runHook prePatch
-        patchShebangs $PWD
-
-        # Remove any impure dependencies from the package.json (see script
-        # for details)
-        node ${./removeImpureDependencies.js}
-
-        # We do not handle shrinkwraps yet
-        rm npm-shrinkwrap.json 2>/dev/null || true
-
-        runHook postPatch
-      '';
-
-      cPhase = ''
-        runHook preConfigure
-        # Symlink or copy dependencies for node modules
-        # copy is needed if dependency has recursive dependencies,
-        # because node can't follow symlinks while resolving recursive deps.
-        ${
-          let
-            link = dep: ''
-              ${if dep.recursiveDeps == [] then "ln -sfv" else "cp -rf"} \
-                ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
-            '';
-          in
-          flip concatMapStrings (attrValues requiredDependencies) (dep: ''
-            mkdir -p ${modulePath dep}
-            ${link dep}
-            ${concatMapStrings link (attrValues dep.peerDependencies)}
-          '')}
-
-        # Create shims for recursive dependenceies
-        ${concatMapStrings (dep: ''
-          echo "Creating shim for recursive dependency ${dep.pkgName}"
-          mkdir -pv ${pathInModulePath dep}
-          cat > ${pathInModulePath dep}/package.json <<EOF
-          {
-              "name": "${dep.pkgName}",
-              "version": "${dep.version}"
-          }
-          EOF
-        '') (attrValues recursiveDependencies)}
-
-        runHook postConfigure
-      '';
-
-      bPhase = ''
-        runHook preBuild
-        # NPM reads the `HOME` environment variable and fails if it doesn't
-        # exist, so set it here.
-        HOME=$PWD npm install ${npmFlags} || {
-          echo "NPM installation failed, yo!"
-          echo "The command was:"
-          echo HOME=$PWD npm install ${npmFlags}
-          # The `npm list` command will tell us if any dependencies are missing
-          # or invalid (which is probably the reason for failure).
-          echo "The following output might be helpful in understanding why:"
-          HOME=$PWD npm install ${npmFlags} --dry-run \
-            --registry=https://registry.npmjs.org 2>&1 | grep -v '^npm WARN' || true
-          pwd
-          exit 1
-        }
-
-        runHook postBuild
-      '';
-
-      iPhase = ''
-        runHook preInstall
-
-        # Remove shims
-        ${concatMapStrings (dep: ''
-          echo "Removing shim for recursive dependency ${dep.pkgName}"
-          rm -rvf ${pathInModulePath dep}/package.json
-        '') (attrValues recursiveDependencies)}
-
-        # Install the package that we just built.
-        mkdir -p $out/lib/${modulePath self}
-
-        # Move the folder that was created for this path to $out/lib.
-        mv ${pathInModulePath self} $out/lib/${pathInModulePath self}
-
-        # Remove the node_modules subfolder from there, and instead put things
-        # in $PWD/node_modules into that folder.
-        rm -rf $out/lib/${pathInModulePath self}/node_modules
-        cp -r node_modules $out/lib/${pathInModulePath self}/node_modules
-
-        if [ -e "$out/lib/${pathInModulePath self}/man" ]; then
-          mkdir -p $out/share
-          for dir in $out/lib/${pathInModulePath self}/man/*; do          #*/
-            mkdir -p $out/share/man/$(basename "$dir")
-            for page in $dir/*; do                                        #*/
-              ln -sv $page $out/share/man/$(basename "$dir")
-            done
-          done
-        fi
-
-        # Move peer dependencies to node_modules
-        ${concatMapStrings (dep: ''
+      # Symlink or copy dependencies for node modules
+      # copy is needed if dependency has recursive dependencies,
+      # because node can't follow symlinks while resolving recursive deps.
+      ${
+        let
+          linkCmd = p: if p.recursiveDeps == [] then "ln -sfv" else "cp -rf";
+          link = dep: ''
+            # Link the dependency into the node modules folder.
+            ${linkCmd dep} ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
+            # Also link the dependency into the cache.
+            mkdir -p ${pathInNpmCache dep}
+            echo ${linkCmd dep} ${dep}/lib/${pathInModulePath dep} \
+              $PWD/${pathInNpmCache dep}/package
+            if [[ ! -e ${pathInNpmCache dep}/package ]]; then
+              ${linkCmd dep} ${dep}/lib/${pathInModulePath dep} \
+                $PWD/${pathInNpmCache dep}/package
+            fi
+          '';
+        in
+        flip concatMapStrings (attrValues requiredDependencies) (dep: ''
           mkdir -p ${modulePath dep}
-          mv ${pathInModulePath dep} $out/lib/${modulePath dep}
-        '') (attrValues _peerDependencies.requiredDeps)}
+          ${link dep}
+          ${concatMapStrings link (attrValues dep.peerDependencies)}
+        '')}
 
-        # Install binaries and patch shebangs. These are always found in
-        # node_modules/.bin, regardless of a package namespace.
-        mv node_modules/.bin $out/lib/node_modules 2>/dev/null || true
-        if [ -d "$out/lib/node_modules/.bin" ]; then
-          ln -sv $out/lib/node_modules/.bin $out/bin
-          patchShebangs $out/lib/node_modules/.bin
-        fi
+      # Create shims for recursive dependenceies
+      ${concatMapStrings (dep: ''
+        echo "Creating shim for recursive dependency ${dep.pkgName}"
+        mkdir -pv ${pathInModulePath dep}
+        cat > ${pathInModulePath dep}/package.json <<EOF
+        {
+            "name": "${dep.pkgName}",
+            "version": "${dep.version}"
+        }
+        EOF
+      '') (attrValues recursiveDependencies)}
 
-        runHook postInstall
-      '';
+      runHook postConfigure
+    '';
 
+    buildPhase = ''
+      runHook preBuild
+      # NPM reads the `HOME` environment variable and fails if it doesn't
+      # exist, so set it here.
+      HOME=$PWD npm install ${npmFlags} || {
+        echo "NPM installation failed, yo!"
+        echo "The command was:"
+        echo HOME=$PWD npm install ${npmFlags}
+        # The `npm list` command will tell us if any dependencies are missing
+        # or invalid (which is probably the reason for failure).
+        echo "The following output might be helpful in understanding why:"
+        HOME=$PWD npm install ${npmFlags} --dry-run \
+          --registry=https://registry.npmjs.org 2>&1 | grep -v '^npm WARN' || true
+        pwd
+        exit 1
+      }
+      runHook postBuild
+    '';
 
+    installPhase = ''
+      runHook preInstall
 
+      # Remove shims
+      ${concatMapStrings (dep: ''
+        echo "Removing shim for recursive dependency ${dep.pkgName}"
+        rm -rvf ${pathInModulePath dep}/package.json
+      '') (attrValues recursiveDependencies)}
 
+      # Install the package that we just built.
+      mkdir -p $out/lib/${modulePath self}
 
+      # Copy the folder that was created for this path to $out/lib.
+      cp -r $PWD $out/lib/${pathInModulePath self}
 
+      # Remove the node_modules subfolder from there, and instead put things
+      # in $PWD/node_modules into that folder.
+      # rm -rf $out/lib/${pathInModulePath self}/node_modules
+      # cp -r node_modules $out/lib/${pathInModulePath self}/node_modules
 
+      if [ -e "$out/lib/${pathInModulePath self}/man" ]; then
+        echo "Linking manpages..."
+        mkdir -p $out/share
+        for dir in $out/lib/${pathInModulePath self}/man/*; do          #*/
+          mkdir -p $out/share/man/$(basename "$dir")
+          for page in $dir/*; do                                        #*/
+            ln -sv $page $out/share/man/$(basename "$dir")
+          done
+        done
+      fi
 
+      # Move peer dependencies to node_modules
+      ${concatMapStrings (dep: ''
+        mkdir -p ${modulePath dep}
+        mv ${pathInModulePath dep} $out/lib/${modulePath dep}
+      '') (attrValues _peerDependencies.requiredDeps)}
 
+      # Install binaries and patch shebangs. These are always found in
+      # node_modules/.bin, regardless of a package namespace.
+      mv node_modules/.bin $out/lib/node_modules 2>/dev/null || true
+      if [ -d "$out/lib/node_modules/.bin" ]; then
+        ln -sv $out/lib/node_modules/.bin $out/bin
+        patchShebangs $out/lib/node_modules/.bin
+      fi
 
-
-
-
-
-
+      runHook postInstall
+    '';
 
     # These are the arguments that we will pass to `stdenv.mkDerivation`.
     mkDerivationArgs = {
-      inherit src;
-
-      # We are doing our own check phase.
-      doCheck = false;
+      inherit
+        src
+        #patchPhase
+        #configurePhase
+        #buildPhase
+        checkPhase
+        #installPhase
+        doCheck;
 
       # Tell mkDerivation to run `setVariables` prior to other phases.
       prePhases = ["setVariables"];
@@ -371,7 +367,7 @@ let
       '';
 
       # Patch the source before building the package.
-      patchPhase = if shouldTest then pPhase else ''
+      patchPhase = if doCheck then patchPhase else ''
         runHook prePatch
         patchShebangs $PWD
 
@@ -398,7 +394,7 @@ let
 
       # Set up the environment for building by creating links to or copies of
       # all of the dependencies.
-      configurePhase = if shouldTest then cPhase else ''
+      configurePhase = if doCheck then configurePhase else ''
         runHook preConfigure
         (
           ${checkSet ["BUILD_DIR"]}
@@ -449,7 +445,7 @@ let
 
       # Run npm to install. Cross your fingers here, because if something's
       # going to fail, this is probably where.
-      buildPhase = if shouldTest then bPhase else ''
+      buildPhase = if doCheck then buildPhase else ''
         runHook preBuild
 
         # Install package
@@ -485,7 +481,7 @@ let
 
       # After building, we will have constructed a node_modules folder in the
       # BUILD_DIR. We can take what was built and drop it into $out.
-      installPhase = if shouldTest then iPhase else ''
+      installPhase = if doCheck then installPhase else ''
         runHook preInstall
 
         (
@@ -599,7 +595,10 @@ let
           map (dep: remove name dep.recursiveDeps) (attrValues requiredDependencies)
         )) ++
         (attrNames recursiveDependencies);
-    };
+    } // (if !doCheck then {} else {
+      checkPhase = "npm test";
+      doCheck = true;
+    });
 
     in stdenv.mkDerivation mkDerivationArgs;
 

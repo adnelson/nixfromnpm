@@ -159,17 +159,20 @@ initializeOutput = do
 
 -- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
-          => FilePath -- ^ Source path, containing store objects
+          => Bool -- ^ Dry-run: if true, it will just report what it would have
+                  -- otherwise done.
+          -> FilePath -- ^ Source path, containing store objects
           -> FilePath -- ^ Target path, also containing store objects
           -> io ()
-mergeInto source target = do
+mergeInto dryRun source target = do
   -- Go through all of the packages in the source directory.
   forItemsInDir_ (source </> nodePackagesDir) $ \srcDir -> do
     let targetDir = target </> nodePackagesDir </> filename srcDir
     -- Create a directory for that package, if it doesn't exist.
     whenM (not <$> doesDirectoryExist targetDir) $ do
       putStrsLn ["Creating directory ", pathToText targetDir]
-      createDirectory targetDir
+      if dryRun then putStrLn "  (Skipped due to dry run)" else
+        createDirectory targetDir
     -- Copy every version file found in that directory as well.
     dotNixFiles <- filter (hasExt "nix") <$> listDirFullPaths srcDir
     forM_ dotNixFiles $ \versionFile -> do
@@ -177,8 +180,11 @@ mergeInto source target = do
       whenM (not <$> doesFileExist targetVersionFile) $ do
         putStrsLn ["Copying ", pathToText versionFile, " to ",
                    pathToText targetVersionFile]
-        copyFile versionFile targetVersionFile
-    updateLatestNix' targetDir
+        if dryRun then putStrLn "  (Skipped due to dry run)" else
+          copyFile versionFile targetVersionFile
+    putStrsLn ["Updating latest.nix files in ", pathToText srcDir]
+    if dryRun then putStrLn "  (Skipped due to dry run)" else
+      updateLatestNix' targetDir
 
 -- | Update all of the latest.nix symlinks in an output folder.
 updateLatestNixes :: MonadIO io => FilePath -> io ()
