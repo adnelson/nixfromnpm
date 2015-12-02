@@ -59,13 +59,22 @@ data RawOptions = RawOptions {
   roTest :: Bool,             -- ^ Fetch only; don't write expressions.
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
-  roGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
-  roNpmTokens :: [Text], -- ^ NPM authentication tokens.
-  roNoDefaultRegistry :: Bool, -- ^ Disable fetching from npmjs.org.
-  roNoRealTime :: Bool, -- ^ Don't write packages to disk as they are written.
-  roTopNPackages :: Maybe Int, -- ^ Fetch the top `n` npm packages by popularity.
-  roAllTop :: Bool, -- ^ If true, fetch all the top packages we have defined.
-  roNoNpm3 :: Bool -- ^ If true, do not default to npm3 in generated nix files.
+  roGithubToken :: Maybe AuthToken,
+  -- ^ Github authentication token.
+  roNpmTokens :: [Text],
+  -- ^ NPM authentication tokens.
+  roNoDefaultRegistry :: Bool,
+  -- ^ Disable fetching from npmjs.org.
+  roNoRealTime :: Bool,
+  -- ^ Don't write packages to disk as they are written.
+  roTopNPackages :: Maybe Int,
+  -- ^ Fetch the top `n` npm packages by popularity.
+  roAllTop :: Bool,
+  -- ^ If true, fetch all the top packages we have defined.
+  roNoNpm3 :: Bool,
+  -- ^ If true, do not default to npm3 in generated nix files.
+  roOverwriteNixLibs :: Bool
+  -- ^ If true, allow existing nix libraries in output to be overridden.
 } deriving (Show, Eq)
 
 -- | Various options we have available for nixfromnpm. Validated
@@ -85,7 +94,8 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
   nfnoNpmTokens :: Record AuthToken, -- ^ NPM authentication token.
   nfnoRealTime :: Bool, -- ^ Write packages to disk as they are written.
-  nfnoNpm3 :: Bool -- ^ Use npm3 by default in generated nix files.
+  nfnoNpm3 :: Bool, -- ^ Use npm3 by default in generated nix files.
+  nfnoOverwriteNixLibs :: Bool -- ^ Overwrite existing nix libraries
   } deriving (Show, Eq)
 
 -- | Same as `strOption` but for Text.
@@ -201,7 +211,8 @@ validateOptions opts = do
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts,
     nfnoRealTime = not $ roNoRealTime opts,
-    nfnoNpm3 = not $ roNoNpm3 opts
+    nfnoNpm3 = not $ roNoNpm3 opts,
+    nfnoOverwriteNixLibs = roOverwriteNixLibs opts
     }
   where
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
@@ -244,6 +255,7 @@ parseOptions = RawOptions
     <*> topN
     <*> allTop
     <*> noNpm3
+    <*> overwriteNixLibs
   where
     packageNames = many $ textOption $ short 'p'
                    <> long "package"
@@ -322,3 +334,5 @@ parseOptions = RawOptions
     noNpm3 = switch (long "no-npm3"
                        <> help "Do not use npm3 by default in generated nix \
                                \expressions.")
+    overwriteNixLibs = switch (long "overwrite-nix-libs"
+                       <> help "Overwrite existing nix libraries in output.")

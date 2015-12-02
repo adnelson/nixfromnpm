@@ -135,27 +135,41 @@ initializeOutput :: NpmFetcher ()
 initializeOutput = do
   outputPath <- asks nfsOutputPath
   extensions <- asks nfsExtendPaths
-  createDirectoryIfMissing outputPath
-  putStrsLn ["Initializing  ", pathToText outputPath]
-  createDirectoryIfMissing (outputPath </> nodePackagesDir)
+  npm3 <- asks nfsNpm3
   version <- case fromHaskellVersion Paths_nixfromnpm.version of
     Left err -> fatal err
     Right v -> return v
+  let defaultNixPath = outputPath </> "default.nix"
+      -- skip the action if the path exists and overwrite is disabled.
+      unlessExists path action = asks nfsOverwriteNixLibs >>= \case
+        True -> action
+        False -> doesFileExist path >>= \case
+          True -> do
+            warns [pathToText path, " already exists. Use ",
+                   "--overwrite-nix-libs option to overwrite."]
+          False -> action
+  putStrsLn ["Initializing  ", pathToText outputPath]
+  createDirectoryIfMissing outputPath
+  createDirectoryIfMissing (outputPath </> nodePackagesDir)
   writeFile (outputPath </> ".nixfromnpm-version") $ pshow version
-  npm3 <- asks nfsNpm3
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
-      writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
-      putStrsLn ["Generating node libraries in ", pathToText outputPath]
-      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+      unlessExists defaultNixPath $
+        writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
       createDirectoryIfMissing (outputPath </> "nodeLib")
-      contents <- getDirectoryContents nodeLibPath
+      putStrsLn ["Generating node libraries in ", pathToText outputPath]
+      -- Get the path to the files bundled with nixfromnpm which contain
+      -- nix libraries.
+      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+      -- Copy each of these into the target (unless they exist).
       forItemsInDir_ nodeLibPath $ \path -> do
         whenM (isFile path) $ do
-          copyFile path (outputPath </> "nodeLib" </> filename path)
+          unlessExists (outputPath </> "nodeLib" </> filename path) $
+            copyFile path (outputPath </> "nodeLib" </> filename path)
     extName:_ -> do -- Then we are extending things.
-      writeNix (outputPath </> "default.nix") $
-        defaultNixExtending extName extensions npm3
+      unlessExists defaultNixPath $ do
+        writeNix defaultNixPath $
+          defaultNixExtending extName extensions npm3
 
 -- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
@@ -304,7 +318,8 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsMaxDevDepth = nfnoDevDepth,
     nfsCacheDepth = nfnoCacheDepth,
     nfsRealTimeWrite = nfnoRealTime,
-    nfsNpm3 = nfnoNpm3
+    nfsNpm3 = nfnoNpm3,
+    nfsOverwriteNixLibs = nfnoOverwriteNixLibs
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages
