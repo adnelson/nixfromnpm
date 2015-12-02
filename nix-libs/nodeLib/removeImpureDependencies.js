@@ -26,7 +26,10 @@ for (var i in depTypes) {
   var depSet = packageObj[depType];
   if (depSet !== undefined) {
     for (var depName in depSet) {
-      if (versionSpecIsImpure(depSet[depName])) {
+      var versionSpec = depSet[depName];
+      if (versionSpecIsImpure(versionSpec)) {
+        console.log("Replacing impure version spec " + versionSpec +
+                    " for dependency " + depName + " with '*'");
         depSet[depName] = '*';
       }
     }
