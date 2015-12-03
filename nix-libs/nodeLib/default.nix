@@ -175,7 +175,18 @@ rec {
   # directory for all of the package files and generate a big attribute set
   # for all of them. Re-exports the `callPackage` function and all of the
   # attribute sets, as well as the nodeLib.
-  generatePackages = {rootPath, extensions ? []}:
+  generatePackages = {
+    # The path containing packages to discover.
+    rootPath,
+    # Extensions are other node libraries which will be folded into the
+    # generated one.
+    extensions ? [],
+    # If any additional arguments should be made available to callPackage
+    # (for example for packages which require additional arguments), they
+    # can be passed in here. Those packages can declare an `extras` argument
+    # which will contain whatever is passed in here.
+    extras ? {}
+  }:
     let
       callPackageWith = pkgSet: path: overridingArgs: let
         inherit (builtins) intersectAttrs functionArgs;
@@ -199,6 +210,7 @@ rec {
       callPackage = callPackageWith {
         inherit fetchUrlWithHeaders namespaces namespaceTokens;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
+        inherit extras;
       };
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //
                      discoverPackages {inherit callPackage rootPath;};

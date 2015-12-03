@@ -109,12 +109,17 @@ let
   # The package name as it appears in the package.json. This contains a
   # namespace if there is one, so it will be a distinct identifier for
   # different packages.
-  pkgName = if namespace == null then "${name}@${version}"
-            else "@${namespace}/${name}@${version}";
+  packageJsonName = if namespace == null then name
+                    else "@${namespace}/${name}";
+
+  # The package name with a version appended. This should be unique amongst
+  # all packages.
+  uniqueName = "${packageJsonName}@${version}";
+
 in
 
 if doCheck && (devDependencies == null)
-then throw ("${pkgName}: Can't run tests because devDependencies have " +
+then throw ("${uniqueName}: Can't run tests because devDependencies have " +
             "not been defined.")
 else
 
@@ -128,8 +133,7 @@ let
   # to be passed through to mkDerivation. They are removed below.
   attrsToRemove = ["deps" "resolvedDeps" "optionalDependencies" "flags"
                    "devDependencies" "os" "skipOptionalDependencies"
-                   "doCheck"
-                   "installDevDependencies" "version" "namespace"];
+                   "doCheck" "installDevDependencies" "version" "namespace"];
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
@@ -173,11 +177,11 @@ let
       };
 
     # Filter out self-referential dependencies.
-    _dependencies = mapDependencies deps (name: dep: dep.pkgName != pkgName);
+    _dependencies = mapDependencies deps (name: dep: dep.uniqueName != uniqueName);
 
     # Filter out self-referential peer dependencies.
     _peerDependencies = mapDependencies peerDependencies (name: dep:
-      dep.pkgName != pkgName);
+      dep.uniqueName != uniqueName);
 
     # Filter out any optional dependencies which don't build correctly.
     _optionalDependencies = mapDependencies optionalDependencies (name: dep:
@@ -187,7 +191,7 @@ let
 
     # Grab development dependencies if doCheck is true.
     _devDependencies = let
-        filterFunc = name: dep: dep.pkgName != pkgName;
+        filterFunc = name: dep: dep.uniqueName != uniqueName;
         depSet = if doCheck then devDependencies else [];
       in
       mapDependencies depSet filterFunc;
@@ -240,6 +244,9 @@ let
       runHook prePatch
       patchShebangs $PWD
 
+      # Ensure that the package name matches what is in the package.json.
+      node ${./checkPackageJson.js} ${packageJsonName}
+
       # Remove any impure dependencies from the package.json (see script
       # for details)
       node ${./removeImpureDependencies.js}
@@ -271,11 +278,11 @@ let
         '')}
       # Create shims for recursive dependenceies
       ${concatMapStrings (dep: ''
-        echo "Creating shim for recursive dependency ${dep.pkgName}"
+        echo "Creating shim for recursive dependency ${dep.uniqueName}"
         mkdir -pv ${pathInModulePath dep}
         cat > ${pathInModulePath dep}/package.json <<EOF
         {
-            "name": "${dep.pkgName}",
+            "name": "${dep.uniqueName}",
             "version": "${dep.version}"
         }
         EOF
@@ -311,7 +318,7 @@ let
 
       # Remove shims
       ${concatMapStrings (dep: ''
-        echo "Removing shim for recursive dependency ${dep.pkgName}"
+        echo "Removing shim for recursive dependency ${dep.uniqueName}"
         rm -rvf ${pathInModulePath dep}/package.json
       '') (attrValues recursiveDependencies)}
 
@@ -384,12 +391,16 @@ let
         runHook preShellHook
         runHook setVariables
         export PATH=${npm}/bin:${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
-        mkdir -p node_modules
-        ${concatMapStrings (dep: ''
-          mkdir -p ${modulePath dep}
-          [[ -e ${pathInModulePath dep} ]] || \
-            ln -sv ${dep}/lib/${pathInModulePath dep} ${pathInModulePath dep}
-        '') (attrValues requiredDependencies)}
+        mkdir -p $TMPDIR/$UNIQNAME
+        (
+          cd $TMPDIR/$UNIQNAME
+          eval "$configurePhase"
+        )
+        linkNodeModules() {
+          ln -sv $TMPDIR/$UNIQNAME/node_modules node_modules
+        }
+        echo "Installed dependencies in $TMPDIR/$UNIQNAME."
+        echo 'Run `linkNodeModules` to create a symlink to the node_modules.'
         runHook postShellHook
       '';
 
@@ -403,7 +414,7 @@ let
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
       passthru = {
-        inherit pkgName namespace version;
+        inherit uniqueName namespace version;
         # The basic name is the name without namespace or version.
         basicName = name;
         peerDependencies = _peerDependencies.requiredDeps;
@@ -426,7 +437,7 @@ let
         # An 'override' attribute, which will call `buildNodePackage` with the
         # given arguments overridden.
         override = newArgs: buildNodePackage (args // newArgs);
-      };
+      } // (args.passthru or {});
     } // (removeAttrs args attrsToRemove) // {
       name = "${namePrefix}${name}-${version}";
 

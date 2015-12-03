@@ -171,14 +171,25 @@ initializeOutput = do
         writeNix defaultNixPath $
           defaultNixExtending extName extensions npm3
 
+-- Some types which are more expressive than their raw counterparts.
+-- Hey, if you have a cool type system, why not leverage it...
+data MergeType = DryRun | DoIt deriving (Eq)
+newtype Source = Source FilePath
+newtype Dest = Dest FilePath
+
 -- | Merges one folder containing expressions into another.
 mergeInto :: (MonadIO io, MonadBaseControl IO io)
-          => Bool -- ^ Dry-run: if true, it will just report what it would have
-                  -- otherwise done.
-          -> FilePath -- ^ Source path, containing store objects
-          -> FilePath -- ^ Target path, also containing store objects
+          => MergeType -- ^ If DryRun, it will just report what it would have
+                       -- otherwise done.
+          -> Source -- ^ Source path, containing store objects
+          -> Dest -- ^ Target path, also containing store objects
           -> io ()
-mergeInto dryRun source target = do
+mergeInto mergeType (Source source) (Dest target) = do
+  let dryRun = mergeType == DryRun
+  whenM (not <$> doesDirectoryExist (source </> nodePackagesDir)) $ do
+    error "No node packages folder in source!"
+  whenM (not <$> doesDirectoryExist (target </> nodePackagesDir)) $ do
+    error "No node packages folder in target!"
   -- Go through all of the packages in the source directory.
   forItemsInDir_ (source </> nodePackagesDir) $ \srcDir -> do
     let targetDir = target </> nodePackagesDir </> filename srcDir
