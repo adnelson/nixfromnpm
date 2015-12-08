@@ -32,6 +32,7 @@ import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     rootDefaultNix,
                                     defaultNixExtending,
                                     packageJsonDefaultNix,
+                                    packageMapToNix,
                                     resolvedPkgToNix,
                                     nodePackagesDir)
 import NixFromNpm.Options
@@ -50,7 +51,7 @@ takeNewPackages :: PackageMap FullyDefinedPackage
 takeNewPackages startingRec = do
   let isNew (NewPackage rpkg) = Just $ resolvedPkgToNix rpkg
       isNew _ = Nothing
-  H.filter (not . H.null) $ H.map (modifyMap isNew) startingRec
+  H.filter (not . M.null) $ H.map (modifyMap isNew) startingRec
 
 -- | Given the path to a package, finds all of the .nix files which parse
 --   correctly.
@@ -71,7 +72,32 @@ parseVersionFiles pkgName folder = do
                      pathToText versionTxt, " failed to parse:\n", pshow err]
           return Nothing -- invalid nix, should overwrite
         Success expr -> return $ Just (version, expr)
-  return $ H.singleton pkgName (H.fromList $ catMaybes maybeExprs)
+  return $ H.singleton pkgName (M.fromList $ catMaybes maybeExprs)
+
+-- | Given a directory containing npm nix expressions, parse it into a
+-- packagemap of parsed nix expressions.
+scanNodePackagesDir :: MonadIO io => FilePath -> io (PackageMap NExpr)
+scanNodePackagesDir nodePackagesDir = pmConcat <$> do
+  forItemsInDir nodePackagesDir $ \dir -> do
+    doesDirectoryExist dir >>= \case
+      False -> return mempty -- not a directory
+      True -> case T.split (=='@') $ getFilename dir of
+        -- Check if the directory starts with "@", in which case it's
+        -- a namespace.
+        ["", namespace] -> map pmConcat $ forItemsInDir dir $ \dir' -> do
+          let pkgName = PackageName (getFilename dir') (Just namespace)
+          parseVersionFiles pkgName dir'
+        [name] -> do
+          parseVersionFiles (simpleName $ getFilename dir) dir
+        _ -> return mempty
+
+
+-- | Given a directory which contains a nodePackages folder, create a
+-- nodePackages.nix which contains all of the packages in that folder.
+writeNodePackagesNix :: MonadIO io => FilePath -> io ()
+writeNodePackagesNix path = do
+  packages <- scanNodePackagesDir (path </> nodePackagesDir)
+  writeNix (path </> "nodePackages.nix") $ packageMapToNix packages
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 --   expressions findable at that path and returns a map of them.
@@ -91,22 +117,8 @@ findExisting maybeName path = do
     True -> do
       let wrapper = maybe FromOutput FromExtension maybeName
       putStrsLn ["Searching for existing expressions in ", pathToText path]
-      verMapLists <- forItemsInDir (path </> nodePackagesDir) $ \dir -> do
-        doesDirectoryExist dir >>= \case
-          False -> return mempty -- not a directory
-          True -> case T.split (=='@') $ getFilename dir of
-            -- Check if the directory starts with "@", in which case it's
-            -- a namespace.
-            ["", namespace] -> do
-              forItemsInDir dir $ \dir' -> do
-                let pkgName = PackageName (getFilename dir') (Just namespace)
-                parseVersionFiles pkgName dir'
-            [name] -> do
-              let pkgName = simpleName $ getFilename dir
-              singleton <$> parseVersionFiles pkgName dir
-            _ -> return mempty
-      let verMaps = concat $ concat verMapLists
-          total = sum $ map (sum . map H.size) verMapLists
+      verMaps <- scanNodePackagesDir (path </> nodePackagesDir)
+      let total = pmNumVersions verMaps
       putStrsLn ["Found ", render total, " expressions in ", pathToText path]
       return $ pmMap wrapper verMaps
 
@@ -230,7 +242,7 @@ writeNewPackages = takeNewPackages <$> gets resolved >>= \case
   newPackages
     | H.null newPackages -> putStrLn "No new packages created."
     | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
-        forM_ (H.toList pkgVers) $ \(ver, expr) -> do
+        forM_ (M.toList pkgVers) $ \(ver, expr) -> do
           writePackage pkgName ver expr
         updateLatestNix' =<< outputDirOf pkgName
 

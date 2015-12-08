@@ -616,12 +616,12 @@ _resolveNpmVersionRange name range = case range of
 resolveDep :: PackageName -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   -- We've already defined some versions of this package.
-  Just versions -> case filter (matches range) (H.keys versions) of
+  Just versions -> case filter (matches range) (M.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
           versionDots = pshow bestVersion
-          package = fromJust $ H.lookup bestVersion versions
+          package = fromJust $ M.lookup bestVersion versions
       putStrs ["Requirement ", pshow name, " version ",
                pack $ show range, " already satisfied: "]
       putStrsLn $ case package of

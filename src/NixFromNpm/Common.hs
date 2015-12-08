@@ -23,6 +23,7 @@ module NixFromNpm.Common (
     module Data.Either,
     module Data.HashMap.Strict,
     module Data.List,
+    module Data.Map.Strict,
     module Data.Maybe,
     module Data.String.Utils,
     module Filesystem.Path.CurrentOS,
@@ -36,7 +37,8 @@ module NixFromNpm.Common (
     Name, AuthToken, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
-    parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC
+    parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
+    partitionEither
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -64,6 +66,8 @@ import Data.Default
 import Data.List (maximum, maximumBy)
 import Data.HashMap.Strict (HashMap, (!))
 import qualified Data.HashMap.Strict as H
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust, isJust, isNothing)
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
@@ -101,12 +105,22 @@ alterKeys f mp = do
   newMap
 
 -- | Create a hashmap by applying a test to everything in the existing
--- map.
-modifyMap :: (Eq k, Hashable k) => (a -> Maybe b) -> HashMap k a -> HashMap k b
-modifyMap test inputMap = foldl' step mempty $ H.toList inputMap where
+-- map. If the test returns Just, put it in the result, and otherwise leave
+-- it out.
+modifyHashMap :: (Eq k, Hashable k)
+              => (a -> Maybe b) -> HashMap k a -> HashMap k b
+modifyHashMap test inputMap = foldl' step mempty $ H.toList inputMap where
   step result (k, elem) = case test elem of
     Nothing -> result
     Just newElem -> H.insert k newElem result
+
+-- | Same as modifyHashMap, but for Data.Maps.
+modifyMap :: Ord k => (a -> Maybe b) -> Map k a -> Map k b
+modifyMap test inputMap = foldl' step mempty $ M.toList inputMap where
+  step result (k, elem) = case test elem of
+    Nothing -> result
+    Just newElem -> M.insert k newElem result
+
 
 -- | Show as text
 pshow :: Show t => t -> Text
@@ -211,3 +225,12 @@ fatal = throw . Fatal
 -- | Like `fatal` but takes a list which it concatenates.
 fatalC :: [Text] -> a
 fatalC = fatal . concat
+
+-- | Split up a list based on a predicate.
+partitionEither :: (a -> Either b c) -> [a] -> ([b], [c])
+partitionEither tester [] = ([], [])
+partitionEither tester (x:xs) = do
+  let (lefts, rights) = partitionEither tester xs
+  case tester x of
+    Left l -> (l:lefts, rights)
+    Right r -> (lefts, r:rights)
