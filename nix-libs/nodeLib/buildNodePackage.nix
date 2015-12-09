@@ -28,6 +28,13 @@ let
 
   # The path to a package within an npm cache.
   pathInNpmCache = pkg: ".npm/${pkg.basicName}/${pkg.version}";
+
+  # By default, when checking we'll run npm test.
+  defaultCheckPhase = ''
+    runHook preCheck
+    npm test
+    runHook postCheck
+  '';
 in
 
 {
@@ -78,7 +85,7 @@ in
   doCheck ? false,
 
   # Test command.
-  checkPhase ? "npm test",
+  checkPhase ? defaultCheckPhase,
 
   # Additional flags passed to npm install. A list of strings.
   extraNpmFlags ? [],
@@ -226,8 +233,6 @@ let
       "--userconfig=/dev/null"
       # This flag is used for packages which link against the node headers.
       "--nodedir=${sources}"
-      # This will tell npm not to run pre/post publish hooks
-      "--ignore-scripts"
       ] ++
       # Use the --production flag if we're not running tests; this will make
       # npm skip the dev dependencies.

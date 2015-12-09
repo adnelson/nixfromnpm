@@ -20,7 +20,7 @@ set -e
 
 [[ -z $TMPDIR ]] && export TMPDIR=/tmp
 BUILD=$(mktemp -d $TMPDIR/nixfromnpm-build-XXXX)
-OUTPUT=$(mktemp -d $TMPDIR/gen-npm3-XXXX)
+[[ -z OUTPUT ]] && OUTPUT=$(mktemp -d $TMPDIR/gen-npm3-XXXX)
 
 [[ -z $NIXFROMNPM ]] && {
   # CD into the directory of this file and echo the current directory.
