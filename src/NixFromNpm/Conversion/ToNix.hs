@@ -179,7 +179,7 @@ hasBroken ResolvedPkg{..} = case rpDevDependencies of
 --
 -- We would generate a nix file that looks like this:
 --
--- > {pkgs, nodejsVersion, callPackage, npm3}:
+-- > {callPackage}:
 -- >
 -- > {
 -- >   foo_0-1-2 = callPackage ./foo/0.1.2.nix {};
@@ -202,8 +202,7 @@ packageMapToNix :: PackageMap a -> NExpr
 packageMapToNix pMap = do
   let
     -- Create a parameter set with no defaults given.
-    params = mkFormalSet $ map (\x -> (x, Nothing))
-               ["pkgs", "npm3", "nodejsVersion", "callPackage"]
+    params = mkFormalSet $ [("callPackage", Nothing)]
     -- Create the function body as a single set which contains all of the
     -- packages in the set as keys, and a callPackage to their paths as values.
     toBindings :: (PackageName, [SemVer]) -> [Binding NExpr]
@@ -293,7 +292,7 @@ importNixpkgs = importWith True "nixpkgs" []
 
 -- | The default version of nodejs we are using.
 defaultNodeJSVersion :: Text
-defaultNodeJSVersion = "4.1"
+defaultNodeJSVersion = "4.2"
 
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
@@ -315,7 +314,7 @@ nodePackagesDir :: FilePath
 nodePackagesDir = "nodePackages"
 
 bindRootPath :: Binding NExpr
-bindRootPath = "rootPath" `bindTo` mkPath ("./" </> nodePackagesDir)
+bindRootPath = "nodePackagesPath" `bindTo` mkPath ("./" </> nodePackagesDir)
 
 -- | The root-level default.nix file, which does not have any extensions.
 rootDefaultNix :: Bool -> NExpr

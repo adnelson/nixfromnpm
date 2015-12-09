@@ -8,14 +8,21 @@
 
 let
   inherit (builtins) filterSource;
-  inherit (pkgs.lib) elem;
+  inherit (pkgs.lib) any flip elem hasSuffix hasPrefix;
+  # We'll typically have a lot of files in this directory; we only want
+  # to take a few of them though.
+  filesToExclude = ["node_modules" "shell.nix" "project.nix" "dist" "scripts"];
+  suffixesToExclude = ["-test"];
+  filter = baseName: (!elem baseName filesToExclude) &&
+                     (!hasPrefix "." baseName) &&
+                     (!any (flip hasSuffix baseName) suffixesToExclude);
+  src = filterSource (path: _: filter (baseNameOf path)) ./.;
 in
 
 mkDerivation {
+  inherit src;
   pname = "nixfromnpm";
-  version = "0.7.0";
-  # Filter .git and dist files from source
-  src = filterSource (n: t: !(elem n [".git" "dist"])) ./.;
+  version = "0.8.0";
   isExecutable = true;
   buildDepends = [
     aeson base bytestring classy-prelude containers data-default
@@ -32,6 +39,7 @@ mkDerivation {
     shelly system-filepath text text-render unordered-containers
   ];
   shellHook = ''
+    export SRC=${src}
     export CURL_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
   '';
   description = "Generate nix expressions from npm packages";

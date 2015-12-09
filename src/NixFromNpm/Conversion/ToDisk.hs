@@ -56,11 +56,11 @@ takeNewPackages startingRec = do
 -- | Given the path to a package, finds all of the .nix files which parse
 --   correctly.
 parseVersionFiles :: MonadIO io
-                  => PackageName -- ^ Name of the package this is a version of.
-                  -> FilePath    -- ^ Folder containing .nix files for this
-                                 --   package.
+                  => Bool        -- ^ Verbose output.
+                  -> PackageName -- ^ Name of the package this is a version of.
+                  -> FilePath    -- ^ Folder with .nix files for this package.
                   -> io (PackageMap NExpr) -- ^ Version and expression.
-parseVersionFiles pkgName folder = do
+parseVersionFiles verbose pkgName folder = do
   maybeExprs <- forItemsInDir folder $ \path -> do
     let (versionTxt, ext) = splitExtension $ filename path
     case parseSemVer (pathToText versionTxt) of
@@ -71,13 +71,17 @@ parseVersionFiles pkgName folder = do
           putStrsLn ["Warning: expression for ", pshow pkgName, " version ",
                      pathToText versionTxt, " failed to parse:\n", pshow err]
           return Nothing -- invalid nix, should overwrite
-        Success expr -> return $ Just (version, expr)
+        Success expr -> do
+          when verbose $
+            putStrsLn ["Discovered ", pshow pkgName, " at version ",
+                       pshow version]
+          return $ Just (version, expr)
   return $ H.singleton pkgName (M.fromList $ catMaybes maybeExprs)
 
 -- | Given a directory containing npm nix expressions, parse it into a
 -- packagemap of parsed nix expressions.
-scanNodePackagesDir :: MonadIO io => FilePath -> io (PackageMap NExpr)
-scanNodePackagesDir nodePackagesDir = pmConcat <$> do
+scanNodePackagesDir :: MonadIO io => Bool -> FilePath -> io (PackageMap NExpr)
+scanNodePackagesDir verbose nodePackagesDir = pmConcat <$> do
   forItemsInDir nodePackagesDir $ \dir -> do
     doesDirectoryExist dir >>= \case
       False -> return mempty -- not a directory
@@ -86,21 +90,25 @@ scanNodePackagesDir nodePackagesDir = pmConcat <$> do
         -- a namespace.
         ["", namespace] -> map pmConcat $ forItemsInDir dir $ \dir' -> do
           let pkgName = PackageName (getFilename dir') (Just namespace)
-          parseVersionFiles pkgName dir'
+          parseVersionFiles verbose pkgName dir'
         [name] -> do
-          parseVersionFiles (simpleName $ getFilename dir) dir
+          parseVersionFiles verbose (simpleName $ getFilename dir) dir
         _ -> return mempty
 
-
--- | Given a directory which contains a nodePackages folder, create a
--- nodePackages.nix which contains all of the packages in that folder.
-writeNodePackagesNix :: MonadIO io => FilePath -> io ()
-writeNodePackagesNix path = do
-  packages <- scanNodePackagesDir (path </> nodePackagesDir)
-  writeNix (path </> "nodePackages.nix") $ packageMapToNix packages
+-- | Given a nodePackages folder, create a default.nix which contains all
+-- of the packages in that folder.
+writeNodePackagesNix :: MonadIO io => Bool -> FilePath -> io ()
+writeNodePackagesNix verbose path' = do
+  path <- absPath path'
+  whenM (not <$> doesDirectoryExist (path </> nodePackagesDir)) $ do
+    failC ["No node packages folder in ", pathToText path]
+  let defaultNix = path </> nodePackagesDir </> "default.nix"
+  putStrsLn ["Generating package definition object in ", pathToText defaultNix]
+  packages <- scanNodePackagesDir verbose (path </> nodePackagesDir)
+  writeNix defaultNix $ packageMapToNix packages
 
 -- | Given the path to a file possibly containing nix expressions, finds all
---   expressions findable at that path and returns a map of them.
+-- expressions findable at that path and returns a map of them.
 findExisting :: (MonadBaseControl IO io, MonadIO io)
              => Maybe Name -- ^ Is `Just` if this is an extension.
              -> FilePath       -- ^ The path to search.
@@ -117,7 +125,7 @@ findExisting maybeName path = do
     True -> do
       let wrapper = maybe FromOutput FromExtension maybeName
       putStrsLn ["Searching for existing expressions in ", pathToText path]
-      verMaps <- scanNodePackagesDir (path </> nodePackagesDir)
+      verMaps <- scanNodePackagesDir True (path </> nodePackagesDir)
       let total = pmNumVersions verMaps
       putStrsLn ["Found ", render total, " expressions in ", pathToText path]
       return $ pmMap wrapper verMaps
@@ -182,46 +190,6 @@ initializeOutput = do
       unlessExists defaultNixPath $ do
         writeNix defaultNixPath $
           defaultNixExtending extName extensions npm3
-
--- Some types which are more expressive than their raw counterparts.
--- Hey, if you have a cool type system, why not leverage it...
-data MergeType = DryRun | DoIt deriving (Eq)
-newtype Source = Source FilePath
-newtype Dest = Dest FilePath
-
--- | Merges one folder containing expressions into another.
-mergeInto :: (MonadIO io, MonadBaseControl IO io)
-          => MergeType -- ^ If DryRun, it will just report what it would have
-                       -- otherwise done.
-          -> Source -- ^ Source path, containing store objects
-          -> Dest -- ^ Target path, also containing store objects
-          -> io ()
-mergeInto mergeType (Source source) (Dest target) = do
-  let dryRun = mergeType == DryRun
-  whenM (not <$> doesDirectoryExist (source </> nodePackagesDir)) $ do
-    error "No node packages folder in source!"
-  whenM (not <$> doesDirectoryExist (target </> nodePackagesDir)) $ do
-    error "No node packages folder in target!"
-  -- Go through all of the packages in the source directory.
-  forItemsInDir_ (source </> nodePackagesDir) $ \srcDir -> do
-    let targetDir = target </> nodePackagesDir </> filename srcDir
-    -- Create a directory for that package, if it doesn't exist.
-    whenM (not <$> doesDirectoryExist targetDir) $ do
-      putStrsLn ["Creating directory ", pathToText targetDir]
-      if dryRun then putStrLn "  (Skipped due to dry run)" else
-        createDirectory targetDir
-    -- Copy every version file found in that directory as well.
-    dotNixFiles <- filter (hasExt "nix") <$> listDirFullPaths srcDir
-    forM_ dotNixFiles $ \versionFile -> do
-      let targetVersionFile = targetDir </> filename versionFile
-      whenM (not <$> doesFileExist targetVersionFile) $ do
-        putStrsLn ["Copying ", pathToText versionFile, " to ",
-                   pathToText targetVersionFile]
-        if dryRun then putStrLn "  (Skipped due to dry run)" else
-          copyFile versionFile targetVersionFile
-    putStrsLn ["Updating latest.nix files in ", pathToText srcDir]
-    if dryRun then putStrLn "  (Skipped due to dry run)" else
-      updateLatestNix' targetDir
 
 -- | Update all of the latest.nix symlinks in an output folder.
 updateLatestNixes :: MonadIO io => FilePath -> io ()
@@ -358,6 +326,7 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
       whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
+    writeNodePackagesNix False =<< asks nfsOutputPath
     showBrokens
     checkForBroken nfnoPkgNames
   return status

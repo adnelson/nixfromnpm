@@ -1,5 +1,5 @@
 name:                nixfromnpm
-version:             0.7.0
+version:             0.8.0
 synopsis:            Generate nix expressions from npm packages.
 description:
   Given an npm package name and one or more npm repositories, will dump out a
@@ -19,7 +19,9 @@ bug-reports:         https://github.com/adnelson/nixfromnpm/issues
 data-files:   nix-libs/nodeLib/default.nix
             , nix-libs/nodeLib/buildNodePackage.nix
             , nix-libs/nodeLib/removeImpureDependencies.js
+            , nix-libs/nodeLib/checkPackageJson.js
             , nix-libs/nodeLib/fetchUrlWithHeaders.nix
+            , nix-libs/nodeLib/installBinaries.py
             , nix-libs/nodeLib/fetch.py
             , nix-libs/nodeLib/npm3.tar.gz
             , top_packages.txt

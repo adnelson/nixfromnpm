@@ -10,9 +10,8 @@ import System.Exit
 import NixFromNpm.Common hiding (getArgs, (<>))
 import NixFromNpm.Options (NixFromNpmOptions, parseOptions,
                            validateOptions)
-import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions,
-                                     mergeInto, MergeType(..),
-                                     Source(..), Dest(..))
+import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
+import NixFromNpm.Merge (mergeInto, MergeType(..), Source(..), Dest(..))
 
 main :: IO ()
 main = do
