@@ -118,12 +118,13 @@ instance FromJSON PackageName where
 getDict :: (FromJSON val, FromJSON key, Hashable key, Eq key)
         => Text -> Object -> Aeson.Parser (HashMap key val)
 getDict key obj = case H.lookup key obj of
-  Nothing -> return mempty
   Just (Object obj') -> map H.fromList $
     forM (H.toList obj') $ \(k, v) -> do
       key <- parseJSON (String k)
       val <- parseJSON v
       return (key, val)
+  -- sometimes it's malformed, like humanize-number
+  _ -> return mempty
 
 instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
