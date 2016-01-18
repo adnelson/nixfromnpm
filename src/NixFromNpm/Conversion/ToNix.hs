@@ -78,6 +78,7 @@ toSelector (PackageName name mNamespace) (SemVer a b c tags) = do
     Just namespace -> ["namespaces", namespace, ident]
 
 -- | Same as toSelector, but doesn't append a version.
+toSelectorNoVersion :: PackageName -> NSelector NExpr
 toSelectorNoVersion (PackageName name mNamespace) = do
   StaticKey <$> case mNamespace of
     Nothing -> [fixName name]
@@ -292,7 +293,7 @@ importNixpkgs = importWith True "nixpkgs" []
 
 -- | The default version of nodejs we are using.
 defaultNodeJSVersion :: Text
-defaultNodeJSVersion = "4.2"
+defaultNodeJSVersion = "4_x"
 
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
