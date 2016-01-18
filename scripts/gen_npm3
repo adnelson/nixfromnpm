@@ -56,6 +56,9 @@ gen_npm3_tarball() (
     .
 )
 
+# This file needs to exist, even though we're going to be generating
+# a new one, because it is searched by cabal.
+touch $NIXFROMNPM/nix-libs/nodeLib/npm3.tar.gz
 echo "Building nixfromnpm..."
 build_nixfromnpm
 echo "Fetching package definitions in $OUTPUT..."
