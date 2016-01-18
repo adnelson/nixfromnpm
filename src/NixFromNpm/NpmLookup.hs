@@ -34,7 +34,6 @@ import Network.URI (escapeURIString, isUnreserved)
 import Nix.Types
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.SemVer
-import Data.SemVer.Parser
 
 import NixFromNpm.Common
 import NixFromNpm.Git.Types as Git hiding (Tag)

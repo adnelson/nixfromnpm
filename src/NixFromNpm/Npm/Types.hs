@@ -19,7 +19,6 @@ import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 
 import Data.SemVer
-import Data.SemVer.Parser
 
 import NixFromNpm.Common
 import NixFromNpm.Git.Types (getObject, GithubError)
