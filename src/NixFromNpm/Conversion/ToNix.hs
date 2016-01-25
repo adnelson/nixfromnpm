@@ -14,9 +14,9 @@ import Data.Text (Text, replace)
 import Data.SemVer
 
 import NixFromNpm.Common hiding (replace)
-import Nix.Types hiding (mkPath)
+import Nix.Expr hiding (mkPath)
 import Nix.Pretty (prettyNix)
-import qualified Nix.Types as Nix
+import qualified Nix.Expr as Nix
 import Nix.Parser
 
 import NixFromNpm.Npm.Types
@@ -69,7 +69,7 @@ toDepExpr (PackageName name mNamespace) (SemVer a b c tags) = do
 -- | Converts a package name and semver into an Nix selector, which can
 -- be used in a binding. This is very similar to @toDepExpr@, but it returns
 -- something to be used in a binding rather than an expression.
-toSelector :: PackageName -> SemVer -> NSelector NExpr
+toSelector :: PackageName -> SemVer -> NAttrPath NExpr
 toSelector (PackageName name mNamespace) (SemVer a b c tags) = do
   let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
       ident = fixName name <> "_" <> suffix
@@ -78,7 +78,7 @@ toSelector (PackageName name mNamespace) (SemVer a b c tags) = do
     Just namespace -> ["namespaces", namespace, ident]
 
 -- | Same as toSelector, but doesn't append a version.
-toSelectorNoVersion :: PackageName -> NSelector NExpr
+toSelectorNoVersion :: PackageName -> NAttrPath NExpr
 toSelectorNoVersion (PackageName name mNamespace) = do
   StaticKey <$> case mNamespace of
     Nothing -> [fixName name]
@@ -89,7 +89,7 @@ toSelectorNoVersion (PackageName name mNamespace) = do
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
 toNixExpr name (Resolved semver) = toDepExpr name semver
 toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
-  ["name" `bindTo` str (pshow name), "reason" `bindTo` str (pshow reason)]
+  ["name" `bindTo` mkStr (pshow name), "reason" `bindTo` mkStr (pshow reason)]
 
 -- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
@@ -108,10 +108,6 @@ toRelPath (PackageName name mNamespace) version = do
     Nothing -> subPath
     -- Namespaced: package '@foo/bar@1.2.3' -> './@foo/bar/1.2.3.nix'
     Just nspace -> fromText ("@" <> nspace) </> subPath
-
--- | Creates a doublequoted string from some text.
-str :: Text -> NExpr
-str = mkStr DoubleQuoted
 
 -- | Parse a nix string unsafely (as in, assuming it parses correctly)
 unsafeParseNix :: Text -> NExpr
@@ -138,7 +134,7 @@ distInfoToNix maybeNamespace (Just DistInfo{..}) = do
             auth = pshow $ concat ["Bearer ${namespaceTokens.", namespace, "}"]
           [binder $ unsafeParseNix auth]
       bindings =
-        ["url" `bindTo` str diUrl, algo `bindTo` str hash]
+        ["url" `bindTo` mkStr diUrl, algo `bindTo` mkStr hash]
         <> authBinding
   fetchurl `mkApp` mkNonRecSet bindings
 
@@ -146,13 +142,13 @@ distInfoToNix maybeNamespace (Just DistInfo{..}) = do
 metaToNix :: PackageMeta -> Maybe NExpr
 metaToNix PackageMeta{..} = do
   let
-    grab name = maybe [] (\s -> [name `bindTo` str s])
+    grab name = maybe [] (\s -> [name `bindTo` mkStr s])
     homepage = grab "homepage" (map uriToText pmHomepage)
     description = grab "description" pmDescription
     author = grab "author" pmAuthor
     keywords = case pmKeywords of
       ks | null ks -> []
-         | otherwise -> ["keywords" `bindTo` mkList (toList (map str ks))]
+         | otherwise -> ["keywords" `bindTo` mkList (toList (map mkStr ks))]
   case homepage <> description <> keywords <> author of
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
@@ -203,7 +199,7 @@ packageMapToNix :: PackageMap a -> NExpr
 packageMapToNix pMap = do
   let
     -- Create a parameter set with no defaults given.
-    params = mkFormalSet $ [("callPackage", Nothing)]
+    params = mkParamset $ [("callPackage", Nothing)]
     -- Create the function body as a single set which contains all of the
     -- packages in the set as keys, and a callPackage to their paths as values.
     toBindings :: (PackageName, [SemVer]) -> [Binding NExpr]
@@ -256,7 +252,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       maybeIf (hasNamespacedDependency rPkg) "namespaces"
       ]
     -- None of these have defaults, so put them into pairs with Nothing.
-    funcParams = mkFormalSet $ map (\x -> (x, Nothing)) funcParams'
+    funcParams = mkParamset $ map (\x -> (x, Nothing)) funcParams'
     -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
     withNodePackages noneIfEmpty list = case list of
       [] -> if noneIfEmpty then Nothing else Just $ mkList []
@@ -266,10 +262,10 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
     PackageName name namespace = rpName
     args = mkNonRecSet $ catMaybes [
-      Just $ "name" `bindTo` str name,
-      Just $ "version" `bindTo` (str $ pshow rpVersion),
+      Just $ "name" `bindTo` mkStr name,
+      Just $ "version" `bindTo` (mkStr $ pshow rpVersion),
       Just $ "src" `bindTo` distInfoToNix (pnNamespace rpName) rpDistInfo,
-      bindTo "namespace" <$> map str namespace,
+      bindTo "namespace" <$> map mkStr namespace,
       bindTo "deps" <$> withNodePackages False deps,
       bindTo "peerDependencies" <$> withNodePackages True peerDeps,
       bindTo "optionalDependencies" <$> withNodePackages True optDeps,
@@ -298,16 +294,16 @@ defaultNodeJSVersion = "4_x"
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
 defaultParams :: Bool -- ^ Whether to use npm3 or not
-              -> Formals NExpr
+              -> Params NExpr
 defaultParams npm3 =
-  mkFormalSet [("pkgs", Just importNixpkgs),
-               ("npm3", Just $ mkBool npm3),
-               ("nodejsVersion", Just $ str defaultNodeJSVersion)]
+  mkParamset [("pkgs", Just importNixpkgs),
+              ("npm3", Just $ mkBool npm3),
+              ("nodejsVersion", Just $ mkStr defaultNodeJSVersion)]
 
 -- | When passing through arguments, we inherit these things.
 defaultInherits :: [Binding NExpr]
 defaultInherits = [Inherit Nothing $
-                   map mkSelector ["pkgs", "npm3", "nodejsVersion"]]
+                   map StaticKey ["pkgs", "npm3", "nodejsVersion"]]
 
 -- | The name of the subfolder within the output directory that
 -- contains node packages.
@@ -323,7 +319,7 @@ rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
   nodeLibArgs = defaultInherits <> ["self" `bindTo` mkSym "nodeLib"]
   lets = ["nodeLib" `bindTo` importWith False "./nodeLib" nodeLibArgs]
   genPackages = unsafeParseNix "nodeLib.generatePackages"
-  body = mkLet lets $ mkApp genPackages (mkNonRecSet [bindRootPath])
+  body = mkLets lets $ mkApp genPackages (mkNonRecSet [bindRootPath])
 
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
@@ -341,7 +337,7 @@ defaultNixExtending extName extensions npm3 = do
               mkList (map mkSym (H.keys extensions))]
     genPkgs = extName <> ".nodeLib.generatePackages"
     generatePackages = unsafeParseNix genPkgs
-    body = mkLet lets $ mkApp generatePackages (mkNonRecSet args)
+    body = mkLets lets $ mkApp generatePackages (mkNonRecSet args)
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
@@ -353,7 +349,7 @@ packageJsonDefaultNix outputPath npm3 = do
     libBind = "lib" `bindTo` importWith False outputPath defaultInherits
     callPkg = unsafeParseNix "lib.callPackage"
     call = callPkg `mkApp` mkPath "project.nix" `mkApp` mkNonRecSet []
-  mkFunction (defaultParams npm3) $ mkLet [libBind] call
+  mkFunction (defaultParams npm3) $ mkLets [libBind] call
 
 bindingsToMap :: [Binding t] -> Record t
 bindingsToMap = foldl' step mempty where
