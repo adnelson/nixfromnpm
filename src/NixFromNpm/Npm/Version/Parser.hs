@@ -12,7 +12,6 @@ import Data.Aeson
 import qualified Data.Aeson.Types as DAT
 
 import Data.SemVer
-import Data.SemVer.Parser
 import NixFromNpm.Npm.Version
 import NixFromNpm.Git.Types hiding (Tag)
 

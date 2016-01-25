@@ -19,7 +19,6 @@ import Shelly (shelly, cp_r)
 import System.Exit
 
 import Data.SemVer
-import Data.SemVer.Parser
 
 import qualified Paths_nixfromnpm
 import NixFromNpm.Common
