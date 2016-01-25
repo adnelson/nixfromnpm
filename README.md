@@ -55,7 +55,6 @@ Make sure you have nix installed, and `nixpkgs` is in your `NIX_PATH`
 environment variable. Then run:
 
 ```bash
-$ nixfromnpm/scripts/gen_npm3
 $ nix-env -f ./nixfromnpm -i
 ```
 
