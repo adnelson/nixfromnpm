@@ -31,7 +31,7 @@ import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
                silently)
 import Network.Curl
 import Network.URI (escapeURIString, isUnreserved)
-import Nix.Types
+import Nix.Expr
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.SemVer
 

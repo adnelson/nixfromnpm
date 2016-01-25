@@ -12,22 +12,27 @@
   # List of required native build inputs.
   neededNatives,
   # Self-reference for overriding purposes.
-  buildNodePackage
+  buildNodePackage,
 }:
 
 let
+  inherit (pkgs.lib) showVal;
   # The path within $out/lib to find a package. If the package does not
   # have a namespace, it will simply be in `node_modules`, and otherwise it
   # will appear in `node_modules/@namespace`.
-  modulePath = pkg: if pkg.namespace == null then "node_modules"
-                    else "node_modules/@${pkg.namespace}";
+  modulePath = pkg:
+    if !(builtins.hasAttr "namespace" pkg)
+    then throw ''
+      Package dependency does not appear to be a node package: ${showVal pkg}.
+      Use "buildInputs" or "propagatedBuildInputs" for non-node dependencies,
+      instead of "deps".
+    ''
+    else if pkg.namespace == null then "node_modules"
+    else "node_modules/@${pkg.namespace}";
 
   # The path to the package within its modulePath. Just appending the name
   # of the package.
   pathInModulePath = pkg: "${modulePath pkg}/${pkg.basicName}";
-
-  # The path to a package within an npm cache.
-  pathInNpmCache = pkg: ".npm/${pkg.basicName}/${pkg.version}";
 
   # By default, when checking we'll run npm test.
   defaultCheckPhase = ''
@@ -55,10 +60,14 @@ in
   # Source of the package; can be a tarball or a folder on the filesystem.
   src,
 
-  # The prefix to the name as it appears in `nix-env -q` and the nix store. By
-  # default, the name of nodejs interpreter e.g. "nodejs-<version>-${name}".
-  namePrefix ? "${nodejs.name}-" +
-               (if namespace == null then "" else "${namespace}-"),
+  # The suffix to the name as it appears in `nix-env -q` and the nix store. By
+  # default, the name of nodejs interpreter e.g:
+  # "<package name>-<package version>-nodejs-<nodejs version>"
+  nameSuffix ? "-${nodejs.name}",
+
+  # If there's a namespace, by default it will be prepended to the package
+  # name. Otherwise, a prefix can be given explicitly.
+  namePrefix ? (if namespace == null then "" else "${namespace}-"),
 
   # List or attribute set of (runtime) dependencies.
   deps ? {},
@@ -108,6 +117,12 @@ in
   # Doc for details: https://nixos.org/wiki/NixPkgs_Standard_Environment.
   dontStrip ? true, dontPatchELF ? true,
 
+  # Optional attributes to pass through to downstream derivations.
+  passthru ? {},
+
+  # A set of dependencies to patch.
+  patchDependencies ? {},
+
   # Any remaining flags are passed through to mkDerivation.
   ...
 } @ args:
@@ -136,11 +151,15 @@ let
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues getVersion flatten remove concatStringsSep;
 
+  dependencyTypes = ["dependencies" "devDependencies" "peerDependencies"
+                     "optionalDependencies"];
+
+
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
-  attrsToRemove = ["deps" "resolvedDeps" "optionalDependencies" "flags"
-                   "devDependencies" "os" "skipOptionalDependencies"
-                   "doCheck" "installDevDependencies" "version" "namespace"];
+  attrsToRemove = ["deps" "resolvedDeps" "flags" "os" "skipOptionalDependencies"
+                   "passthru" "doCheck" "installDevDependencies" "version"
+                   "namespace" "patchDependencies"] ++ dependencyTypes;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
@@ -174,7 +193,9 @@ let
         # All required node modules, without already resolved dependencies
         # Also override with already resolved dependencies
         requiredDeps = mapAttrs (name: dep:
-          dep.override {resolvedDeps = resolvedDeps // { "${name}" = self; };}
+          dep.overrideNodePackage {
+            resolvedDeps = resolvedDeps // {"${name}" = self;};
+          }
         ) (filterAttrs filterFunc
             (removeAttrs attrDeps (attrNames resolvedDeps)));
 
@@ -233,6 +254,8 @@ let
       "--userconfig=/dev/null"
       # This flag is used for packages which link against the node headers.
       "--nodedir=${sources}"
+      # This will tell npm not to run pre/post publish hooks
+      # "--ignore-scripts"
       ] ++
       # Use the --production flag if we're not running tests; this will make
       # npm skip the dev dependencies.
@@ -258,6 +281,28 @@ let
 
       # We do not handle shrinkwraps yet
       rm npm-shrinkwrap.json 2>/dev/null || true
+
+      ${if patchDependencies == {} then "" else ''
+        cat <<EOF | python
+        import json
+        with open("package.json") as f:
+            package_json = json.load(f)
+        ${flip concatMapStrings (attrNames patchDependencies) (name: let
+            version = patchDependencies.${name};
+          in flip concatMapStrings dependencyTypes (depType: ''
+            if "${name}" in package_json.setdefault("${depType}", {}):
+                ${if version == null then ''
+                    print("removing ${name} from ${depType}")
+                    package_json["${depType}"].pop("${name}", None)
+                  '' else ''
+                    print("Patching ${depType} ${name} to version ${version}")
+                    package_json["dependencies"]["${name}"] = "${version}"
+                  ''}
+            ''))}
+        with open("package.json", "w") as f:
+            f.write(json.dumps(package_json))
+        EOF
+      ''}
 
       runHook postPatch
     '';
@@ -335,9 +380,6 @@ let
 
       # Remove the node_modules subfolder from there, and instead put things
       # in $PWD/node_modules into that folder.
-      # rm -rf $out/lib/${pathInModulePath self}/node_modules
-      # cp -r node_modules $out/lib/${pathInModulePath self}/node_modules
-
       if [ -e "$out/lib/${pathInModulePath self}/man" ]; then
         echo "Linking manpages..."
         mkdir -p $out/share
@@ -401,11 +443,8 @@ let
           cd $TMPDIR/$UNIQNAME
           eval "$configurePhase"
         )
-        linkNodeModules() {
-          ln -sv $TMPDIR/$UNIQNAME/node_modules node_modules
-        }
         echo "Installed dependencies in $TMPDIR/$UNIQNAME."
-        echo 'Run `linkNodeModules` to create a symlink to the node_modules.'
+        export NODE_PATH=$TMPDIR/$UNIQNAME/node_modules
         runHook postShellHook
       '';
 
@@ -418,7 +457,7 @@ let
 
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
-      passthru = {
+      passthru = (passthru // {
         inherit uniqueName namespace version;
         # The basic name is the name without namespace or version.
         basicName = name;
@@ -439,12 +478,14 @@ let
         # defined, or it will error.
         env = buildNodePackage (args // {installDevDependencies = true;});
 
-        # An 'override' attribute, which will call `buildNodePackage` with the
-        # given arguments overridden.
-        override = newArgs: buildNodePackage (args // newArgs);
-      } // (args.passthru or {});
+        # An 'overrideNodePackage' attribute, which will call
+        # `buildNodePackage` with the given arguments overridden.
+        # We don't use the name `override` because this will get stomped on
+        # if the derivation is the result of a `callPackage` application.
+        overrideNodePackage = newArgs: buildNodePackage (args // newArgs);
+      });
     } // (removeAttrs args attrsToRemove) // {
-      name = "${namePrefix}${name}-${version}";
+      name = "${namePrefix}${name}-${version}${nameSuffix}";
 
       # Pass the required dependencies and
       propagatedBuildInputs = propagatedBuildInputs ++

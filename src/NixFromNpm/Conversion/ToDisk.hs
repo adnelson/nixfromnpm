@@ -22,7 +22,7 @@ import Data.SemVer
 
 import qualified Paths_nixfromnpm
 import NixFromNpm.Common
-import Nix.Types
+import Nix.Expr
 import Nix.Parser
 import Nix.Pretty (prettyNix)
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),

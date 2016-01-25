@@ -16,7 +16,7 @@ import Control.Monad.Trans.Control
 import Control.Exception.Lifted
 import qualified Paths_nixfromnpm as Paths
 
-import qualified Nix.Types as Nix
+import qualified Nix.Expr as Nix
 
 -- | Take a function that takes a string path and returns something, and
 -- turn it into a function that operates in any MonadIO and takes a FilePath.
