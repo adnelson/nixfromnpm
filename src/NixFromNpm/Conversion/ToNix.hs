@@ -88,8 +88,8 @@ toSelectorNoVersion (PackageName name mNamespace) = do
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
 toNixExpr name (Resolved semver) = toDepExpr name semver
-toNixExpr name (Broken reason) = mkApp (mkSym "brokenPackage") $ mkNonRecSet
-  ["name" `bindTo` mkStr (pshow name), "reason" `bindTo` mkStr (pshow reason)]
+toNixExpr name (Broken reason) = "brokenPackage" @@ mkNonRecSet
+  ["name" $= mkStr (pshow name), "reason" $= mkStr (pshow reason)]
 
 -- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
@@ -121,8 +121,8 @@ distInfoToNix :: Maybe Name -- `Just` if we are fetching from a namespace.
 distInfoToNix _ Nothing = Nix.mkPath False "./."
 distInfoToNix maybeNamespace (Just DistInfo{..}) = do
   let fetchurl = case maybeNamespace of
-        Nothing -> unsafeParseNix "pkgs.fetchurl"
-        Just _ -> mkSym "fetchUrlWithHeaders"
+        Nothing -> "pkgs" !. "fetchurl"
+        Just _ -> "fetchUrlWithHeaders"
       (algo, hash) = case diShasum of
         SHA1 hash' -> ("sha1", hash')
         SHA256 hash' -> ("sha256", hash')
@@ -133,22 +133,20 @@ distInfoToNix maybeNamespace (Just DistInfo{..}) = do
             binder = NamedVar [StaticKey "headers", StaticKey "Authorization"]
             auth = pshow $ concat ["Bearer ${namespaceTokens.", namespace, "}"]
           [binder $ unsafeParseNix auth]
-      bindings =
-        ["url" `bindTo` mkStr diUrl, algo `bindTo` mkStr hash]
-        <> authBinding
-  fetchurl `mkApp` mkNonRecSet bindings
+      bindings = ["url" $= mkStr diUrl, algo $= mkStr hash] <> authBinding
+  fetchurl @@ mkNonRecSet bindings
 
 -- | Converts package meta to a nix expression, if it exists.
 metaToNix :: PackageMeta -> Maybe NExpr
 metaToNix PackageMeta{..} = do
   let
-    grab name = maybe [] (\s -> [name `bindTo` mkStr s])
+    grab name = maybe [] (\s -> [name $= mkStr s])
     homepage = grab "homepage" (map uriToText pmHomepage)
     description = grab "description" pmDescription
     author = grab "author" pmAuthor
     keywords = case pmKeywords of
       ks | null ks -> []
-         | otherwise -> ["keywords" `bindTo` mkList (toList (map mkStr ks))]
+         | otherwise -> ["keywords" $= mkList (toList (map mkStr ks))]
   case homepage <> description <> keywords <> author of
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
@@ -211,7 +209,7 @@ packageMapToNix pMap = do
       -- Make a path expression relative to the nodePackages folder
       path version = mkPath $ toRelPath pkgName version
       -- Equiv. to `callPackage path {}`
-      call v = mkSym "callPackage" `mkApp` path v `mkApp` mkNonRecSet []
+      call v = "callPackage" @@ path v @@ mkNonRecSet []
       toBinding :: SemVer -> Binding NExpr
       toBinding version = toSelector pkgName version `NamedVar` call version
       bindings :: [Binding NExpr]
@@ -256,15 +254,15 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
     -- Wrap an list expression in a `with nodePackages;` syntax if non-empty.
     withNodePackages noneIfEmpty list = case list of
       [] -> if noneIfEmpty then Nothing else Just $ mkList []
-      _ -> Just $ mkWith (mkSym "nodePackages") $ mkList list
+      _ -> Just $ mkWith "nodePackages" $ mkList list
     devDepBinding = case devDeps of
         Nothing -> Nothing
         Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
     PackageName name namespace = rpName
     args = mkNonRecSet $ catMaybes [
-      Just $ "name" `bindTo` mkStr name,
-      Just $ "version" `bindTo` (mkStr $ pshow rpVersion),
-      Just $ "src" `bindTo` distInfoToNix (pnNamespace rpName) rpDistInfo,
+      Just $ "name" $= mkStr name,
+      Just $ "version" $= (mkStr $ pshow rpVersion),
+      Just $ "src" $= distInfoToNix (pnNamespace rpName) rpDistInfo,
       bindTo "namespace" <$> map mkStr namespace,
       bindTo "deps" <$> withNodePackages False deps,
       bindTo "peerDependencies" <$> withNodePackages True peerDeps,
@@ -272,7 +270,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       devDepBinding,
       bindTo "meta" <$> metaToNix rpMeta
       ]
-    body = mkSym "buildNodePackage" `mkApp` args
+    body = "buildNodePackage" @@ args
 
 -- | Convenience function to generate an `import /path {args}` expression.
 importWith :: Bool -- ^ True if the path is from the env, e.g. <nixpkgs>
@@ -280,30 +278,29 @@ importWith :: Bool -- ^ True if the path is from the env, e.g. <nixpkgs>
            -> [Binding NExpr] -- ^ Arguments to pass
            -> NExpr -- ^ The resulting nix expression
 importWith isEnv path args = do
-  mkSym "import" `mkApp` Nix.mkPath isEnv (pathToString path)
-                 `mkApp` mkNonRecSet args
+  "import" @@ Nix.mkPath isEnv (pathToString path) @@ mkNonRecSet args
 
 -- | We use this a few times: `import <nixpkgs> {}`
 importNixpkgs :: NExpr
 importNixpkgs = importWith True "nixpkgs" []
 
--- | The default version of nodejs we are using.
-defaultNodeJSVersion :: Text
-defaultNodeJSVersion = "4_x"
+-- | The default version of nodejs we are using; this should correspond
+-- to a key in the nixpkgs set we're importing.
+defaultNodeJS :: Text
+defaultNodeJS = "nodejs-4_x"
 
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
 defaultParams :: Bool -- ^ Whether to use npm3 or not
               -> Params NExpr
-defaultParams npm3 =
+defaultParams npm3 = do
   mkParamset [("pkgs", Just importNixpkgs),
               ("npm3", Just $ mkBool npm3),
-              ("nodejsVersion", Just $ mkStr defaultNodeJSVersion)]
+              ("nodejs", Just $ "pkgs" !. defaultNodeJS)]
 
 -- | When passing through arguments, we inherit these things.
 defaultInherits :: [Binding NExpr]
-defaultInherits = [Inherit Nothing $
-                   map StaticKey ["pkgs", "npm3", "nodejsVersion"]]
+defaultInherits = [inherit ["pkgs", "npm3", "nodejs"]]
 
 -- | The name of the subfolder within the output directory that
 -- contains node packages.
@@ -311,15 +308,15 @@ nodePackagesDir :: FilePath
 nodePackagesDir = "nodePackages"
 
 bindRootPath :: Binding NExpr
-bindRootPath = "nodePackagesPath" `bindTo` mkPath ("./" </> nodePackagesDir)
+bindRootPath = "nodePackagesPath" $= mkPath ("./" </> nodePackagesDir)
 
 -- | The root-level default.nix file, which does not have any extensions.
 rootDefaultNix :: Bool -> NExpr
 rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
-  nodeLibArgs = defaultInherits <> ["self" `bindTo` mkSym "nodeLib"]
-  lets = ["nodeLib" `bindTo` importWith False "./nodeLib" nodeLibArgs]
+  nodeLibArgs = defaultInherits <> ["self" $= "nodeLib"]
+  lets = ["nodeLib" $= importWith False "./nodeLib" nodeLibArgs]
   genPackages = unsafeParseNix "nodeLib.generatePackages"
-  body = mkLets lets $ mkApp genPackages (mkNonRecSet [bindRootPath])
+  body = mkLets lets $ genPackages @@ (mkNonRecSet [bindRootPath])
 
 -- | Creates the `default.nix` file that is the top-level expression we are
 -- generating.
@@ -331,13 +328,13 @@ defaultNixExtending extName extensions npm3 = do
   mkFunction (defaultParams npm3) body where
     -- Map over the expression map, creating a binding for each pair.
     lets = flip map (H.toList extensions) $ \(name, path) -> do
-      -- Equiv. to `name = import /path {inherit pkgs nodejsVersion;}`
-      name `bindTo` importWith False path defaultInherits
-    args = [bindRootPath, "extensions" `bindTo`
-              mkList (map mkSym (H.keys extensions))]
-    genPkgs = extName <> ".nodeLib.generatePackages"
-    generatePackages = unsafeParseNix genPkgs
-    body = mkLets lets $ mkApp generatePackages (mkNonRecSet args)
+      let bindings = defaultInherits <> ["self" $= "nodeLib"]
+      -- Equiv. to `name = import /path {inherit pkgs nodejs; self = nodeLib;}`
+      name $= importWith False path bindings
+    args = [bindRootPath,
+            "extensions" $= mkList (map mkSym (H.keys extensions))]
+    generatePackages = mkSym extName !. "nodeLib" !. "generatePackages"
+    body = mkLets lets $ generatePackages @@ mkNonRecSet args
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
@@ -346,9 +343,9 @@ packageJsonDefaultNix :: FilePath -- ^ Path to the output directory.
                       -> NExpr
 packageJsonDefaultNix outputPath npm3 = do
   let
-    libBind = "lib" `bindTo` importWith False outputPath defaultInherits
-    callPkg = unsafeParseNix "lib.callPackage"
-    call = callPkg `mkApp` mkPath "project.nix" `mkApp` mkNonRecSet []
+    libBind = "lib" $= importWith False outputPath defaultInherits
+    callPkg = "lib" !. "callPackage"
+    call = callPkg @@ mkPath "project.nix" @@ mkNonRecSet []
   mkFunction (defaultParams npm3) $ mkLets [libBind] call
 
 bindingsToMap :: [Binding t] -> Record t

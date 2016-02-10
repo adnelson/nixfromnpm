@@ -3,8 +3,6 @@
   stdenv,
   # System packages.
   pkgs,
-  # Lets us run a command.
-  runCommand,
   # Derivation for nodejs and npm.
   nodejs,
   # Which version of npm to use.
@@ -13,6 +11,9 @@
   neededNatives,
   # Self-reference for overriding purposes.
   buildNodePackage,
+  # Collection of nodejs source files, used by packages that link against
+  # the node C libraries.
+  nodejsSources
 }:
 
 let
@@ -164,11 +165,6 @@ let
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
   self = let
-    sources = runCommand "node-sources" {} ''
-      tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
-      mv $(find . -type d -mindepth 1 -maxdepth 1) $out
-    '';
-
     platforms = if os == [] then nodejs.meta.platforms else
       fold (entry: platforms:
         let
@@ -184,6 +180,9 @@ let
               platforms ++ (intersectLists filterPlatforms nodejs.meta.platforms)
       ) [] os;
 
+
+    strict = x: builtins.seq x x;
+
     toAttrSet = obj: if isAttrs obj then obj else
       (listToAttrs (map (x: nameValuePair x.name x) obj));
 
@@ -192,55 +191,55 @@ let
       in rec {
         # All required node modules, without already resolved dependencies
         # Also override with already resolved dependencies
-        requiredDeps = mapAttrs (name: dep:
+        requiredDeps = strict (mapAttrs (name: dep:
           dep.overrideNodePackage {
             resolvedDeps = resolvedDeps // {"${name}" = self;};
           }
         ) (filterAttrs filterFunc
-            (removeAttrs attrDeps (attrNames resolvedDeps)));
+            (removeAttrs attrDeps (attrNames resolvedDeps))));
 
         # Recursive dependencies that we want to avoid with shim creation
-        recursiveDeps = filterAttrs filterFunc
-                          (removeAttrs attrDeps (attrNames requiredDeps));
+        recursiveDeps = strict (filterAttrs filterFunc
+                          (removeAttrs attrDeps (attrNames requiredDeps)));
       };
 
     # Filter out self-referential dependencies.
-    _dependencies = mapDependencies deps (name: dep: dep.uniqueName != uniqueName);
+    _dependencies = strict (mapDependencies deps (name: dep: dep.uniqueName != uniqueName));
 
     # Filter out self-referential peer dependencies.
-    _peerDependencies = mapDependencies peerDependencies (name: dep:
-      dep.uniqueName != uniqueName);
+    _peerDependencies = strict (mapDependencies peerDependencies (name: dep:
+      dep.uniqueName != uniqueName));
 
     # Filter out any optional dependencies which don't build correctly.
-    _optionalDependencies = mapDependencies optionalDependencies (name: dep:
+    _optionalDependencies = strict (mapDependencies optionalDependencies (name: dep:
       (builtins.tryEval dep).success &&
       !(elem dep.basicName skipOptionalDependencies)
-    );
+    ));
 
     # Grab development dependencies if doCheck is true.
     _devDependencies = let
         filterFunc = name: dep: dep.uniqueName != uniqueName;
         depSet = if doCheck then devDependencies else [];
       in
-      mapDependencies depSet filterFunc;
+      strict (mapDependencies depSet filterFunc);
 
     # Depencencies we need to propagate (all except devDependencies)
-    propagatedDependencies =
+    propagatedDependencies = strict (
       _dependencies.requiredDeps //
       _optionalDependencies.requiredDeps //
-      _peerDependencies.requiredDeps;
+      _peerDependencies.requiredDeps);
 
     # Required dependencies are those that we haven't filtered yet.
     requiredDependencies =
-      _devDependencies.requiredDeps // propagatedDependencies;
+      strict (_devDependencies.requiredDeps // propagatedDependencies);
 
     # Recursive dependencies. These are turned into "shims" or fake packages,
     # which allows us to have dependency cycles, something npm allows.
-    recursiveDependencies =
+    recursiveDependencies = strict (
       _devDependencies.recursiveDeps //
       _dependencies.recursiveDeps //
       _optionalDependencies.recursiveDeps //
-      _peerDependencies.recursiveDeps;
+      _peerDependencies.recursiveDeps);
 
     # Flags that we will pass to `npm install`.
     npmFlags = concatStringsSep " " ([
@@ -253,7 +252,7 @@ let
       # This will disable any user-level npm configuration.
       "--userconfig=/dev/null"
       # This flag is used for packages which link against the node headers.
-      "--nodedir=${sources}"
+      "--nodedir=${nodejsSources}"
       # This will tell npm not to run pre/post publish hooks
       # "--ignore-scripts"
       ] ++
@@ -318,25 +317,45 @@ let
           link = dep: ''
             if ! [[ -e ${pathInModulePath dep} ]]; then
               ${linkCmd dep} ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
+              if [[ -d ${dep}/bin ]]; then
+                find -L ${dep}/bin -maxdepth 1 -type f -executable \
+                  | while read exec_file; do
+                    echo "Symlinking $exec_file binary to node_modules/.bin"
+                    mkdir -p node_modules/.bin
+                    ln -s $exec_file node_modules/.bin/$(basename $exec_file)
+                done
+              fi
             fi
           '';
         in
-        flip concatMapStrings (attrValues requiredDependencies) (dep: ''
+        flip concatMapStrings (attrValues requiredDependencies) (dep:
+        # Create symlinks (or copies) of all of the required dependencies.
+        ''
           mkdir -p ${modulePath dep}
           ${link dep}
           ${concatMapStrings link (attrValues dep.peerDependencies)}
         '')}
-      # Create shims for recursive dependenceies
-      ${concatMapStrings (dep: ''
-        echo "Creating shim for recursive dependency ${dep.uniqueName}"
-        mkdir -pv ${pathInModulePath dep}
-        cat > ${pathInModulePath dep}/package.json <<EOF
-        {
-            "name": "${dep.uniqueName}",
-            "version": "${dep.version}"
-        }
+
+      # Remove recursive dependencies from package.json
+      ${if recursiveDependencies == {} then "" else ''
+        python <<EOF
+        import json
+        with open("package.json") as f:
+            package_json = json.load(f)
+        dep_names = [${concatStringsSep ", "
+                       (map (d: "'${d.packageJsonName}'")
+                         (attrValues recursiveDependencies))}]
+        for name in dep_names:
+            print("Removing recursive dependency on {} from package.json"
+                  .format(name))
+            for k in ("dependencies", "devDependencies", "peerDependencies",
+                      "optionalDependencies"):
+                package_json[k] = package_json.setdefault(k, {})
+                package_json[k].pop(name, None)
+        with open("package.json", "w") as f:
+            f.write(json.dumps(package_json))
         EOF
-      '') (attrValues recursiveDependencies)}
+        ''}
 
       runHook postConfigure
     '';
@@ -366,12 +385,6 @@ let
     installPhase = ''
       runHook preInstall
 
-      # Remove shims
-      ${concatMapStrings (dep: ''
-        echo "Removing shim for recursive dependency ${dep.uniqueName}"
-        rm -rvf ${pathInModulePath dep}/package.json
-      '') (attrValues recursiveDependencies)}
-
       # Install the package that we just built.
       mkdir -p $out/lib/${modulePath self}
 
@@ -399,14 +412,6 @@ let
 
       # Install binaries using the `bin` object in the package.json
       python ${./installBinaries.py}
-
-      # Install binaries and patch shebangs. These are always found in
-      # node_modules/.bin, regardless of a package namespace.
-      mv node_modules/.bin $out/lib/node_modules 2>/dev/null || true
-      if [ -d "$out/lib/node_modules/.bin" ]; then
-        ln -sv $out/lib/node_modules/.bin $out/bin
-        patchShebangs $out/lib/node_modules/.bin
-      fi
 
       runHook postInstall
     '';
@@ -444,6 +449,7 @@ let
           eval "$configurePhase"
         )
         echo "Installed dependencies in $TMPDIR/$UNIQNAME."
+        export PATH=$TMPDIR/$UNIQNAME/node_modules/.bin:$PATH
         export NODE_PATH=$TMPDIR/$UNIQNAME/node_modules
         runHook postShellHook
       '';
@@ -458,7 +464,7 @@ let
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
       passthru = (passthru // {
-        inherit uniqueName namespace version;
+        inherit uniqueName packageJsonName namespace version;
         # The basic name is the name without namespace or version.
         basicName = name;
         peerDependencies = _peerDependencies.requiredDeps;
