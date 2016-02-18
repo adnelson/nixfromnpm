@@ -1,0 +1,6 @@
+[submodule "hnix"]
+	path = hnix
+	url = https://github.com/jwiegley/hnix
+[submodule "semver-range"]
+	path = semver-range
+	url = https://github.com/adnelson/semver-range

@@ -7,6 +7,7 @@
 module NixFromNpm.Conversion.ToNix where
 
 import qualified Prelude as P
+import Data.Fix (Fix(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 import Data.Text (Text, replace)
@@ -62,9 +63,8 @@ toDepExpr (PackageName name mNamespace) (SemVer a b c tags) = do
       ident = fixName name <> "_" <> suffix
   case mNamespace of
     Nothing -> mkSym ident
-    Just namespace -> do
-      -- Parse out the expression "namespaces.namespace.pkgname"
-      unsafeParseNix $ joinBy "." ["namespaces", namespace, ident]
+    -- If there's a namespace, call "namespaces.namespace.pkgname"
+    Just namespace -> mkDots "namespaces" [namespace, ident]
 
 -- | Converts a package name and semver into an Nix selector, which can
 -- be used in a binding. This is very similar to @toDepExpr@, but it returns
@@ -109,12 +109,6 @@ toRelPath (PackageName name mNamespace) version = do
     -- Namespaced: package '@foo/bar@1.2.3' -> './@foo/bar/1.2.3.nix'
     Just nspace -> fromText ("@" <> nspace) </> subPath
 
--- | Parse a nix string unsafely (as in, assuming it parses correctly)
-unsafeParseNix :: Text -> NExpr
-unsafeParseNix source = case parseNixText source of
-  Success expr -> expr
-  _ -> fatalC ["Expected string '", source, "' to be valid nix."]
-
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe Name -- `Just` if we are fetching from a namespace.
               -> Maybe DistInfo -> NExpr
@@ -130,9 +124,10 @@ distInfoToNix maybeNamespace (Just DistInfo{..}) = do
         Nothing -> []
         Just namespace -> do
           let -- Equivalent to "headers.Authorization ="
-            binder = NamedVar [StaticKey "headers", StaticKey "Authorization"]
-            auth = pshow $ concat ["Bearer ${namespaceTokens.", namespace, "}"]
-          [binder $ unsafeParseNix auth]
+            binder = NamedVar ["headers", "Authorization"]
+            token = "namespaceTokens" !. namespace
+            auth = [Plain "Bearer ", Antiquoted token]
+          [binder $ Fix $ NStr $ DoubleQuoted auth]
       bindings = ["url" $= mkStr diUrl, algo $= mkStr hash] <> authBinding
   fetchurl @@ mkNonRecSet bindings
 
@@ -313,9 +308,11 @@ bindRootPath = "nodePackagesPath" $= mkPath ("./" </> nodePackagesDir)
 -- | The root-level default.nix file, which does not have any extensions.
 rootDefaultNix :: Bool -> NExpr
 rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
-  nodeLibArgs = defaultInherits <> ["self" $= "nodeLib"]
-  lets = ["nodeLib" $= importWith False "./nodeLib" nodeLibArgs]
-  genPackages = unsafeParseNix "nodeLib.generatePackages"
+  lets = [
+      "mkNodeLib" $= importWith False "./nodeLib" ["self" $= "mkNodeLib"]
+    , "nodeLib" $= ("mkNodeLib" @@ mkNonRecSet defaultInherits)
+    ]
+  genPackages = "nodeLib" !. "generatePackages"
   body = mkLets lets $ genPackages @@ (mkNonRecSet [bindRootPath])
 
 -- | Creates the `default.nix` file that is the top-level expression we are

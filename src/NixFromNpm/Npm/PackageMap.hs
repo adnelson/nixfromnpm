@@ -17,6 +17,9 @@ data PackageName = PackageName {
   pnNamespace :: !(Maybe Name)
   } deriving (Eq, Ord)
 
+instance IsString PackageName where
+  fromString s = PackageName (pack s) Nothing
+
 instance Show PackageName where
   show (PackageName name Nothing) = unpack name
   show (PackageName name (Just namespace)) =
