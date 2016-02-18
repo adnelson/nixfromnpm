@@ -1,5 +1,5 @@
 name:                nixfromnpm
-version:             0.9.0
+version:             0.10.0
 synopsis:            Generate nix expressions from npm packages.
 description:
   Given an npm package name and one or more npm repositories, will dump out a
@@ -71,5 +71,6 @@ executable nixfromnpm
                      , unix
                      , ansi-terminal
                      , semver-range
+                     , data-fix
   hs-source-dirs:      src
   default-language:    Haskell2010

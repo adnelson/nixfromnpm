@@ -41,14 +41,12 @@ or repo.
 
 ### Installation
 
-Clone the `nixfromnpm` repo, and two repos containing dependencies not
-yet released in `nixpkgs`. Note that all of these repos need to share
-a parent directory.
+Clone the `nixfromnpm` repo. This repo includes as submodules other repos containing dependencies not yet released in `nixpkgs`, so we also need to initialize these submodules.
 
 ```bash
 $ git clone https://github.com/adnelson/nixfromnpm
-$ git clone https://github.com/adnelson/semver-range
-$ git clone https://github.com/jwiegley/hnix
+$ cd nixfromnpm
+$ git submodule update --init --recursive
 ```
 
 Make sure you have nix installed, and `nixpkgs` is in your `NIX_PATH`
@@ -85,6 +83,8 @@ $ git clone https://github.com/adnelson/nix-node-packages
 $ nixfromnpm -o nix-node-packages -p 'the-package-I-need%the-version-I-need'
 $ nix-build nix-node-packages -A nodePackages.the-package-I-need_the-version-I-need
 ```
+
+Using a fresh folder might be preferable if code size is an issue.
 
 #### Generating an expression for a package
 
@@ -234,6 +234,22 @@ By default, `nixfromnpm` will discover all existing packages in the
 specified output directory (provided via tha `-o` flag). However, if
 you would like to generate all of these from scratch, you can disable
 caching with `--no-cache`.
+
+#### Troubleshooting a package that doesn't build
+
+There are any number of reasons why a package might not build. Some of
+the most common ones are:
+
+* The `nixfromnpm` tool wasn't able to generate the definition of one of the package's dependencies. It will insert in the `brokenPackage` function, which, as might be anticipated, never builds. Looking at the call to `brokenPackage` will tell you why it couldn't build it. In my experience, this is because `nixfromnpm`'s version range checker is not completely up to spec, and it's unable to find a version that satisfies the bounds given by a `package.json`. If this is the case, the easiest way to fix it is to:
+  * See what version range `nixfromnpm` failed to resolve. E.g. `foo@>=1.2.3-bar <2.3.4-baz.qux`.
+  * Use `npm` to manually build the package at the given version bounds. E g. `npm install foo@>=1.2.3-bar <2.3.4-baz.qux`.
+  * See what version it ends up building. E.g. `foo@1.2.3-xyz`.
+  * Call `nixfromnpm` on that version. E.g. `nixfromnpm -o /path/to/nix-node-packages -p 'foo%1.2.3-xyz'`.
+  * Replace the call to `brokenPackage` with `foo_1-2-3-xyz`.
+* The build fails with `npm` complaining about HTTP errors. This is usually caused by a dependency that wasn't satified, likely because `nixfromnpm` calculated the wrong dependency. In this case, use steps similar to the above to find out what the actual dependency should be, and modify the package definition to include the correct one.
+* A package build script is attempting to do some hacky bullshit like modifying its dependencies. This, of course, is not kosher in the `nix` view of things. In this case, you'll probably want to `nix-shell` into the package and see what it's trying to do. Figure out how to stop it from doing these things, and supply `prePatch` or `postPatch` steps to apply those changes.
+
+The good news is that if you patch or otherwise fix a broken package, it will not be overwritten by subsequent invocations of `nixfromnpm` (*although*, I highly recommend keeping your expressions in source control in case bad things happen!).
 
 ### Contributions
 

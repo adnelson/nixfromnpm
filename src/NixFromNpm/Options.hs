@@ -71,7 +71,7 @@ data RawOptions = RawOptions {
   -- ^ Fetch the top `n` npm packages by popularity.
   roAllTop :: Bool,
   -- ^ If true, fetch all the top packages we have defined.
-  roNoNpm3 :: Bool,
+  roNpm3 :: Bool,
   -- ^ If true, do not default to npm3 in generated nix files.
   roOverwriteNixLibs :: Bool
   -- ^ If true, allow existing nix libraries in output to be overridden.
@@ -211,7 +211,7 @@ validateOptions opts = do
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix opts,
     nfnoRealTime = not $ roNoRealTime opts,
-    nfnoNpm3 = not $ roNoNpm3 opts,
+    nfnoNpm3 = roNpm3 opts,
     nfnoOverwriteNixLibs = roOverwriteNixLibs opts
     }
   where
@@ -254,7 +254,7 @@ parseOptions = RawOptions
     <*> noRealTime
     <*> topN
     <*> allTop
-    <*> noNpm3
+    <*> npm3
     <*> overwriteNixLibs
   where
     packageNames = many $ textOption $ short 'p'
@@ -331,8 +331,8 @@ parseOptions = RawOptions
                             <> metavar "N"
                             <> help "Fetch the top N packages by popularity."))
            <|> pure Nothing
-    noNpm3 = switch (long "no-npm3"
-                       <> help "Do not use npm3 by default in generated nix \
+    npm3 = switch (long "npm3"
+                       <> help "Use npm3 by default in generated nix \
                                \expressions.")
     overwriteNixLibs = switch (long "overwrite-nix-libs"
                        <> help "Overwrite existing nix libraries in output.")

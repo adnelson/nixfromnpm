@@ -1,6 +1,4 @@
 {
-  # Provides the mkDerivation function.
-  stdenv,
   # System packages.
   pkgs,
   # Derivation for nodejs and npm.
@@ -11,13 +9,19 @@
   neededNatives,
   # Self-reference for overriding purposes.
   buildNodePackage,
-  # Collection of nodejs source files, used by packages that link against
-  # the node C libraries.
-  nodejsSources
 }:
 
 let
+  inherit (pkgs) stdenv;
   inherit (pkgs.lib) showVal;
+  # This expression builds the raw C headers and source files for the base
+  # node.js installation. Node packages which use the C API for node need to
+  # link against these files and use the headers.
+  nodejsSources = pkgs.runCommand "node-sources" {} ''
+    tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
+    mv $(find . -type d -mindepth 1 -maxdepth 1) $out
+  '';
+
   # The path within $out/lib to find a package. If the package does not
   # have a namespace, it will simply be in `node_modules`, and otherwise it
   # will appear in `node_modules/@namespace`.

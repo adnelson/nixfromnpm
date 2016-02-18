@@ -314,7 +314,16 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages
     initializeOutput
-    forM nfnoPkgNames $ \(name, range) -> do
+    packageNames <- case nfnoNpm3 of
+      -- If we're building with npm3, then we'll need to have npm3 in the set.
+      -- Check if we already have it defined, and add it if we don't.
+      True -> H.lookup "npm" <$> gets resolved >>= \case
+        Just _ -> return nfnoPkgNames
+        Nothing -> do
+          warn "No npm package detected; adding npm to packages to build."
+          return $ ("npm", SemVerRange anyVersion) : nfnoPkgNames
+      False -> return nfnoPkgNames
+    forM packageNames $ \(name, range) -> do
       _resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
           warns ["Failed to build ", pshow name, "@", pshow range,
