@@ -22,7 +22,7 @@ in
 mkDerivation {
   inherit src;
   pname = "nixfromnpm";
-  version = "0.10.1";
+  version = "0.10.2";
   isExecutable = true;
   buildDepends = [
     aeson base bytestring classy-prelude containers data-default
