@@ -1,5 +1,5 @@
 name:                nixfromnpm
-version:             0.10.0
+version:             0.10.1
 synopsis:            Generate nix expressions from npm packages.
 description:
   Given an npm package name and one or more npm repositories, will dump out a
