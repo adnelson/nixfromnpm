@@ -41,12 +41,11 @@ or repo.
 
 ### Installation
 
-Clone the `nixfromnpm` repo. This repo includes as submodules other repos containing dependencies not yet released in `nixpkgs`, so we also need to initialize these submodules.
+Clone the `nixfromnpm` repo.
 
 ```bash
 $ git clone https://github.com/adnelson/nixfromnpm
 $ cd nixfromnpm
-$ git submodule update --init --recursive
 ```
 
 Make sure you have nix installed, and `nixpkgs` is in your `NIX_PATH`
