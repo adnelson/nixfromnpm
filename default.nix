@@ -1,3 +1,9 @@
+# Expression to build nixfromnpm, wrapping the 'project.nix' which
+# defines nixfromnpm itself. Note that we define custom expressions
+# for hnix and semver-range, fixed at a particular version, so that we
+# can ensure future changes to these packages will not break the
+# build.
+
 { pkgs ? import <nixpkgs> {}, compiler ? "ghc7102" }:
 let
   haskellPackages = pkgs.pkgs.haskell.packages."${compiler}";

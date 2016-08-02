@@ -163,9 +163,7 @@ initializeOutput = do
       unlessExists path action = asks nfsOverwriteNixLibs >>= \case
         True -> action
         False -> doesFileExist path >>= \case
-          True -> do
-            warns [pathToText path, " already exists. Use ",
-                   "--overwrite-nix-libs option to overwrite."]
+          True -> return ()
           False -> action
   putStrsLn ["Initializing  ", pathToText outputPath]
   createDirectoryIfMissing outputPath
