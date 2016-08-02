@@ -36,6 +36,27 @@ for (var i in depTypes) {
   }
 }
 
+// Remove any recursive dependencies if they exist.
+if (process.env.circularDependencies) {
+  var circularDependencies = process.env.circularDependencies.split(" ");
+  for (var i in circularDependencies) {
+    var dep = circularDependencies[i];
+    if (packageObj.dependencies[dep] != null) {
+      delete packageObj.dependencies[dep];
+    }
+    if (packageObj.devDependencies[dep] != null) {
+      delete packageObj.devDependencies[dep];
+    }
+    if (packageObj.peerDependencies[dep] != null) {
+      delete packageObj.peerDependencies[dep];
+    }
+    if (packageObj.optionalDependencies[dep] != null) {
+      delete packageObj.optionalDependencies[dep];
+    }
+  }
+}
+
+
 /* Remove peer dependencies */
 if (process.env.removePeerDependencies && packageObj.peerDependencies) {
   console.log("WARNING: removing the following peer dependencies:");

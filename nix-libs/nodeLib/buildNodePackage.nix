@@ -22,22 +22,16 @@ let
     mv $(find . -type d -mindepth 1 -maxdepth 1) $out
   '';
 
-  # The path within $out/lib to find a package. If the package does not
-  # have a namespace, it will simply be in `node_modules`, and otherwise it
-  # will appear in `node_modules/@namespace`.
-  modulePath = pkg:
+  # Checks a derivation's structure; if it doesn't have certain attributes then
+  # it isn't a node package and we error. Otherwise return the package.
+  verifyNodePackage = pkg:
     if !(builtins.hasAttr "namespace" pkg)
     then throw ''
       Package dependency does not appear to be a node package: ${showVal pkg}.
       Use "buildInputs" or "propagatedBuildInputs" for non-node dependencies,
       instead of "deps".
     ''
-    else if pkg.namespace == null then "node_modules"
-    else "node_modules/@${pkg.namespace}";
-
-  # The path to the package within its modulePath. Just appending the name
-  # of the package.
-  pathInModulePath = pkg: "${modulePath pkg}/${pkg.basicName}";
+    else pkg;
 
   # By default, when checking we'll run npm test.
   defaultCheckPhase = ''
@@ -74,15 +68,19 @@ in
   # name. Otherwise, a prefix can be given explicitly.
   namePrefix ? (if namespace == null then "" else "${namespace}-"),
 
-  # List or attribute set of (runtime) dependencies.
-  deps ? {},
+  # List of names of circular dependencies (dependencies which
+  # reflexively depend on this package).
+  circularDependencies ? [],
 
-  # List or attribute set of peer dependencies. See:
+  # List of (runtime) dependencies.
+  deps ? [],
+
+  # List of peer dependencies. See:
   # https://nodejs.org/en/blog/npm/peer-dependencies/
-  peerDependencies ? {},
+  peerDependencies ? [],
 
-  # List or attribute set of optional dependencies.
-  optionalDependencies ? {},
+  # List of optional dependencies.
+  optionalDependencies ? [],
 
   # List of optional dependencies to skip. List of strings, where a string
   # should contain the `name` of the derivation to skip (not a version or
@@ -107,10 +105,6 @@ in
   # Same as https://docs.npmjs.com/files/package.json#os
   os ? [],
 
-  # Attribute set of already resolved dependencies, for avoiding infinite
-  # recursion. Used internally (don't use this argument explicitly).
-  resolvedDeps ? {},
-
   # Build inputs to propagate in addition to nodejs and non-dev dependencies.
   propagatedBuildInputs ? [],
 
@@ -128,6 +122,11 @@ in
   # A set of dependencies to patch.
   patchDependencies ? {},
 
+  # We attempt to automatically remove dev dependencies from the node_modules
+  # folder prior to copying to the nix store. If this isn't desired (for
+  # example, custom behavior is needed), then set this to true.
+  skipDevDependencyCleanup ? false,
+
   # Any remaining flags are passed through to mkDerivation.
   ...
 } @ args:
@@ -136,12 +135,12 @@ let
   # The package name as it appears in the package.json. This contains a
   # namespace if there is one, so it will be a distinct identifier for
   # different packages.
-  packageJsonName = if namespace == null then name
+  fullName = if namespace == null then name
                     else "@${namespace}/${name}";
 
   # The package name with a version appended. This should be unique amongst
   # all packages.
-  uniqueName = "${packageJsonName}@${version}";
+  uniqueName = "${fullName}@${version}";
 
 in
 
@@ -151,10 +150,10 @@ then throw ("${uniqueName}: Can't run tests because devDependencies have " +
 else
 
 let
-  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists isList flip
-                       intersectLists isAttrs listToAttrs nameValuePair
+  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
+                       intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
-                       attrValues getVersion flatten remove concatStringsSep;
+                       attrValues concatStringsSep;
 
   dependencyTypes = ["dependencies" "devDependencies" "peerDependencies"
                      "optionalDependencies"];
@@ -162,95 +161,35 @@ let
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
-  attrsToRemove = ["deps" "resolvedDeps" "flags" "os" "skipOptionalDependencies"
+  attrsToRemove = ["deps" "flags" "os" "skipOptionalDependencies"
                    "passthru" "doCheck" "installDevDependencies" "version"
-                   "namespace" "patchDependencies"] ++ dependencyTypes;
+                   "namespace" "patchDependencies" "skipDevDependencyCleanup"]
+                   ++ dependencyTypes;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
   self = let
-    platforms = if os == [] then nodejs.meta.platforms else
-      fold (entry: platforms:
-        let
-          filterPlatforms =
-            stdenv.lib.platforms.${removePrefix "!" entry} or [];
-        in
-          # Ignore unknown platforms
-          if filterPlatforms == [] then (if platforms == [] then nodejs.meta.platforms else platforms)
-          else
-            if hasPrefix "!" entry then
-              subtractLists (intersectLists filterPlatforms nodejs.meta.platforms) platforms
-            else
-              platforms ++ (intersectLists filterPlatforms nodejs.meta.platforms)
-      ) [] os;
-
-
-    strict = x: builtins.seq x x;
-
-    toAttrSet = obj: if isAttrs obj then obj else
+    toAttrSet = obj: if isAttrs obj then obj else if obj == null then {} else
       (listToAttrs (map (x: nameValuePair x.name x) obj));
 
-    mapDependencies = deps: filterFunc: let
-        attrDeps = toAttrSet deps;
-      in rec {
-        # All required node modules, without already resolved dependencies
-        # Also override with already resolved dependencies
-        requiredDeps = strict (mapAttrs (name: dep:
-          dep.overrideNodePackage {
-            resolvedDeps = resolvedDeps // {"${name}" = self;};
-          }
-        ) (filterAttrs filterFunc
-            (removeAttrs attrDeps (attrNames resolvedDeps))));
-
-        # Recursive dependencies that we want to avoid with shim creation
-        recursiveDeps = strict (filterAttrs filterFunc
-                          (removeAttrs attrDeps (attrNames requiredDeps)));
-      };
-
-    # Filter out self-referential dependencies.
-    _dependencies = strict (mapDependencies deps (name: dep: dep.uniqueName != uniqueName));
-
-    # Filter out self-referential peer dependencies.
-    _peerDependencies = strict (mapDependencies peerDependencies (name: dep:
-      dep.uniqueName != uniqueName));
-
-    # Filter out any optional dependencies which don't build correctly.
-    _optionalDependencies = strict (mapDependencies optionalDependencies (name: dep:
-      (builtins.tryEval dep).success &&
-      !(elem dep.basicName skipOptionalDependencies)
-    ));
-
-    # Grab development dependencies if doCheck is true.
-    _devDependencies = let
-        filterFunc = name: dep: dep.uniqueName != uniqueName;
-        depSet = if doCheck then devDependencies else [];
-      in
-      strict (mapDependencies depSet filterFunc);
+    _dependencies = toAttrSet (map verifyNodePackage deps);
+    _optionalDependencies = toAttrSet (map verifyNodePackage optionalDependencies);
+    _peerDependencies = toAttrSet (map verifyNodePackage peerDependencies);
+    _devDependencies = if !doCheck then {}
+                       else toAttrSet (map verifyNodePackage devDependencies);
 
     # Depencencies we need to propagate (all except devDependencies)
-    propagatedDependencies = strict (
-      _dependencies.requiredDeps //
-      _optionalDependencies.requiredDeps //
-      _peerDependencies.requiredDeps);
+    propagatedDependencies = _dependencies // _optionalDependencies // _peerDependencies;
 
     # Required dependencies are those that we haven't filtered yet.
-    requiredDependencies =
-      strict (_devDependencies.requiredDeps // propagatedDependencies);
-
-    # Recursive dependencies. These are turned into "shims" or fake packages,
-    # which allows us to have dependency cycles, something npm allows.
-    recursiveDependencies = strict (
-      _devDependencies.recursiveDeps //
-      _dependencies.recursiveDeps //
-      _optionalDependencies.recursiveDeps //
-      _peerDependencies.recursiveDeps);
+    requiredDependencies = _devDependencies // propagatedDependencies;
 
     # Flags that we will pass to `npm install`.
     npmFlags = concatStringsSep " " ([
       # We point the registry at something that doesn't exist. This will
       # mean that NPM will fail if any of the dependencies aren't met, as it
       # will attempt to hit this registry for the missing dependency.
-      "--registry=http://notaregistry.$UNIQNAME.derp"
+      "--registry=http://notaregistry.$UNIQNAME.com"
       # These flags make failure fast, as otherwise NPM will spin for a while.
       "--fetch-retry-mintimeout=0" "--fetch-retry-maxtimeout=10" "--fetch-retries=0"
       # This will disable any user-level npm configuration.
@@ -266,17 +205,12 @@ let
       # Add any extra headers that the user has passed in.
       extraNpmFlags);
 
-    # A bit of bash to check that variables are set.
-    checkSet = vars: concatStringsSep "\n" (flip map vars (var: ''
-      [[ -z $${var} ]] && { echo "${var} is not set."; exit 1; }
-    ''));
-
     patchPhase = ''
       runHook prePatch
       patchShebangs $PWD
 
       # Ensure that the package name matches what is in the package.json.
-      node ${./checkPackageJson.js} ${packageJsonName}
+      node ${./checkPackageJson.js} checkPackageName ${fullName}
 
       # Remove any impure dependencies from the package.json (see script
       # for details)
@@ -292,7 +226,10 @@ let
             package_json = json.load(f)
         ${flip concatMapStrings (attrNames patchDependencies) (name: let
             version = patchDependencies.${name};
-          in flip concatMapStrings dependencyTypes (depType: ''
+          in
+          # Iterate through all of the dependencies we're patching, and for
+          # each one either remove it or set it to something else.
+          flip concatMapStrings dependencyTypes (depType: ''
             if "${name}" in package_json.setdefault("${depType}", {}):
                 ${if version == null then ''
                     print("removing ${name} from ${depType}")
@@ -312,15 +249,12 @@ let
 
     configurePhase = ''
       runHook preConfigure
-      # Symlink or copy dependencies for node modules
-      # copy is needed if dependency has recursive dependencies,
-      # because node can't follow symlinks while resolving recursive deps.
       ${
         let
-          linkCmd = p: if p.recursiveDeps == [] then "ln -sv" else "cp -r";
+          # Symlink dependencies for node modules.
           link = dep: ''
-            if ! [[ -e ${pathInModulePath dep} ]]; then
-              ${linkCmd dep} ${dep}/lib/${pathInModulePath dep} ${modulePath dep}
+            if ! [[ -e node_modules/${dep.fullName} ]]; then
+              ln -sv ${dep.fullPath} ${dep.modulePath}
               if [[ -d ${dep}/bin ]]; then
                 find -L ${dep}/bin -maxdepth 1 -type f -executable \
                   | while read exec_file; do
@@ -335,31 +269,10 @@ let
         flip concatMapStrings (attrValues requiredDependencies) (dep:
         # Create symlinks (or copies) of all of the required dependencies.
         ''
-          mkdir -p ${modulePath dep}
+          mkdir -p ${dep.modulePath}
           ${link dep}
           ${concatMapStrings link (attrValues dep.peerDependencies)}
         '')}
-
-      # Remove recursive dependencies from package.json
-      ${if recursiveDependencies == {} then "" else ''
-        python <<EOF
-        import json
-        with open("package.json") as f:
-            package_json = json.load(f)
-        dep_names = [${concatStringsSep ", "
-                       (map (d: "'${d.packageJsonName}'")
-                         (attrValues recursiveDependencies))}]
-        for name in dep_names:
-            print("Removing recursive dependency on {} from package.json"
-                  .format(name))
-            for k in ("dependencies", "devDependencies", "peerDependencies",
-                      "optionalDependencies"):
-                package_json[k] = package_json.setdefault(k, {})
-                package_json[k].pop(name, None)
-        with open("package.json", "w") as f:
-            f.write(json.dumps(package_json))
-        EOF
-        ''}
 
       runHook postConfigure
     '';
@@ -372,9 +285,14 @@ let
         export HOME=$PWD
         echo npm install $npmFlags
 
-        npm install $npmFlags || {
-          echo "NPM installation of ${name}@${version} failed!"
-          echo "Rerunning with verbose logging:"
+        # Try doing the install first. If it fails, first check the
+        # dependencies, and if we don't uncover anything there just rerun it
+        # with verbose output.
+        npm install $npmFlags >/dev/null 2>&1 || {
+          echo "Installation of ${name}@${version} failed!"
+          echo "Checking dependencies to see if any aren't satisfied..."
+          node ${./checkPackageJson.js} checkDependencies
+          echo "Dependencies seem ok. Rerunning with verbose logging:"
           npm install . $npmFlags --loglevel=verbose
           if [[ -d node_modules ]]; then
             echo "node_modules contains these files:"
@@ -389,18 +307,50 @@ let
     installPhase = ''
       runHook preInstall
 
+      # Ensure that the main entry point appears post-build.
+      node ${./checkPackageJson.js} checkMainEntryPoint
+
       # Install the package that we just built.
-      mkdir -p $out/lib/${modulePath self}
+      mkdir -p $out/lib/${self.modulePath}
+
+      # Remove all of the dev dependencies which do not appear in other
+      # dependency sets.
+      ${if skipDevDependencyCleanup then "" else
+        flip concatMapStrings (attrValues _devDependencies) (dep:
+         let
+           rm = dep:
+             if !hasAttr dep.name propagatedDependencies
+             then ''
+               # Remove the dependency from node modules
+               rm -rfv node_modules/${dep.fullName}
+               # Remove any binaries it generated from node_modules/.bin
+               if [[ -d ${dep}/bin ]]; then
+                 find -L ${dep}/bin -maxdepth 1 -type f -executable \
+                   | while read exec_file; do
+                     rm -fv node_modules/.bin/$(basename $exec_file)
+                 done
+               fi
+
+               # Remove any peer dependencies that package might have brought
+               # with it.
+               ${concatMapStrings rm (attrValues dep.peerDependencies)}
+             ''
+             else ''
+               echo "Retaining ${dep.basicName} since it " \
+                    "appears in the set of dependencies to propagate"
+             '';
+         in
+         rm dep)}
 
       # Copy the folder that was created for this path to $out/lib.
-      cp -r $PWD $out/lib/${pathInModulePath self}
+      cp -r $PWD $out/lib/node_modules/${self.fullName}
 
       # Remove the node_modules subfolder from there, and instead put things
       # in $PWD/node_modules into that folder.
-      if [ -e "$out/lib/${pathInModulePath self}/man" ]; then
+      if [ -e "$out/lib/node_modules/${self.fullName}/man" ]; then
         echo "Linking manpages..."
         mkdir -p $out/share
-        for dir in $out/lib/${pathInModulePath self}/man/*; do          #*/
+        for dir in $out/lib/node_modules/${self.fullName}/man/*; do          #*/
           mkdir -p $out/share/man/$(basename "$dir")
           for page in $dir/*; do                                        #*/
             ln -sv $page $out/share/man/$(basename "$dir")
@@ -410,9 +360,9 @@ let
 
       # Move peer dependencies to node_modules
       ${concatMapStrings (dep: ''
-        mkdir -p ${modulePath dep}
-        mv ${pathInModulePath dep} $out/lib/${modulePath dep}
-      '') (attrValues _peerDependencies.requiredDeps)}
+        mkdir -p ${dep.modulePath}
+        mv node_modules/${dep.fullName} $out/lib/${dep.modulePath}
+      '') (attrValues _peerDependencies)}
 
       # Install binaries using the `bin` object in the package.json
       python ${./installBinaries.py}
@@ -429,7 +379,11 @@ let
         buildPhase
         checkPhase
         installPhase
-        doCheck;
+        doCheck
+        circularDependencies;
+
+      # Informs lower scripts not to check dev dependencies
+      NO_DEV_DEPENDENCIES = devDependencies == null;
 
       # Tell mkDerivation to run `setVariables` prior to other phases.
       prePhases = ["setVariables"];
@@ -441,6 +395,7 @@ let
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
         export BUILD_DIR=$TMPDIR/$UNIQNAME-build
         export npmFlags="${npmFlags}"
+        export SEMVER_PATH=${npm}/lib/node_modules/npm/node_modules/semver
       '';
 
       shellHook = ''
@@ -461,26 +416,30 @@ let
       inherit dontStrip dontPatchELF;
 
       meta = {
-        inherit platforms;
         maintainers = [ stdenv.lib.maintainers.offline ];
-      };
+      } // (args.meta or {});
 
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
       passthru = (passthru // {
-        inherit uniqueName packageJsonName namespace version;
-        # The basic name is the name without namespace or version.
+        inherit uniqueName fullName namespace version requiredDependencies;
+        # The basic name is the name without namespace or version, in contrast
+        # to the fullName which might have a namespace attached, or the
+        # uniqueName which has a version attached.
         basicName = name;
-        peerDependencies = _peerDependencies.requiredDeps;
 
-        # Expose a list of recursive dependencies to upstream packages, so that
-        # they can be shimmed out.
-        recursiveDeps = let
-          required = attrValues requiredDependencies;
-          recursive = attrNames recursiveDependencies;
-        in
-          flatten (map (dep: remove name dep.recursiveDeps) required) ++
-          recursive;
+        # The path within $out/lib to find the package. If the package does not
+        # have a namespace, it will simply be in `node_modules`, and otherwise
+        # it will appear in `node_modules/@namespace`.
+        modulePath = if namespace == null then "node_modules"
+                     else "node_modules/@${namespace}";
+
+        # The full path to the package's code (i.e. folder containing
+        # package.json) within the nix store.
+        fullPath = "${self}/lib/node_modules/${self.fullName}";
+
+        # Downstream packages need to have access to peer dependencies.
+        peerDependencies = _peerDependencies;
 
         # The `env` attribute is meant to be used with `nix-shell` (although
         # that's not required). It will build the package with its dev
@@ -495,7 +454,11 @@ let
         overrideNodePackage = newArgs: buildNodePackage (args // newArgs);
       });
     } // (removeAttrs args attrsToRemove) // {
-      name = "${namePrefix}${name}-${version}${nameSuffix}";
+      name = if namePrefix == null then throw "Name prefix is null"
+             else if name == null then throw "Name is null"
+             else if version == null then throw "Version of ${name} is null"
+             else if nameSuffix == null then throw "Name suffix is null"
+             else "${namePrefix}${name}-${version}${nameSuffix}";
 
       # Pass the required dependencies and
       propagatedBuildInputs = propagatedBuildInputs ++
@@ -504,16 +467,8 @@ let
 
 
       buildInputs = [npm] ++ buildInputs ++
-                    attrValues (_devDependencies.requiredDeps) ++
+                    attrValues _devDependencies ++
                     neededNatives;
-
-      # Expose list of recursive dependencies upstream, up to the package that
-      # caused recursive dependency
-      recursiveDeps =
-        (flatten (
-          map (dep: remove name dep.recursiveDeps) (attrValues requiredDependencies)
-        )) ++
-        (attrNames recursiveDependencies);
     };
 
     in stdenv.mkDerivation mkDerivationArgs;
