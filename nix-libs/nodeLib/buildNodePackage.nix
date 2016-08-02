@@ -88,7 +88,7 @@ in
   skipOptionalDependencies ? [],
 
   # List or set of development dependencies (or null). These will only be
-  # installed when `installDevDependencies` is true, which is provided by
+  # installed when `includeDevDependencies` is true, which is provided by
   # the `.env` attribute.
   devDependencies ? null,
 
@@ -96,14 +96,15 @@ in
   # installed contingent on successfully running tests.
   doCheck ? false,
 
-  # Test command.
+  # If true, devDependencies will be added to the packages to the
+  # build environment. By default, this is true whenever doCheck is true.
+  includeDevDependencies ? doCheck,
+
+  # Bash command to run package tests.
   checkPhase ? defaultCheckPhase,
 
   # Additional flags passed to npm install. A list of strings.
   extraNpmFlags ? [],
-
-  # Same as https://docs.npmjs.com/files/package.json#os
-  os ? [],
 
   # Build inputs to propagate in addition to nodejs and non-dev dependencies.
   propagatedBuildInputs ? [],
@@ -144,9 +145,17 @@ let
 
 in
 
+# Dev dependencies are required to be installed to run unit tests for
+# nearly all packages. Therefore we require that they be installed in
+# order to enable tests.
 if doCheck && (devDependencies == null)
 then throw ("${uniqueName}: Can't run tests because devDependencies have " +
-            "not been defined.")
+            "not been defined. You can pass in `devDependencies = [];` if " +
+            "there are no dev dependencies.")
+else if includeDevDependencies && (devDependencies == null)
+then throw ("${uniqueName}: Can't include dev dependencies since they have " +
+            "not been defined. You can pass in `devDependencies = [];` if " +
+            "there are no dev dependencies.")
 else
 
 let
@@ -161,8 +170,8 @@ let
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
-  attrsToRemove = ["deps" "flags" "os" "skipOptionalDependencies"
-                   "passthru" "doCheck" "installDevDependencies" "version"
+  attrsToRemove = ["deps" "flags" "skipOptionalDependencies"
+                   "passthru" "doCheck" "includeDevDependencies" "version"
                    "namespace" "patchDependencies" "skipDevDependencyCleanup"]
                    ++ dependencyTypes;
 
@@ -175,7 +184,8 @@ let
     _dependencies = toAttrSet (map verifyNodePackage deps);
     _optionalDependencies = toAttrSet (map verifyNodePackage optionalDependencies);
     _peerDependencies = toAttrSet (map verifyNodePackage peerDependencies);
-    _devDependencies = if !doCheck then {}
+    # Dev dependencies will only be included if requested.
+    _devDependencies = if !includeDevDependencies then {}
                        else toAttrSet (map verifyNodePackage devDependencies);
 
     # Depencencies we need to propagate (all except devDependencies)
@@ -445,7 +455,7 @@ let
         # that's not required). It will build the package with its dev
         # dependencies. This means that the package must have dev dependencies
         # defined, or it will error.
-        env = buildNodePackage (args // {installDevDependencies = true;});
+        env = buildNodePackage (args // {includeDevDependencies = true;});
 
         # An 'overrideNodePackage' attribute, which will call
         # `buildNodePackage` with the given arguments overridden.
