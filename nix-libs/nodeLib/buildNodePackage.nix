@@ -68,10 +68,6 @@ in
   # name. Otherwise, a prefix can be given explicitly.
   namePrefix ? (if namespace == null then "" else "${namespace}-"),
 
-  # List of names of circular dependencies (dependencies which
-  # reflexively depend on this package).
-  circularDependencies ? [],
-
   # List of (runtime) dependencies.
   deps ? [],
 
@@ -217,7 +213,7 @@ let
 
     patchPhase = ''
       runHook prePatch
-      patchShebangs $PWD
+      patchShebangs $PWD >/dev/null
 
       # Ensure that the package name matches what is in the package.json.
       node ${./checkPackageJson.js} checkPackageName ${fullName}
@@ -235,7 +231,7 @@ let
         with open("package.json") as f:
             package_json = json.load(f)
         ${flip concatMapStrings (attrNames patchDependencies) (name: let
-            version = patchDependencies.${name};
+            version = patchDependencies."${name}";
           in
           # Iterate through all of the dependencies we're patching, and for
           # each one either remove it or set it to something else.
@@ -358,14 +354,17 @@ let
       # Remove the node_modules subfolder from there, and instead put things
       # in $PWD/node_modules into that folder.
       if [ -e "$out/lib/node_modules/${self.fullName}/man" ]; then
-        echo "Linking manpages..."
+        echo -n "Linking manpages... "
+        NUM_MAN_PAGES=0
         mkdir -p $out/share
-        for dir in $out/lib/node_modules/${self.fullName}/man/*; do          #*/
+        for dir in $out/lib/node_modules/${self.fullName}/man/*; do
           mkdir -p $out/share/man/$(basename "$dir")
-          for page in $dir/*; do                                        #*/
-            ln -sv $page $out/share/man/$(basename "$dir")
+          for page in $dir/*; do
+            ln -s $page $out/share/man/$(basename "$dir")
+            NUM_MAN_PAGES=$(($NUM_MAN_PAGES + 1))
           done
         done
+        echo "linked $NUM_MAN_PAGES man pages."
       fi
 
       # Move peer dependencies to node_modules
@@ -383,14 +382,16 @@ let
     # These are the arguments that we will pass to `stdenv.mkDerivation`.
     mkDerivationArgs = {
       inherit
-        src
-        patchPhase
-        configurePhase
         buildPhase
         checkPhase
-        installPhase
+        configurePhase
         doCheck
-        circularDependencies;
+        dontPatchELF
+        dontStrip
+        fullName
+        installPhase
+        patchPhase
+        src;
 
       # Informs lower scripts not to check dev dependencies
       NO_DEV_DEPENDENCIES = devDependencies == null;
@@ -412,18 +413,40 @@ let
         runHook preShellHook
         runHook setVariables
         export PATH=${npm}/bin:${nodejs}/bin:$(pwd)/node_modules/.bin:$PATH
+        rm -rf $TMPDIR/$UNIQNAME
         mkdir -p $TMPDIR/$UNIQNAME
         (
           cd $TMPDIR/$UNIQNAME
           eval "$configurePhase"
         )
-        echo "Installed dependencies in $TMPDIR/$UNIQNAME."
+        echo "Installed $fullName dependencies in temporary directory" \
+             "$TMPDIR/$UNIQNAME"
         export PATH=$TMPDIR/$UNIQNAME/node_modules/.bin:$PATH
-        export NODE_PATH=$TMPDIR/$UNIQNAME/node_modules
+        NODE_MODULES=$TMPDIR/$UNIQNAME/node_modules
+        export NODE_PATH=$NODE_MODULES:$NODE_PATH
+        # Check if the current directory contains the package.json for
+        # this package.
+        if python -c "import json; assert json.load(open('package.json'))['name'] == '$fullName'" 2>/dev/null; then
+          echo "Symlinking current directory into node modules folder..."
+          mkdir -p $(dirname $NODE_MODULES/$fullName)
+          ln -s $(pwd) $NODE_MODULES/$fullName
+          if echo "require('$fullName')" | node; then
+            echo "Successfully set up $fullName in local environment."
+          else
+            echo "WARNING: could not set up $fullName in local environment."
+          fi
+        else
+          echo "WARNING: you are not in the directory for package $fullName," \
+               "so the shell hook can't symlink the local source code into" \
+               "the temporary node_modules directory. This might, for" \
+               "example, prevent you from being able to" \
+               "\`require('$fullName')\` in a node REPL. You might need to" \
+               "do something manually to set this up; for example if this" \
+               "package's source is a tarball, the command" '`tar -xf $src;' \
+               'ln -s $PWD/package $NODE_MODULES/$fullName` might work.'
+        fi
         runHook postShellHook
       '';
-
-      inherit dontStrip dontPatchELF;
 
       meta = {
         maintainers = [ stdenv.lib.maintainers.offline ];
