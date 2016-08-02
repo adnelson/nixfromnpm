@@ -1,5 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 module NixFromNpm.Options where
 --  RawOptions(..), NixFromNpmOptions(..),
@@ -119,11 +120,18 @@ validateExtension = absPath >=> \path -> do
 -- and follows the extension format.
 validateOutput :: FilePath -> IO FilePath
 validateOutput = absPath >=> \path -> do
+  -- Small wrapper function arround the assertion, taking a monadic
+  -- test function and returning the given error if the test fails.
   let assert' test err = assert test (InvalidNodeLib path err)
   doesDirectoryExist path >>= \case
+    -- If the directory exists, it must be writable and follow the
+    -- extension format.
     True -> do assert' (isWritable path) OutputNotWritable
                validateExtension path
     False -> do
+      -- If it doesn't exist, look at the parent path, which must
+      -- exist and be writable so that we can create the output
+      -- directory. Then return the path at the end.
       let parentPath = parent path
       assert' (doesDirectoryExist parentPath)
               OutputParentPathDoesn'tExist
@@ -179,42 +187,46 @@ getTopN numPackages = do
 -- | Validates the raw options passed in from the command line, and also
 -- translates them into their "full" counterpart, NixFromNpmOptions.
 validateOptions :: RawOptions -> IO NixFromNpmOptions
-validateOptions opts = do
+validateOptions opts@(RawOptions{..}) = do
   pwd <- getCurrentDirectory
-  topPackagesToFetch <- case roAllTop opts of
+  topPackagesToFetch <- case roAllTop of
     True -> getTopN Nothing
-    False -> case roTopNPackages opts of
+    False -> case roTopNPackages of
       Nothing -> return []
       Just n -> getTopN (Just n)
-  packageNames <- mapM parseNameAndRange $ roPkgNames opts
-  extendPaths <- getExtensions (roExtendPaths opts)
-  packagePaths <- mapM (validateJsPkg . fromText) $ roPkgPaths opts
-  outputPath <- validateOutput . fromText $ roOutputPath opts
-  registries <- mapM validateUrl $ (roRegistries opts <>
-                                    if roNoDefaultRegistry opts
-                                       then []
-                                       else ["https://registry.npmjs.org"])
+  packageNames <- mapM parseNameAndRange roPkgNames
+  extendPaths <- getExtensions roExtendPaths
+  packagePaths <- mapM (validateJsPkg . fromText) roPkgPaths
+  outputPath <- validateOutput . fromText . stripTrailingSlash $ roOutputPath
+  registries <- mapM validateUrl $ (roRegistries <>
+                                    if roNoDefaultRegistry
+                                    then []
+                                    else ["https://registry.npmjs.org"])
   githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  tokensCommandLine <- parseNpmTokens $ roNpmTokens opts
+  tokensCommandLine <- parseNpmTokens roNpmTokens
   npmTokensEnv <- getNpmTokens
   return $ NixFromNpmOptions {
     nfnoOutputPath = outputPath,
     nfnoExtendPaths = extendPaths,
-    nfnoGithubToken = roGithubToken opts <|> githubTokenEnv,
+    nfnoGithubToken = roGithubToken <|> githubTokenEnv,
     nfnoNpmTokens = tokensCommandLine <> npmTokensEnv,
-    nfnoCacheDepth = if roNoCache opts then -1 else roCacheDepth opts,
-    nfnoDevDepth = roDevDepth opts,
-    nfnoTest = roTest opts,
-    nfnoTimeout = roTimeout opts,
+    nfnoCacheDepth = if roNoCache then -1 else roCacheDepth,
+    nfnoDevDepth = roDevDepth,
+    nfnoTest = roTest,
+    nfnoTimeout = roTimeout,
     nfnoPkgNames = packageNames <> topPackagesToFetch,
     nfnoRegistries = registries,
     nfnoPkgPaths = packagePaths,
-    nfnoNoDefaultNix = roNoDefaultNix opts,
-    nfnoRealTime = not $ roNoRealTime opts,
-    nfnoNpm3 = roNpm3 opts,
-    nfnoOverwriteNixLibs = roOverwriteNixLibs opts
+    nfnoNoDefaultNix = roNoDefaultNix,
+    nfnoRealTime = not roNoRealTime,
+    nfnoNpm3 = roNpm3,
+    nfnoOverwriteNixLibs = roOverwriteNixLibs
     }
   where
+    -- Remove a trailing slash, if it exists.
+    stripTrailingSlash path = case T.stripSuffix "/" path of
+      Nothing -> path
+      Just path' -> path'
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
       Nothing -> throw $ InvalidURI rawUrl
       Just uri -> return uri
