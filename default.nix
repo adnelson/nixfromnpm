@@ -10,11 +10,11 @@ let
 
   hnix = with haskellPackages; mkDerivation rec {
     pname = "hnix";
-    version = "0.3.0";
+    version = "0.3.1";
     src = pkgs.fetchurl {
       url = "https://api.github.com/repos/jwiegley/hnix/tarball/${version}";
       name = "hnix-${version}.tar.gz";
-      sha256 = "18331v0pf39l7brihjqqcc0krrd0iaw91r66ysmqnxgqjk0qliar";
+      sha256 = "1djb69ksnxp21y0m0b6gh950i58kl0c34j1zw5w2s4v6z1bfjmds";
     };
     isLibrary = true;
     isExecutable = true;
