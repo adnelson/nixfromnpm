@@ -124,6 +124,13 @@ in
   # example, custom behavior is needed), then set this to true.
   skipDevDependencyCleanup ? false,
 
+  # Indicates the package is broken. Not super user-friendly but
+  # better than nothing.
+  isBroken ? false,
+
+  # Metadata about the package.
+  meta ? {},
+
   # Any remaining flags are passed through to mkDerivation.
   ...
 } @ args:
@@ -152,6 +159,8 @@ else if includeDevDependencies && (devDependencies == null)
 then throw ("${uniqueName}: Can't include dev dependencies since they have " +
             "not been defined. You can pass in `devDependencies = [];` if " +
             "there are no dev dependencies.")
+else if isBroken
+then throw "${uniqueName}: listed as broken, see definition for details"
 else
 
 let
@@ -166,7 +175,7 @@ let
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
-  attrsToRemove = ["deps" "flags" "skipOptionalDependencies"
+  attrsToRemove = ["deps" "flags" "skipOptionalDependencies" "isBroken"
                    "passthru" "doCheck" "includeDevDependencies" "version"
                    "namespace" "patchDependencies" "skipDevDependencyCleanup"]
                    ++ dependencyTypes;
@@ -390,6 +399,8 @@ let
         dontStrip
         fullName
         installPhase
+        meta
+        npmFlags
         patchPhase
         src;
 
@@ -401,11 +412,19 @@ let
 
       # Define some environment variables that we will use in the build.
       setVariables = ''
+        # This creates a string for this package which is unique but
+        # deterministic. We can use it to create temporary directories
+        # and URLs and be confident there will be no collisions.
         export HASHEDNAME=$(echo "$propagatedNativeBuildInputs $name" \
                           | md5sum | awk '{print $1}')
+
+        # This appends the package name and version to the hash string
+        # we defined above, so that it is more human-readable.
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
-        export BUILD_DIR=$TMPDIR/$UNIQNAME-build
-        export npmFlags="${npmFlags}"
+
+        # This is used by the checkPackageJson script so that it can
+        # confirm that version ranges are satisfied by installed
+        # versions.
         export SEMVER_PATH=${npm}/lib/node_modules/npm/node_modules/semver
       '';
 
@@ -427,6 +446,10 @@ let
         # Check if the current directory contains the package.json for
         # this package.
         if python -c "import json; assert json.load(open('package.json'))['name'] == '$fullName'" 2>/dev/null; then
+          # If we're in the package directory, symlink it into the
+          # temporary node modules folder we're building and then
+          # attempt to import it. Issue a warning if we're not
+          # successful.
           echo "Symlinking current directory into node modules folder..."
           mkdir -p $(dirname $NODE_MODULES/$fullName)
           ln -s $(pwd) $NODE_MODULES/$fullName
@@ -447,10 +470,6 @@ let
         fi
         runHook postShellHook
       '';
-
-      meta = {
-        maintainers = [ stdenv.lib.maintainers.offline ];
-      } // (args.meta or {});
 
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
@@ -493,10 +512,11 @@ let
              else if nameSuffix == null then throw "Name suffix is null"
              else "${namePrefix}${name}-${version}${nameSuffix}";
 
-      # Pass the required dependencies and
+      # Pass the required dependencies, any non-nodejs dependencies,
+      # and nodejs itself.
       propagatedBuildInputs = propagatedBuildInputs ++
                               attrValues propagatedDependencies ++
-                              [nodejs pkgs.tree];
+                              [nodejs];
 
 
       buildInputs = [npm] ++ buildInputs ++
