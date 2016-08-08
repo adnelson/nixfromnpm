@@ -11,6 +11,7 @@ import Data.Fix (Fix(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 import Data.Text (Text, replace)
+import qualified Data.Text as T
 
 import Data.SemVer
 
@@ -83,7 +84,6 @@ toSelectorNoVersion (PackageName name mNamespace) = do
   StaticKey <$> case mNamespace of
     Nothing -> [fixName name]
     Just namespace -> ["namespaces", namespace, fixName name]
-
 
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
@@ -177,12 +177,10 @@ hasBroken ResolvedPkg{..} = case rpDevDependencies of
 -- >   foo = callPackage ./foo/0.2.3.nix {};
 -- >   bar_1-2-3 = callPackage ./bar/1.2.3.nix {};
 -- >   bar = callPackage ./bar/1.2.3.nix {};
--- >   namespaces' = {
--- >     mynamespace = {
--- >       qux_3-4-5 = callPackage ./@mynamespace/qux/3.4.5.nix {};
--- >       qux = callPackage ./@mynamespace/qux/3.4.5.nix {};
--- >     };
--- >   };
+-- >   "@mynamespace-qux_3-4-5" =
+-- >       callPackage (./. + "/@mynamespace/qux/3.4.5.nix") {};
+-- >   "@mynamespace-qux" =
+-- >       callPackage (./. + "/@mynamespace/qux/3.4.5.nix") {};
 -- > }
 --
 -- Interestingly, it doesn't matter what the packagemap actually contains. We
@@ -201,8 +199,17 @@ packageMapToNix pMap = do
     -- version.
     toBindings (pkgName, (latest:vs)) = binding : bindings  where
       binding = toSelectorNoVersion pkgName `NamedVar` call latest
-      -- Make a path expression relative to the nodePackages folder
-      path version = mkPath $ toRelPath pkgName version
+      -- Convert render the name and version to a nix path. It might
+      -- contain an '@' sign, in which case we'll need to use a trick
+      -- to get it into a valid path.
+      path version = case T.find (== '@') textPath of
+        -- There is no '@' in the path. Just make a path nix expression.
+        Nothing -> mkPath renderedPath
+        -- There is an '@'. Then use a path addition; i.e. use the syntax
+        --    ./. + "/this/@path"
+        Just _ -> mkPath "." $+ mkStr textPath
+        where renderedPath = toRelPath pkgName version
+              textPath = pathToText renderedPath
       -- Equiv. to `callPackage path {}`
       call v = "callPackage" @@ path v @@ mkNonRecSet []
       toBinding :: SemVer -> Binding NExpr
