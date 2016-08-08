@@ -270,6 +270,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       bindTo "peerDependencies" <$> withNodePackages True peerDeps,
       bindTo "optionalDependencies" <$> withNodePackages True optDeps,
       devDepBinding,
+      maybeIf (hasBroken rPkg) ("isBroken" $= mkBool True),
       bindTo "meta" <$> metaToNix rpMeta
       ]
     body = "buildNodePackage" @@ args
