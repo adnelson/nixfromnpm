@@ -13,7 +13,7 @@
 
 let
   inherit (pkgs) stdenv;
-  inherit (pkgs.lib) showVal;
+  inherit (pkgs.lib) showVal optional;
   # This expression builds the raw C headers and source files for the base
   # node.js installation. Node packages which use the C API for node need to
   # link against these files and use the headers.
@@ -298,17 +298,17 @@ let
         # NPM reads the `HOME` environment variable and fails if it doesn't
         # exist, so set it here.
         export HOME=$PWD
-        echo npm install $npmFlags
+        echo npm install ${npmFlags}
 
         # Try doing the install first. If it fails, first check the
         # dependencies, and if we don't uncover anything there just rerun it
         # with verbose output.
-        npm install $npmFlags >/dev/null 2>&1 || {
+        npm install ${npmFlags} >/dev/null 2>&1 || {
           echo "Installation of ${name}@${version} failed!"
           echo "Checking dependencies to see if any aren't satisfied..."
           node ${./checkPackageJson.js} checkDependencies
           echo "Dependencies seem ok. Rerunning with verbose logging:"
-          npm install . $npmFlags --loglevel=verbose
+          npm install . ${npmFlags} --loglevel=verbose
           if [[ -d node_modules ]]; then
             echo "node_modules contains these files:"
             ls -l node_modules
@@ -521,7 +521,9 @@ let
 
       buildInputs = [npm] ++ buildInputs ++
                     attrValues _devDependencies ++
-                    neededNatives;
+                    neededNatives ++
+                    # On Darwin we provide xcode
+                    (optional stdenv.isDarwin pkgs.xcodeenv.xcodewrapper);
     };
 
     in stdenv.mkDerivation mkDerivationArgs;
