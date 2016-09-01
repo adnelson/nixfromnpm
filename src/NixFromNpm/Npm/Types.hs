@@ -42,7 +42,7 @@ data PackageMeta = PackageMeta {
 
 -- | Expresses all of the information that a version of a package needs, in
 -- the abstract (e.g. using version ranges instead of explicit versions).
--- This type can be used as an input to the NpmLookup stuff to produce a
+-- This type can be used as an input to the Npm.Resolve stuff to produce a
 -- `ResolvedPkg`.
 data VersionInfo = VersionInfo {
   viName :: PackageName,

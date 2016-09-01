@@ -39,7 +39,7 @@ import NixFromNpm.Npm.Types
 import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..),
                                   pmLookup, pmDelete, pmMap,
                                   psToList)
-import NixFromNpm.NpmLookup
+import NixFromNpm.Npm.Resolve
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 -- However, the only packages that we want to write are the new ones; that

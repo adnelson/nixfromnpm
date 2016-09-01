@@ -7,7 +7,7 @@ module NixFromNpm (module NixFromNpm.Common,
                    module NixFromNpm.NpmVersion,
                    module NixFromNpm.NpmTypes,
                    module NixFromNpm.Parsers.NpmVersion,
-                   module NixFromNpm.NpmLookup,
+                   module NixFromNpm.Npm.Resolve,
                    module NixFromNpm.ConvertToNix) where
 
 import Data.SemVer

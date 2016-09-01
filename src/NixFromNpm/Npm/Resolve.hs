@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
-module NixFromNpm.NpmLookup where
+module NixFromNpm.Npm.Resolve where
 
 --------------------------------------------------------------------------
 import qualified Prelude as P

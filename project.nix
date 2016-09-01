@@ -31,7 +31,7 @@ mkDerivation {
     optparse-applicative cabal-install curl SHA temporary lifted-base
     transformers ansi-terminal semver-range
   ];
-  executableHaskellDepends = with pkgs; [nix cacert];
+  executableHaskellDepends = with pkgs; [nix cacert silver-searcher];
   testDepends = [
     aeson base bytestring classy-prelude containers data-default
     directory hnix hspec hspec-expectations
