@@ -195,7 +195,7 @@ getHttpWith timeout retries headers uri = loop retries where
     (code, status, content) <- curlGetBS (uriToString uri) opts
     case code of
       CurlOK -> return content
-      code | retries <= 0 -> throwIO $ toErr status code
+      code | retries <= 0 -> throw $ toErr status code
            | otherwise -> do
                putStrsLn ["Request failed. ", pshow retries, " retries left."]
                loop (retries - 1)
@@ -261,13 +261,13 @@ _getPackageInfo pkgName registryUri = do
   jsonStr <- getHttp (registryUri // route) authHeader
              `catches` [
                Handler (\case
-                HttpErrorWithCode 404 -> throwIO $ NoMatchingPackage pkgName
-                err -> throwIO err)
+                HttpErrorWithCode 404 -> throw $ NoMatchingPackage pkgName
+                err -> throw err)
                ]
   case eitherDecode jsonStr of
       Left err -> do
         let text = decodeUtf8 $ BL8.toStrict jsonStr
-        throwIO $ InvalidPackageJson text err
+        throw $ InvalidPackageJson text err
       Right info -> do
         return info
 
@@ -279,14 +279,14 @@ getPackageInfo name = do
     Just info -> do
       return info
     Nothing -> do
-      let tryToFetch [] = throwIO $ NoMatchingPackage name
+      let tryToFetch [] = throw $ NoMatchingPackage name
           tryToFetch (registry:registries) = do
             putStrsLn ["Trying to fetch from ", uriToText registry]
             _getPackageInfo name registry
             `catch` \case
               NoMatchingPackage _ -> tryToFetch registries
               NoMatchingVersion _ -> tryToFetch registries
-              err -> throwIO err
+              err -> throw err
       info <- tryToFetch =<< asks nfsRegistries
       storePackageInfo name info
       return info
@@ -377,7 +377,7 @@ extractPkgJson path = do
   putStrsLn ["Reading information from ", pathToText path]
   pkJson <- liftIO $ B.readFile (encodeString path)
   case eitherDecode $ BL8.fromStrict pkJson of
-    Left err -> throwIO $ InvalidPackageJson (decodeUtf8 pkJson) err
+    Left err -> throw $ InvalidPackageJson (decodeUtf8 pkJson) err
     Right info -> return info
 
 -- | Fetch a package over HTTP. Return the version of the fetched package,
@@ -408,7 +408,7 @@ githubCurl uri = do
   putStrsLn ["GET ", uriToText uri]
   jsonStr <- getHttp uri headers
   case eitherDecode jsonStr of
-    Left err -> throwIO $ InvalidJsonFromGithub (pshow err)
+    Left err -> throw $ InvalidJsonFromGithub (pshow err)
     Right info -> return info
 
 makeGithubURI :: Name -> Name -> URI
@@ -445,21 +445,21 @@ gitRefToSha owner repo ref = case ref of
       tagMap <- tagListToMap <$> githubCurl (uri // "tags")
       case H.lookup tag tagMap of
         Just sha -> return sha
-        Nothing -> throwIO (InvalidGitRef ref)
+        Nothing -> throw (InvalidGitRef ref)
     fromCommit ref = do
       cSha <$> githubCurl (uri // "commits" // ref)
     catch404 action1 action2 = action1 `catch` \case
       HttpErrorWithCode 404 -> action2
-      err -> throwIO err
+      err -> throw err
     tryAll txt =
       fromBranch txt `catch404`
         fromTag txt `catch404`
           fromCommit txt `catch404`
-            throwIO (InvalidGitRef ref)
+            throw (InvalidGitRef ref)
 
 -- | Fetches an arbitrary git repo from a uri.
 fetchArbitraryGit :: URI -> NpmFetcher SemVer
-fetchArbitraryGit uri = throwIO $
+fetchArbitraryGit uri = throw $
   NotYetImplemented $
     concat ["nixfromnpm can't fetch arbitrary git repos yet (",
             uriToString uri, ")"]
@@ -507,7 +507,7 @@ fromGithubUri uri = resolveUri `catch` \(e::GithubError) -> fetchHttp uri where
         let ref' = tarballNameToRef ref
         hash <- gitRefToSha owner repo ref'
         return (owner, repo, hash)
-      _ -> throwIO $ InvalidGithubUri uri
+      _ -> throw $ InvalidGithubUri uri
     fetchHttp $ makeGithubTarballURI owner repo sha
 
 -- | Look up a name and version range to see if we have recorded this as being
@@ -818,7 +818,7 @@ _resolveDep name range = do
   current <- gets currentlyResolving
   -- Choose the entry with the highest version that matches the range.
   case filter (matches range) $ H.keys (piVersions pInfo) of
-    [] -> throwIO $ NoMatchingVersion $ SemVerRange range
+    [] -> throw $ NoMatchingVersion $ SemVerRange range
     matches -> do
       let versionInfo = piVersions pInfo H.! maximum matches
       versionInfoToSemVer versionInfo
@@ -830,7 +830,7 @@ resolveByTag :: Name -- ^ Tag name.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
-    Nothing -> throwIO $ NoSuchTag tag
+    Nothing -> throw $ NoSuchTag tag
     Just version -> case H.lookup version $ piVersions pInfo of
       Nothing -> errorC ["Tag ", tag, " points to version ",
                          pshow version, ", but no such version of ",

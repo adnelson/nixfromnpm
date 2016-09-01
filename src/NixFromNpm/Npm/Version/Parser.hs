@@ -11,7 +11,7 @@ import qualified Text.Parsec as Parsec
 import Data.Aeson
 import qualified Data.Aeson.Types as DAT
 
-import Data.SemVer
+import Data.SemVer (pSemVerRange, anyVersion)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Git.Types hiding (Tag)
 

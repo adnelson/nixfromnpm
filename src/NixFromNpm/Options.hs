@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.HashMap.Strict as H
 
-import Data.SemVer
+import Data.SemVer (anyVersion)
 import Options.Applicative
 
 import NixFromNpm.NpmLookup (getNpmTokens, parseNpmTokens)

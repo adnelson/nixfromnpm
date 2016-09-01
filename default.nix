@@ -32,15 +32,15 @@ let
 
   semver-range = with haskellPackages; mkDerivation rec {
     pname = "semver-range";
-    version = "0.2.0";
+    version = "0.2.2";
     src = pkgs.fetchurl {
       url = "https://api.github.com/repos/adnelson/semver-range/tarball/${version}";
       name = "semver-range-${version}.tar.gz";
-      sha256 = "1h40ww6m8lx8nx73550dd0r4iig4nrlgsmbn6zc174kc6lsd3m3b";
+      sha256 = "1szawsh3vp16m7xfx3cm0c6026dgbxwm32r78pkw0v15aiq5fgxk";
     };
     isLibrary = true;
-    buildDepends = [ base classy-prelude parsec text cabal-install
-                     unordered-containers ];
+    buildDepends = [ base classy-prelude parsec text cabal-install QuickCheck
+                     unordered-containers hspec ];
     description = "An implementation of semver and semantic version ranges";
     license = pkgs.lib.licenses.mit;
   };

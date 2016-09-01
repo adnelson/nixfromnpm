@@ -59,8 +59,8 @@ fixName = replace "." "-"
 -- Example: "foo.bar" and 1.2.3-baz turns into "foo-bar_1-2-3-baz"
 -- Example: "@foo/bar" and 1.2.3 turns into "namespaces.foo.bar_1-2-3"
 toDepExpr :: PackageName -> SemVer -> NExpr
-toDepExpr (PackageName name mNamespace) (SemVer a b c tags) = do
-  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
+toDepExpr (PackageName name mNamespace) (SemVer a b c (PrereleaseTags tags) _) = do
+  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
       ident = fixName name <> "_" <> suffix
   case mNamespace of
     Nothing -> mkSym ident
@@ -71,8 +71,8 @@ toDepExpr (PackageName name mNamespace) (SemVer a b c tags) = do
 -- be used in a binding. This is very similar to @toDepExpr@, but it returns
 -- something to be used in a binding rather than an expression.
 toSelector :: PackageName -> SemVer -> NAttrPath NExpr
-toSelector (PackageName name mNamespace) (SemVer a b c tags) = do
-  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map unpack tags
+toSelector (PackageName name mNamespace) (SemVer a b c (PrereleaseTags tags) _) = do
+  let suffix = pack $ intercalate "-" $ (map show [a, b, c]) <> map show tags
       ident = fixName name <> "_" <> suffix
   StaticKey <$> case mNamespace of
     Nothing -> [ident]
