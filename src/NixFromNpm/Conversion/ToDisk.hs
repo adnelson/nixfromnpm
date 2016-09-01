@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ViewPatterns #-}
 module NixFromNpm.Conversion.ToDisk where
 
 import qualified Prelude as P
@@ -67,13 +68,13 @@ parseVersionFiles verbose pkgName folder = do
       Left _ -> return Nothing -- not a version file
       Right version -> parseNixString . pack <$> readFile path >>= \case
         Failure err -> do
-          putStrsLn ["Warning: expression for ", pshow pkgName, " version ",
-                     pathToText versionTxt, " failed to parse:\n", pshow err]
+          putStrsLn ["Warning: expression for ", tshow pkgName, " version ",
+                     pathToText versionTxt, " failed to parse:\n", tshow err]
           return Nothing -- invalid nix, should overwrite
         Success expr -> do
           when verbose $
-            putStrsLn ["Discovered ", pshow pkgName, " at version ",
-                       pshow version]
+            putStrsLn ["Discovered ", tshow pkgName, " at version ",
+                       tshow version]
           return $ Just (version, expr)
   return $ H.singleton pkgName (M.fromList $ catMaybes maybeExprs)
 
@@ -168,7 +169,7 @@ initializeOutput = do
   putStrsLn ["Initializing  ", pathToText outputPath]
   createDirectoryIfMissing outputPath
   createDirectoryIfMissing (outputPath </> nodePackagesDir)
-  writeFile (outputPath </> ".nixfromnpm-version") $ pshow version
+  writeFile (outputPath </> ".nixfromnpm-version") $ tshow version
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $
@@ -193,12 +194,12 @@ updateLatestNixes :: MonadIO io => FilePath -> io ()
 updateLatestNixes outputDir = do
   whenM (doesDirectoryExist (outputDir </> nodePackagesDir)) $ do
     forItemsInDir_ (outputDir </> nodePackagesDir) $ \pkgDir -> do
-      if "@" `isPrefixOf` getFilename pkgDir
-      -- If the directory starts with '@', then it's a namespace
-      -- directory and we should recur on its contents.
-      then forItemsInDir_ pkgDir $ updateLatestNix'
-      -- Otherwise, just update the latest.nix in this directory.
-      else updateLatestNix' pkgDir
+      case "@" `isPrefixOf` getFilename pkgDir of
+        -- If the directory starts with '@', then it's a namespace
+        -- directory and we should recur on its contents.
+        True -> forItemsInDir_ pkgDir $ updateLatestNix'
+        -- Otherwise, just update the latest.nix in this directory.
+        False -> updateLatestNix' pkgDir
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
@@ -222,8 +223,8 @@ dumpFromPkgJson path = do
         -- Parse a VersionInfo object from the package.json file.
         verinfo <- extractPkgJson (path </> "package.json")
         let (name, version) = (viName verinfo, viVersion verinfo)
-        putStrsLn ["Generating expression for package ", pshow name,
-                   ", version ", pshow version]
+        putStrsLn ["Generating expression for package ", tshow name,
+                   ", version ", tshow version]
         -- Convert this to a ResolvedPkg by resolving its dependencies.
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
@@ -237,7 +238,7 @@ showBrokens :: NpmFetcher ()
 showBrokens = H.toList <$> gets brokenPackages >>= \case
   [] -> return ()
   brokens -> do
-    putStrsLn ["Failed to generate expressions for ", pshow (length brokens),
+    putStrsLn ["Failed to generate expressions for ", tshow (length brokens),
                " downstream dependencies."]
     forM_ brokens $ \(name, rangeMap) -> do
       forM_ (M.toList rangeMap) $ \(range, report) -> do
@@ -248,7 +249,7 @@ showBrokens = H.toList <$> gets brokenPackages >>= \case
           forM_ (HS.toList chains) $ \chain ->
             putStrsLn ["    ",
                        mapJoinBy " -> " (uncurry showPair) (reverse chain)]
-        putStrsLn ["Failed to build because: ", pshow (bprReason report)]
+        putStrsLn ["Failed to build because: ", tshow (bprReason report)]
 
 -- | See if any of the top-level packages failed to build, and return a
 -- non-zero status if they did.
@@ -271,7 +272,7 @@ checkForBroken inputs = do
       putStrLn "The following packages failed to build:"
       forM_ pkgs $ \(name, range, report) -> do
         putStrLn $ showRangePair name range
-        putStrsLn ["Failed because: ", pshow $ bprReason report]
+        putStrsLn ["Failed because: ", tshow $ bprReason report]
       return $ ExitFailure 1
 
 -- | Traverses down a dependency tree, seeing if the dependencies of a package
@@ -280,7 +281,7 @@ checkPackage :: ResolvedPkg -> NpmFetcher (Maybe BrokenPackageReason)
 checkPackage ResolvedPkg{..} = go (H.toList rpDependencies) where
   go [] = return Nothing -- all done!
   go ((name, Broken reason):_) = return $ Just (BrokenDependency name reason)
-  go ((name, Resolved ver):rest) = do
+  go ((name, Resolved (unpackPSC -> ver)):rest) = do
     pmLookup name ver <$> gets resolved >>= \case
       Nothing -> return $ Just (UnsatisfiedDependency name)
       Just (NewPackage rpkg) -> checkPackage rpkg >>= \case
@@ -324,10 +325,10 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     forM packageNames $ \(name, range) -> do
       _resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
-          warns ["Failed to build ", pshow name, "@", pshow range,
-                 ": ", pshow e]
+          warns ["Failed to build ", tshow name, "@", tshow range,
+                 ": ", tshow e]
           addBroken name range (Reason $ show e)
-          return $ semver 0 0 0
+          return $ NotCircular $ semver 0 0 0
       whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path

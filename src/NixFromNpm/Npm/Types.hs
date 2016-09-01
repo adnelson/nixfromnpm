@@ -3,13 +3,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveGeneric #-}
 module NixFromNpm.Npm.Types (
     module NixFromNpm.Npm.Version,
     module NixFromNpm.Npm.PackageMap,
     PackageInfo(..), PackageMeta(..), VersionInfo(..),
     DistInfo(..), DependencyType(..),
     BrokenPackageReason(..), ResolvedDependency(..),
-    Shasum(..)
+    Shasum(..), PossiblyCircularSemVer(..), unpackPSC,
   ) where
 
 import qualified ClassyPrelude as CP
@@ -73,6 +74,17 @@ data DependencyType
   | DevDependency -- ^ Only required for development.
   deriving (Show, Eq)
 
+-- | Dependencies might be circular; this type lets us indicate if so.
+data PossiblyCircularSemVer
+  = NotCircular SemVer
+  | Circular SemVer
+  deriving (Show, Eq, Ord, Generic)
+
+-- | Convert a PossiblyCircularSemVer to a SemVer.
+unpackPSC :: PossiblyCircularSemVer -> SemVer
+unpackPSC (Circular sv) = sv
+unpackPSC (NotCircular sv) = sv
+
 -- | Reasons why an expression might not have been able to be built.
 data BrokenPackageReason
   = NoMatchingPackage PackageName
@@ -95,7 +107,7 @@ instance Exception BrokenPackageReason
 -- | We might not be able to resolve a dependency, in which case we record
 -- it as a broken package.
 data ResolvedDependency
-  = Resolved SemVer -- ^ Package has been resolved at this version.
+  = Resolved PossiblyCircularSemVer -- ^ Package resolved at this version.
   | Broken BrokenPackageReason -- ^ Could not build the dependency.
   deriving (Show, Eq)
 
@@ -178,7 +190,9 @@ instance FromJSON VersionInfo where
 instance FromJSON SemVerRange where
   parseJSON v = case v of
     String s -> case parseSemVerRange s of
-      Left err -> typeMismatch ("valid semantic version (got " <> show v <> ")") v
+      Left err -> do
+        let errorMessage = "valid semantic version (got " <> show v <> ")"
+        typeMismatch errorMessage v
       Right range -> return range
     _ -> typeMismatch "string" v
 
@@ -190,7 +204,7 @@ instance FromJSON PackageInfo where
         convert tags [] = return $ PackageInfo vs (H.fromList tags)
         convert tags ((tName, tVer):ts) = case parseSemVer tVer of
           Left err -> failC ["Tag ", tName, " refers to an invalid ",
-                             "semver string ", tVer, ": ", pshow err]
+                             "semver string ", tVer, ": ", tshow err]
           Right ver -> convert ((tName, ver):tags) ts
     convert [] $ H.toList tags'
 

@@ -40,7 +40,7 @@ import NixFromNpm.Git.Types as Git hiding (Tag)
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     fixName, nodePackagesDir, toDotNix,
                                     writeNix, resolvedPkgToNix)
-import NixFromNpm.Npm.Types (VersionInfo(..),
+import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
                              PackageInfo(..), BrokenPackageReason(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
@@ -69,6 +69,8 @@ data PreExistingPackage
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined (FromOutput expr) = FromExistingInOutput expr
 toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
+
+instance Hashable PossiblyCircularSemVer
 
 data NpmFetcherSettings = NpmFetcherSettings {
   nfsRegistries :: [URI],
@@ -197,7 +199,7 @@ getHttpWith timeout retries headers uri = loop retries where
       CurlOK -> return content
       code | retries <= 0 -> throw $ toErr status code
            | otherwise -> do
-               putStrsLn ["Request failed. ", pshow retries, " retries left."]
+               putStrsLn ["Request failed. ", tshow retries, " retries left."]
                loop (retries - 1)
 
 
@@ -245,14 +247,14 @@ hexSha256 = SHA256 . pack . showDigest . sha256
 _getPackageInfo :: PackageName -> URI -> NpmFetcher PackageInfo
 _getPackageInfo pkgName registryUri = do
   putStrsLn ["Querying ", uriToText registryUri,
-             " for package ", pshow pkgName, "..."]
+             " for package ", tshow pkgName, "..."]
   authHeader <- case pkgName of
     PackageName name Nothing -> return [] -- no namespace, no auth
     PackageName name (Just namespace) -> do
       H.lookup namespace <$> asks nfsNpmAuthTokens >>= \case
         Nothing -> return []
         Just token -> do
-          putStrsLn ["Using token ", pshow token, " for namespace ", namespace]
+          putStrsLn ["Using token ", tshow token, " for namespace ", namespace]
           return [("Authorization", "Bearer " <> token)]
   let route = case pkgName of
         PackageName name Nothing -> name
@@ -383,7 +385,7 @@ extractPkgJson path = do
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
 fetchHttp :: URI -- ^ The URI to fetch.
-          -> NpmFetcher SemVer -- ^ The package at that URI.
+          -> NpmFetcher PossiblyCircularSemVer -- ^ The package at that URI.
 fetchHttp uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- prefetchSha256 uri
@@ -394,7 +396,7 @@ fetchHttp uri = do
   let dist = DistInfo {diUrl = uriToText uri,
                        diShasum = hash}
   -- Add the dist information to the version info and resolve it.
-  versionInfoToSemVer $ versionInfo {viDist = Just dist}
+  versionInfoToSemVer (versionInfo {viDist = Just dist})
 
 -- | Send a curl to github with some extra headers set.
 githubCurl :: FromJSON a => URI -> NpmFetcher a
@@ -408,7 +410,7 @@ githubCurl uri = do
   putStrsLn ["GET ", uriToText uri]
   jsonStr <- getHttp uri headers
   case eitherDecode jsonStr of
-    Left err -> throw $ InvalidJsonFromGithub (pshow err)
+    Left err -> throw $ InvalidJsonFromGithub (tshow err)
     Right info -> return info
 
 makeGithubURI :: Name -> Name -> URI
@@ -458,7 +460,7 @@ gitRefToSha owner repo ref = case ref of
             throw (InvalidGitRef ref)
 
 -- | Fetches an arbitrary git repo from a uri.
-fetchArbitraryGit :: URI -> NpmFetcher SemVer
+fetchArbitraryGit :: URI -> NpmFetcher PossiblyCircularSemVer
 fetchArbitraryGit uri = throw $
   NotYetImplemented $
     concat ["nixfromnpm can't fetch arbitrary git repos yet (",
@@ -489,7 +491,7 @@ tarballNameToRef txt = do
       | otherwise -> txt
 
 -- | Fetch from a github URI. The URI must point to github.
-fromGithubUri :: URI -> NpmFetcher SemVer
+fromGithubUri :: URI -> NpmFetcher PossiblyCircularSemVer
 fromGithubUri uri = resolveUri `catch` \(e::GithubError) -> fetchHttp uri where
   resolveUri = do
     (owner, repo, sha) <- case T.split (=='/') $ pack (uriPath uri) of
@@ -587,7 +589,7 @@ resolveNpmVersionRange pkgName pkgRange = do
 -- a package from git or http, etc.
 _resolveNpmVersionRange :: PackageName
                         -> NpmVersionRange
-                        -> NpmFetcher SemVer
+                        -> NpmFetcher PossiblyCircularSemVer
 _resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
   NpmUri uri | isGithubUri uri -> fromGithubUri uri
@@ -612,16 +614,16 @@ _resolveNpmVersionRange name range = case range of
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
-resolveDep :: PackageName -> SemVerRange -> NpmFetcher SemVer
+resolveDep :: PackageName -> SemVerRange -> NpmFetcher PossiblyCircularSemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   -- We've already defined some versions of this package.
   Just versions -> case filter (matches range) (M.keys versions) of
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
-          versionDots = pshow bestVersion
+          versionDots = tshow bestVersion
           package = fromJust $ M.lookup bestVersion versions
-      putStrs ["Requirement ", pshow name, " version ",
+      putStrs ["Requirement ", tshow name, " version ",
                pack $ show range, " already satisfied: "]
       putStrsLn $ case package of
         NewPackage _ -> ["fetched package version ", versionDots]
@@ -630,7 +632,7 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
                                    " to override)"]
         FromExistingInExtension name _ -> ["version ", versionDots,
                                            " provided by extension ", name]
-      return bestVersion
+      return $ NotCircular bestVersion
   -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
 
@@ -648,7 +650,7 @@ finishResolving name ver = do
   modify $ \s ->
     s {currentlyResolving = pmDelete name ver $ currentlyResolving s,
        packageStackTrace = P.tail $ packageStackTrace s}
-  putStrsLn ["Finished resolving ", pshow name, " ", pshow ver]
+  putStrsLn ["Finished resolving ", tshow name, " ", tshow ver]
 
 -- | Print the current package stack trace.
 showTrace :: NpmFetcher ()
@@ -678,7 +680,7 @@ recurOn packageName version deptype deps = do
         getDesc OptionalDependency = app "optional" (getDesc Dependency)
         (desc, descPlural) = getDesc deptype
     when (length depList > 0) $ do
-      putStrsLn [pshow packageName, " version ", pshow version, " has ",
+      putStrsLn [tshow packageName, " version ", tshow version, " has ",
                  descPlural, ": ", showDeps depList]
     forM depList $ \(depName, depRange) -> do
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
@@ -686,8 +688,8 @@ recurOn packageName version deptype deps = do
       result <- resolveNpmVersionRange depName depRange
       case result of
         Broken reason -> do
-          warns ["Failed to fetch dependency ", pshow depName, " version ",
-                 pshow depRange, ": ", pshow reason]
+          warns ["Failed to fetch dependency ", tshow depName, " version ",
+                 tshow depRange, ": ", tshow reason]
           addReport depName depRange packageName version
         _ -> return ()
       return (depName, result)
@@ -779,8 +781,8 @@ updateLatestNix maybePkgName dir = do
       let latest = maximum versions
           label = case maybePkgName of
             Nothing -> getFilename dir
-            Just pkgName -> pshow pkgName
-      putStrsLn ["Latest version of ", label, " is ", pshow latest]
+            Just pkgName -> tshow pkgName
+      putStrsLn ["Latest version of ", label, " is ", tshow latest]
       createSymbolicLink (toDotNix latest) (dir </> "latest.nix")
 
 -- | Where we're deriving the name from the path.
@@ -801,19 +803,24 @@ writePackage name version expr = do
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
 
--- | Resolve a @VersionInfo@ and get the resulting @SemVer@.
-versionInfoToSemVer :: VersionInfo -> NpmFetcher SemVer
+-- | Resolve a @VersionInfo@ and get the resulting @SemVer@, which
+-- might be circular.
+versionInfoToSemVer :: VersionInfo
+                    -> NpmFetcher PossiblyCircularSemVer
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
-    True -> do -- This is a cycle: allowed for dev dependencies, but we
-               -- don't want to loop infinitely so we just return.
-               return viVersion
-    False -> snd <$> resolveVersionInfo vInfo
+    True -> do -- This is a cycle. We don't want to loop infinitely
+               -- so we just return.
+               warns ["Circular package detected: ", tshow viName, "@",
+                      tshow viVersion]
+               return $ Circular viVersion
+    False -> NotCircular . snd <$> resolveVersionInfo vInfo
 
 -- | Resolves a dependency given a name and version range.
-_resolveDep :: PackageName -> SemVerRange -> NpmFetcher SemVer
+_resolveDep :: PackageName -> SemVerRange
+            -> NpmFetcher PossiblyCircularSemVer
 _resolveDep name range = do
-  putStrsLn ["Resolving ", pshow name, " (", pshow range, ")"]
+  putStrsLn ["Resolving ", tshow name, " (", tshow range, ")"]
   pInfo <- getPackageInfo name
   current <- gets currentlyResolving
   -- Choose the entry with the highest version that matches the range.
@@ -826,15 +833,15 @@ _resolveDep name range = do
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.
              -> PackageName -- ^ Name of the package.
-             -> NpmFetcher SemVer -- ^ A resolved dependency.
+             -> NpmFetcher PossiblyCircularSemVer -- ^ A resolved dependency.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
     Nothing -> throw $ NoSuchTag tag
     Just version -> case H.lookup version $ piVersions pInfo of
       Nothing -> errorC ["Tag ", tag, " points to version ",
-                         pshow version, ", but no such version of ",
-                         pshow pkgName, " exists."]
+                         tshow version, ", but no such version of ",
+                         tshow pkgName, " exists."]
       Just versionInfo -> versionInfoToSemVer versionInfo
 
 -- | Default settings. The one caveat here is that there's no good way

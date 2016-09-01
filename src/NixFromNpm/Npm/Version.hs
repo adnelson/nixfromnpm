@@ -43,13 +43,13 @@ instance Show NpmVersionRange where
   show (LocalPath pth) = show pth
 
 showPair :: PackageName -> SemVer -> Text
-showPair name version = pshow name <> "@" <> pshow version
+showPair name version = tshow name <> "@" <> tshow version
 
 showPairs :: [(PackageName, SemVer)] -> Text
 showPairs = mapJoinBy ", " (uncurry showPair)
 
 showRangePair :: PackageName -> NpmVersionRange -> Text
-showRangePair name range = pshow name <> "@" <> pshow range
+showRangePair name range = tshow name <> "@" <> tshow range
 
 showDeps :: [(PackageName, NpmVersionRange)] -> Text
 showDeps ranges = mapJoinBy ", " (uncurry showRangePair) ranges

@@ -87,9 +87,10 @@ toSelectorNoVersion (PackageName name mNamespace) = do
 
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
-toNixExpr name (Resolved semver) = toDepExpr name semver
+toNixExpr name (Resolved (NotCircular semver)) = toDepExpr name semver
+toNixExpr name (Resolved (Circular semver)) = toDepExpr name semver
 toNixExpr name (Broken reason) = "brokenPackage" @@ mkNonRecSet
-  ["name" $= mkStr (pshow name), "reason" $= mkStr (pshow reason)]
+  ["name" $= mkStr (tshow name), "reason" $= mkStr (tshow reason)]
 
 -- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
@@ -97,7 +98,7 @@ writeNix path = writeFile path . (<> "\n") . show . prettyNix
 
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> FilePath
-toDotNix v = fromText $ pshow v <> ".nix"
+toDotNix v = fromText $ tshow v <> ".nix"
 
 -- | Get the .nix filename relative to the nodePackages folder of a package.
 toRelPath :: PackageName -> SemVer -> FilePath
@@ -263,7 +264,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
     PackageName name namespace = rpName
     args = mkNonRecSet $ catMaybes [
       Just $ "name" $= mkStr name,
-      Just $ "version" $= (mkStr $ pshow rpVersion),
+      Just $ "version" $= (mkStr $ tshow rpVersion),
       Just $ "src" $= distInfoToNix (pnNamespace rpName) rpDistInfo,
       bindTo "namespace" <$> map mkStr namespace,
       bindTo "deps" <$> withNodePackages False deps,
