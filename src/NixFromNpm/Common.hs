@@ -38,14 +38,15 @@ module NixFromNpm.Common (
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
-    partitionEither
+    partitionEither, throw
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
                              maximum, maximumBy, (</>), (<>),
                              minimum, try, stripPrefix, ioError,
-                             mapM_, sequence_, foldM, forM_,
+                             mapM_, sequence_, foldM, forM_, throw, throwIO,
                              filterM, replicateM, writeFile, readFile)
+import Control.Exception (throw)
 import qualified Prelude as P
 import Control.Monad.RWS.Strict hiding (Any)
 import Control.Monad (when)
@@ -57,7 +58,7 @@ import Control.Monad.State.Strict (MonadState, StateT, State, get, gets,
                                    runStateT, execState, execStateT,
                                    evalState, evalStateT)
 import Control.Monad.Except (ExceptT, MonadError(..), throwError, runExceptT)
-import Control.Exception.Lifted hiding (assert)
+import Control.Exception.Lifted () -- hiding (assert, )
 import Control.Monad.Identity (Identity(..))
 import Control.Monad.Trans.Control
 import Control.Applicative hiding (empty, optional)
