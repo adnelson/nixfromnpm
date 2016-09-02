@@ -15,7 +15,10 @@ let
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
                        intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
-                       attrValues concatStringsSep;
+                       attrValues concatStringsSep optionalString;
+
+  # Map a function and concatenate with newlines.
+  concatMapLines = list: func: concatStringsSep "\n" (map func list);
 
   # This expression builds the raw C headers and source files for the base
   # node.js installation. Node packages which use the C API for node need to
@@ -125,14 +128,6 @@ let
       in
       # Combine the results into a single set.
       foldl (a: b: a // b) {} cycles';
-
-  # Next we need a function which given a list of packages, retrieves
-  # all of those packages' dependencies. This is a simple fold.
-  allDependencies = packageList:
-    foldl (a: b: a // b) {} (map (p: p.runtimeDependencies) packageList);
-
-  # Here's a bit of bash that will extract a package into node_modules.
-  extractPkg = p: "tar xf ${p.src} && mv package node_modules/${p.fullName}";
 
   # We'll put all of these together below, for packages that have
   # circular dependencies.
@@ -350,12 +345,12 @@ let
         import json
         with open("package.json") as f:
             package_json = json.load(f)
-        ${flip concatMapStrings (attrNames patchDependencies) (name: let
+        ${concatMapLines (attrNames patchDependencies) (name: let
             version = patchDependencies."${name}";
           in
           # Iterate through all of the dependencies we're patching, and for
           # each one either remove it or set it to something else.
-          flip concatMapStrings dependencyTypes (depType: ''
+          concatMapLines dependencyTypes (depType: ''
             if "${name}" in package_json.setdefault("${depType}", {}):
                 ${if version == null then ''
                     print("removing ${name} from ${depType}")
@@ -373,6 +368,17 @@ let
       runHook postPatch
     '';
 
+    # Compute any cycles. Remove 'self' from the dependency closure.
+    circularDepClosure = removeAttrs (cycles {} self) [self.name];
+
+    # Turn the closure into a list of all circular dependencies.
+    circulars = attrValues circularDepClosure;
+
+    # All of the transitive dependencies (non-circular) of the
+    # circular packages.
+    transCircularDeps =
+      foldl (a: b: a // b) {} (map (p: p.runtimeDependencies) circulars);
+
     configurePhase =
     let
       # Symlink dependencies for node modules.
@@ -389,7 +395,6 @@ let
           fi
         fi
       '';
-      depClosure = cycles {} self;
     in concatStringsSep "\n" (
       ["runHook preConfigure"] ++
       (flip map (attrValues requiredDependencies) (dep:
@@ -400,15 +405,35 @@ let
           ${concatMapStrings link (attrValues dep.peerDependencies)}
         '')) ++
       ["runHook postConfigure"] ++
-      (optional (depClosure != {}) ''
-        echo Circular dependencies:
-        echo ${concatStringsSep " " (map (p: p.fullName) (attrValues depClosure))}
-        exit 1
-      '')
-    );
+      (optional (circulars != []) (let
+       in concatStringsSep "\n" [
+        # Extract all of the circular dependencies' tarballs.
+        (concatMapLines circulars (dep: ''
+          echo Satisfying ${dep.fullName}, circular dependency \
+            of ${self.fullName}
+          mkdir -p node_modules
+          if [[ ! -d node_modules/${dep.fullName} ]]; then
+            tar xf ${dep.src}
+            if [[ ! -d package ]]; then
+              echo "Expected ${dep.src} to be a tarball containing a" \
+                   "'package' directory. Don't know how to handle this :("
+              exit 1
+            fi
+            mv package node_modules/${dep.fullName}
+          fi
+        ''))
+        # Symlink all of the transitive dependencies of the circular packages.
+        (concatMapLines (attrValues transCircularDeps) link)
+        # Create a temporary symlink to the current package directory,
+        # so that node knows that the dependency is satisfied when
+        # checking the recursive dependencies (grumble grumble).
+        "ln -s $PWD node_modules/${self.fullName}"
+      ]
+    )));
 
-    buildPhase = ''
-      runHook preBuild
+    buildPhase = concatStringsSep "\n" [
+      "runHook preBuild"
+      ''
       (
         # NPM reads the `HOME` environment variable and fails if it doesn't
         # exist, so set it here.
@@ -431,8 +456,17 @@ let
           exit 1
         }
       )
-      runHook postBuild
-    '';
+      ''
+      # If we have any circular dependencies, they will need to reference
+      # the current package at runtime. Make a symlink into the node modules
+      # folder which points at where the package will live in $out.
+      (optionalString (circulars != []) ''
+        rm node_modules/${self.fullName}
+        ln -s $out/lib/node_modules/${self.fullName} \
+          node_modules/${self.fullName}
+      '')
+      "runHook postBuild"
+    ];
 
     installPhase = ''
       runHook preInstall
