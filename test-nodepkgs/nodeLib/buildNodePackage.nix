@@ -11,7 +11,7 @@
 
 let
   inherit (pkgs) stdenv python;
-  inherit (pkgs.lib) showVal optional;
+  inherit (pkgs.lib) showVal optional foldl;
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
                        intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
@@ -105,34 +105,37 @@ let
   # 2. Symlink all of these into node_modules.
   # 3. Extract the source of each circular dependency into node_modules.
   # 4. Make a self-referential symlink of A.
-  #
-  # So the first step is to compute the closure of a list of dependencies.
-  # We need to keep track of the names of packages we've already
-  # encountered to avoid loops.
-  getCDClosure =
-    # Name of the package we're building
-    name:
-    # List of circular dependencies.
-    circularDependencies:
-    let
-      namesToSkip = {name = null;} // toAttrSet circularDependencies;
-    in
-    null;
 
-  # getClosure = results: pkgList:
-  #   fold (a: b: a // b) {} (
-  #     for pkgList (pkg:
-  #       # Don't recur if we've already found this package.
-  #       if hasAttr pkg.name results then {} else
-  #       # Else add the subpackage to the results set and recur on it.
-  #       let results' = results // {"${pkg.name}" = pkg;}; in
-  #       results' // getClosure results' (attrValues subpkg.runtimeDependencies)
-  #   )
+  # So the first step is to compute the closure of a package's
+  # circular dependencies.  We need to keep track of the names of
+  # packages we've already encountered to avoid loops.
+  cycles =
+    # Packages we've already seen.
+    seenPackages:
+    # Name of package we're inspecting.
+    package:
+      if hasAttr package.name seenPackages
+      # We've completed the cycle; stop here.
+      then seenPackages
+      else let
+        # Add package to seen.
+        seen = seenPackages // {"${package.name}" = package;};
+        # Recur on circular dependencies.
+        cycles' = map (cycles seen) (attrValues package.circularDependencies);
+      in
+      # Combine the results into a single set.
+      foldl (a: b: a // b) {} cycles';
 
-    # for circularDependencies (cDep:
-    #   # Iterate through this dependency's runtime requirements, grabbing all of *their* runtime requirements, unless we've already seen them.
-    # )
+  # Next we need a function which given a list of packages, retrieves
+  # all of those packages' dependencies. This is a simple fold.
+  allDependencies = packageList:
+    foldl (a: b: a // b) {} (map (p: p.runtimeDependencies) packageList);
 
+  # Here's a bit of bash that will extract a package into node_modules.
+  extractPkg = p: "tar xf ${p.src} && mv package node_modules/${p.fullName}";
+
+  # We'll put all of these together below, for packages that have
+  # circular dependencies.
 in
 
 {
@@ -386,6 +389,7 @@ let
           fi
         fi
       '';
+      depClosure = cycles {} self;
     in concatStringsSep "\n" (
       ["runHook preConfigure"] ++
       (flip map (attrValues requiredDependencies) (dep:
@@ -395,7 +399,12 @@ let
           ${link dep}
           ${concatMapStrings link (attrValues dep.peerDependencies)}
         '')) ++
-      ["runHook postConfigure"]
+      ["runHook postConfigure"] ++
+      (optional (depClosure != {}) ''
+        echo Circular dependencies:
+        echo ${concatStringsSep " " (map (p: p.fullName) (attrValues depClosure))}
+        exit 1
+      '')
     );
 
     buildPhase = ''
