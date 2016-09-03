@@ -41,6 +41,7 @@ import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     fixName, nodePackagesDir, toDotNix,
                                     writeNix, resolvedPkgToNix)
 import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
+                             CircularSemVer(..),
                              PackageInfo(..), BrokenPackageReason(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
@@ -69,8 +70,6 @@ data PreExistingPackage
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined (FromOutput expr) = FromExistingInOutput expr
 toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
-
-instance Hashable PossiblyCircularSemVer
 
 data NpmFetcherSettings = NpmFetcherSettings {
   nfsRegistries :: [URI],
@@ -809,11 +808,12 @@ versionInfoToSemVer :: VersionInfo
                     -> NpmFetcher PossiblyCircularSemVer
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
-    True -> do -- This is a cycle. We don't want to loop infinitely
-               -- so we just return.
-               warns ["Circular package detected: ", tshow viName, "@",
-                      tshow viVersion]
-               return $ Circular viVersion
+    True -> do
+      -- This is a cycle. We don't want to loop infinitely
+      -- so we just return.
+      warns ["Circular package detected: ", tshow viName, "@",
+              tshow viVersion]
+      return $ Circular $ CircularSemVer viVersion
     False -> NotCircular . snd <$> resolveVersionInfo vInfo
 
 -- | Resolves a dependency given a name and version range.

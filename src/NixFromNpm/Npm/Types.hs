@@ -11,6 +11,7 @@ module NixFromNpm.Npm.Types (
     DistInfo(..), DependencyType(..),
     BrokenPackageReason(..), ResolvedDependency(..),
     Shasum(..), PossiblyCircularSemVer(..), unpackPSC,
+    sepCirculars, sepCircularMap, CircularSemVer(..)
   ) where
 
 import qualified ClassyPrelude as CP
@@ -77,13 +78,45 @@ data DependencyType
 -- | Dependencies might be circular; this type lets us indicate if so.
 data PossiblyCircularSemVer
   = NotCircular SemVer
-  | Circular SemVer
+  | Circular CircularSemVer
   deriving (Show, Eq, Ord, Generic)
+
+instance Hashable PossiblyCircularSemVer
+
+-- | Wrapper for SemVers so we can tell when they're circular.
+newtype CircularSemVer = CircularSemVer {unCirc :: SemVer}
+  deriving (Show, Eq, Ord, Generic)
+
+instance Hashable CircularSemVer
 
 -- | Convert a PossiblyCircularSemVer to a SemVer.
 unpackPSC :: PossiblyCircularSemVer -> SemVer
-unpackPSC (Circular sv) = sv
+unpackPSC (Circular (CircularSemVer sv)) = sv
 unpackPSC (NotCircular sv) = sv
+
+-- | Separate a list of PossiblyCircularSemVers into two lists.
+-- The first element contains non-circular dependencies, and the
+-- second contains circular ones.
+sepCirculars :: [PossiblyCircularSemVer] -> ([SemVer], [CircularSemVer])
+sepCirculars [] = ([], [])
+sepCirculars (psc:rest) = do
+  let (noncirculars, circulars) = sepCirculars rest
+  case psc of
+    NotCircular nc -> (nc:noncirculars, circulars)
+    Circular c -> (noncirculars, c:circulars)
+
+-- | Similar to @sepCirculars@ but takes in a HashMap and returns a
+-- pair of HashMaps.
+sepCircularMap :: (Hashable a, Eq a)
+               => HashMap a PossiblyCircularSemVer
+               -> (HashMap a SemVer, HashMap a CircularSemVer)
+sepCircularMap m = go $ H.toList m where
+  go [] = (mempty, mempty)
+  go ((key, psc):rest) = do
+    let (noncirculars, circulars) = go rest
+    case psc of
+      NotCircular nc -> (H.insert key nc noncirculars, circulars)
+      Circular c -> (noncirculars, H.insert key c circulars)
 
 -- | Reasons why an expression might not have been able to be built.
 data BrokenPackageReason

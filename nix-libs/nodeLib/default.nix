@@ -70,7 +70,6 @@ rec {
 
   buildNodePackage = import ./buildNodePackage.nix ({
     inherit pkgs nodejs buildNodePackage;
-    neededNatives = [pkgs.python] ++ optionals isLinux [pkgs.utillinux];
   } // (if npm3 then {npm = _npm3;} else {}));
   # A generic package that will fail to build. This is used to indicate
   # packages that are broken, without failing the entire generation of
