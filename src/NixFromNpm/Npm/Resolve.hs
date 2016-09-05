@@ -20,6 +20,7 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Numeric (showHex)
 import System.IO.Temp (openTempFile, createTempDirectory)
+import Network.Curl (Long)
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL8
@@ -29,7 +30,6 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
 import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
                silently)
-import Network.Curl
 import Network.URI (escapeURIString, isUnreserved)
 import Nix.Expr
 import Data.Digest.Pure.SHA (sha256, showDigest)
@@ -40,6 +40,7 @@ import NixFromNpm.Git.Types as Git hiding (Tag)
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     fixName, nodePackagesDir, toDotNix,
                                     writeNix, resolvedPkgToNix)
+import NixFromNpm.HttpTools (HttpError(..), getHttpWith)
 import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
                              CircularSemVer(..),
                              PackageInfo(..), BrokenPackageReason(..),
@@ -48,7 +49,6 @@ import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
---------------------------------------------------------------------------
 
 -- | Things which can be converted into nix expressions: either they
 -- are actual nix expressions themselves (which can be either
@@ -71,6 +71,7 @@ toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined (FromOutput expr) = FromExistingInOutput expr
 toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
 
+-- | Settings that affect the behavior of the NPM fetcher.
 data NpmFetcherSettings = NpmFetcherSettings {
   nfsRegistries :: [URI],
   -- ^ List of URIs that we can use to query for NPM packages, in order of
@@ -130,93 +131,21 @@ data BrokenPackageReport = BrokenPackageReport {
   -- ^ Reason why it broke.
   } deriving (Eq, Show)
 
--- instance Show BrokenPackageReport where
---   show BrokenPackageReport{..} = do
---     let depsOf = unpack $ showPairs $ psToList bprDependencyOf
---     unlines $ catMaybes [
---       maybeIf (not $ H.null bprDependencyOf) ("Dependency of: " <> depsOf),
---       Just $ show bprReason
---       ]
-
 -- | The monad for fetching from NPM.
 type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
 
----------------------- HTTP Fetching -----------------------
-
-
-data HttpResult a
-  = HttpSuccess a
-  | HttpError HttpError
-  deriving (Show, Eq, Typeable)
-
-data HttpError
-  = HttpErrorWithCode Int
-  | HttpTimedOut Long
-  | CurlError CurlCode
-  deriving (Show, Eq, Typeable)
-
-instance Exception HttpError
-
--- | Given a URL and some options, perform a curl request and return the
--- resulting code, HTTP status, and response body.
-curlGetBS :: (MonadBaseControl IO io, MonadIO io)
-          => URLString
-          -> [CurlOption]
-          -> io (CurlCode, Int, BL8.ByteString)
-curlGetBS url opts = liftIO $ initialize >>= \ h -> do
-  (finalBody, gatherBody) <- newIncoming
-  setopt h (CurlFailOnError True)
-  setDefaultSSLOpts h url
-  setopt h (CurlURL url)
-  setopt h (CurlWriteFunction (gatherOutput_ gatherBody))
-  mapM (setopt h) opts
-  rc <- perform h
-  bs <- finalBody
-  status <- getResponseCode h
-  return (rc, status, bs)
-
--- | Convert (key, value) pairs into a curl Headers option.
-makeHeaders :: [(Text, ByteString)] -> CurlOption
-makeHeaders headers = CurlHttpHeaders $ map mk headers where
-  mk (key, val) = T.unpack key <> ": " <> B.unpack val
-
-getHttpWith :: (MonadBaseControl IO io, MonadIO io)
-            => Long -- ^ Timeout in seconds
-            -> Int  -- ^ Number of retries
-            -> [(Text, ByteString)] -- ^ Headers
-            -> URI -- ^ URI to hit
-            -> io BL8.ByteString -- ^ Response content
-getHttpWith timeout retries headers uri = loop retries where
-  opts = [makeHeaders headers, CurlFollowLocation True,
-          CurlTimeout timeout]
-  toErr status CurlHttpReturnedError = HttpErrorWithCode status
-  toErr _ CurlOperationTimeout = HttpTimedOut timeout
-  toErr _ err = CurlError err
-  loop retries = do
-    (code, status, content) <- curlGetBS (uriToString uri) opts
-    case code of
-      CurlOK -> return content
-      code | retries <= 0 -> throw $ toErr status code
-           | otherwise -> do
-               putStrsLn ["Request failed. ", tshow retries, " retries left."]
-               loop (retries - 1)
-
-
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
-getHttp :: URI -- ^ URI to hit
+npmGetHttp :: URI -- ^ URI to hit
         -> [(Text, ByteString)] -- ^ Additional headers to add
         -> NpmFetcher BL8.ByteString
-getHttp uri headers = do
+npmGetHttp uri headers = do
   let defaultHeaders = [("Connection", "Close"),
                         ("User-Agent", "nixfromnpm-fetcher")]
   timeout <- asks nfsRequestTimeout
   retries <- asks nfsRetries
   putStrsLn ["Hitting URI ", uriToText uri]
   getHttpWith timeout retries (headers <> defaultHeaders) uri
-
----------------------------------------------------------
-
 
 addPackage :: PackageName -> SemVer -> FullyDefinedPackage -> NpmFetcher ()
 addPackage name version pkg = do
@@ -259,7 +188,7 @@ _getPackageInfo pkgName registryUri = do
         PackageName name Nothing -> name
         PackageName name (Just namespace) ->
           concat ["@", namespace, "%2f", name]
-  jsonStr <- getHttp (registryUri // route) authHeader
+  jsonStr <- npmGetHttp (registryUri // route) authHeader
              `catches` [
                Handler (\case
                 HttpErrorWithCode 404 -> throw $ NoMatchingPackage pkgName
@@ -345,7 +274,7 @@ prefetchSha256 uri = do
   let outPath = dir </> "outfile"
   putStrsLn ["putting in location ", pathToText outPath]
   -- Download the file into memory, calculate the hash.
-  tarball <- getHttp uri []
+  tarball <- npmGetHttp uri []
   let hash = hexSha256 tarball
   -- Return the hash and the path.
   path <- liftIO $ do
@@ -407,7 +336,7 @@ githubCurl uri = do
   let headers = extraHeaders <>
               [("Accept", "application/vnd.github.quicksilver-preview+json")]
   putStrsLn ["GET ", uriToText uri]
-  jsonStr <- getHttp uri headers
+  jsonStr <- npmGetHttp uri headers
   case eitherDecode jsonStr of
     Left err -> throw $ InvalidJsonFromGithub (tshow err)
     Right info -> return info
