@@ -328,7 +328,7 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
           warns ["Failed to build ", tshow name, "@", tshow range,
                  ": ", tshow e]
           addBroken name range (Reason $ show e)
-          return $ NotCircular $ semver 0 0 0
+          return $ semver 0 0 0
       whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path

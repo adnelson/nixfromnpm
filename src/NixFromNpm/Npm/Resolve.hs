@@ -56,8 +56,7 @@ import NixFromNpm.Npm.PackageMap
 -- new packages which we have discovered.
 data FullyDefinedPackage
   = NewPackage ResolvedPkg
-  | FromExistingInOutput NExpr
-  | FromExistingInExtension Name NExpr
+  | Existing PreExistingPackage
   deriving (Show, Eq)
 
 -- | The type of pre-existing packages, which can either come from the
@@ -68,8 +67,7 @@ data PreExistingPackage
   deriving (Show, Eq)
 
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
-toFullyDefined (FromOutput expr) = FromExistingInOutput expr
-toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
+toFullyDefined = Existing
 
 -- | Settings that affect the behavior of the NPM fetcher.
 data NpmFetcherSettings = NpmFetcherSettings {
@@ -147,11 +145,10 @@ npmGetHttp uri headers = do
   putStrsLn ["Hitting URI ", uriToText uri]
   getHttpWith timeout retries (headers <> defaultHeaders) uri
 
+-- | Insert a new, fully defined package into our state.
 addPackage :: PackageName -> SemVer -> FullyDefinedPackage -> NpmFetcher ()
 addPackage name version pkg = do
-  modify $ \s -> s {
-    resolved = pmInsert name version pkg (resolved s)
-    }
+  modify $ \s -> s { resolved = pmInsert name version pkg (resolved s) }
 
 rmPackage :: PackageName -> SemVer -> NpmFetcher ()
 rmPackage name version = do
@@ -313,7 +310,7 @@ extractPkgJson path = do
 -- | Fetch a package over HTTP. Return the version of the fetched package,
 -- and store the hash.
 fetchHttp :: URI -- ^ The URI to fetch.
-          -> NpmFetcher PossiblyCircularSemVer -- ^ The package at that URI.
+          -> NpmFetcher SemVer -- ^ The package at that URI.
 fetchHttp uri = do
   -- Use nix-fetch to download and hash the tarball.
   (hash, tarballPath) <- prefetchSha256 uri
@@ -388,7 +385,7 @@ gitRefToSha owner repo ref = case ref of
             throw (InvalidGitRef ref)
 
 -- | Fetches an arbitrary git repo from a uri.
-fetchArbitraryGit :: URI -> NpmFetcher PossiblyCircularSemVer
+fetchArbitraryGit :: URI -> NpmFetcher SemVer
 fetchArbitraryGit uri = throw $
   NotYetImplemented $
     concat ["nixfromnpm can't fetch arbitrary git repos yet (",
@@ -419,7 +416,7 @@ tarballNameToRef txt = do
       | otherwise -> txt
 
 -- | Fetch from a github URI. The URI must point to github.
-fromGithubUri :: URI -> NpmFetcher PossiblyCircularSemVer
+fromGithubUri :: URI -> NpmFetcher SemVer
 fromGithubUri uri = resolveUri `catch` \(e::GithubError) -> fetchHttp uri where
   resolveUri = do
     (owner, repo, sha) <- case T.split (=='/') $ pack (uriPath uri) of
@@ -500,7 +497,7 @@ resolveNpmVersionRange pkgName pkgRange = do
     -- If it's not broken, we can proceed normally here, and catch an error
     -- if it breaks.
     Nothing -> do
-      (Resolved <$> _resolveNpmVersionRange pkgName pkgRange)
+      (Resolved . NotCircular <$> _resolveNpmVersionRange pkgName pkgRange)
         `catches` [
         Handler (\reason -> do
                      addBroken pkgName pkgRange reason
@@ -517,7 +514,7 @@ resolveNpmVersionRange pkgName pkgRange = do
 -- a package from git or http, etc.
 _resolveNpmVersionRange :: PackageName
                         -> NpmVersionRange
-                        -> NpmFetcher PossiblyCircularSemVer
+                        -> NpmFetcher SemVer
 _resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
   NpmUri uri | isGithubUri uri -> fromGithubUri uri
@@ -542,7 +539,7 @@ _resolveNpmVersionRange name range = case range of
 
 -- | Uses the set of downloaded packages as a cache to avoid unnecessary
 -- duplication.
-resolveDep :: PackageName -> SemVerRange -> NpmFetcher PossiblyCircularSemVer
+resolveDep :: PackageName -> SemVerRange -> NpmFetcher SemVer
 resolveDep name range = H.lookup name <$> gets resolved >>= \case
   -- We've already defined some versions of this package.
   Just versions -> case filter (matches range) (M.keys versions) of
@@ -555,12 +552,12 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
                pack $ show range, " already satisfied: "]
       putStrsLn $ case package of
         NewPackage _ -> ["fetched package version ", versionDots]
-        FromExistingInOutput _ -> ["already had version ", versionDots,
+        Existing (FromOutput _) -> ["already had version ", versionDots,
                                    " in output directory (use --no-cache",
                                    " to override)"]
-        FromExistingInExtension name _ -> ["version ", versionDots,
-                                           " provided by extension ", name]
-      return $ NotCircular bestVersion
+        Existing (FromExtension name _) -> ["version ", versionDots,
+                                            " provided by extension ", name]
+      return bestVersion
   -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
 
@@ -734,7 +731,7 @@ versionInfoToResolved = map fst . resolveVersionInfo
 -- | Resolve a @VersionInfo@ and get the resulting @SemVer@, which
 -- might be circular.
 versionInfoToSemVer :: VersionInfo
-                    -> NpmFetcher PossiblyCircularSemVer
+                    -> NpmFetcher SemVer
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
     True -> do
@@ -742,12 +739,12 @@ versionInfoToSemVer vInfo@VersionInfo{..} =
       -- so we just return.
       warns ["Circular package detected: ", tshow viName, "@",
               tshow viVersion]
-      return $ Circular $ CircularSemVer viVersion
-    False -> NotCircular . snd <$> resolveVersionInfo vInfo
+      return viVersion
+    False -> snd <$> resolveVersionInfo vInfo
 
 -- | Resolves a dependency given a name and version range.
 _resolveDep :: PackageName -> SemVerRange
-            -> NpmFetcher PossiblyCircularSemVer
+            -> NpmFetcher SemVer
 _resolveDep name range = do
   putStrsLn ["Resolving ", tshow name, " (", tshow range, ")"]
   pInfo <- getPackageInfo name
@@ -762,7 +759,7 @@ _resolveDep name range = do
 -- | Resolve a dependency by tag name (e.g. a release tag).
 resolveByTag :: Name -- ^ Tag name.
              -> PackageName -- ^ Name of the package.
-             -> NpmFetcher PossiblyCircularSemVer -- ^ A resolved dependency.
+             -> NpmFetcher SemVer -- ^ A resolved dependency.
 resolveByTag tag pkgName = do
   pInfo <- getPackageInfo pkgName
   case H.lookup tag $ piTags pInfo of
