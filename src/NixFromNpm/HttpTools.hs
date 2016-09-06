@@ -6,7 +6,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 module NixFromNpm.HttpTools (
   module Network.Curl,
-  Long, HttpResult(..), HttpError(..), getHttpWith, makeHeaders, curlGetBS
+  HttpResult(..), HttpError(..), getHttpWith, makeHeaders, curlGetBS
   ) where
 
 import qualified Data.ByteString.Char8 as B

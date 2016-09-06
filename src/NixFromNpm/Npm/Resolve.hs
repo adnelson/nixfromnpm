@@ -21,6 +21,7 @@ import qualified Data.Map as M
 import Numeric (showHex)
 import System.IO.Temp (openTempFile, createTempDirectory)
 import Network.Curl (Long)
+import Data.List (tails)
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL8
@@ -113,10 +114,13 @@ data NpmFetcherState = NpmFetcherState {
   -- ^ For cycle detection.
   packageStackTrace :: [(PackageName, SemVer)],
   -- ^ Stack of packages that we are resolving so we can get the path to the
-  -- current package.
+  -- current package. The most recent package is first in this list.
   brokenPackages :: HashMap PackageName
-                    (Map NpmVersionRange BrokenPackageReport)
+                    (Map NpmVersionRange BrokenPackageReport),
   -- ^ Record of broken packages.
+  circularities :: PackageMap (HashSet (PackageName, SemVer))
+  -- ^ Set of circularities. (P2, V2) is a member of the set for (P1, V1)
+  -- if P1 @ V1 depends on P2 @ V2 and vice versa.
   }
 
 -- | The report of a broken package; stores why a package broke, and of what
@@ -486,9 +490,45 @@ addReport name range depOfName depOfVersion = do
 
 -- | Given two (name, version) pairs, determine if there is
 -- circularity between them. Circularity between A and B means that A
--- depends on B and A also appears somewhere in B's dependency closure.
-isCircular :: PackageName -> SemVer -> PackageName -> SemVer -> NpmFetcher Bool
-isCircular = undefined
+-- depends on B and A also appears somewhere in B's dependency
+-- closure. The algorithm can be expressed mathematically as:
+--
+-- isCirc (X, Y) = (X, Y) in circularities OR
+--                 any (isCirc (X', Y) for X' in circs(X)) where
+--                 where circs(X) = {X' | (X, X') in circularities}
+
+isCircular :: (PackageName, SemVer) -> (PackageName, SemVer) -> NpmFetcher Bool
+isCircular (name1, version1) (name2, version2) = do
+  circs <- gets circularities
+  let
+    -- Prevent infinite loops by bombing out if we hit a cycle.
+    go seen (name, version) | HS.member (name, version) seen = False
+    go seen (name, version) = case pmLookup name version circs of
+      -- No circularities recorded for this name, version pair.
+      Nothing -> False
+      -- Some circularities recorded. Then possibly the second pair is
+      -- in the circularity set, or it could be a transitive dependency
+      -- meaning it's somewhere further down the chain.
+      Just pairs -> case HS.member (name2, version2) pairs of
+        True -> True
+        False -> any (go (HS.insert (name, version) seen)) (HS.toList pairs)
+  return $ go mempty (name1, version1) where
+
+-- | Given two (name, version) pairs, store that they are circularly
+-- dependent. Do this by putting the first pair in the set of circular
+-- dependencies for the first, and vice versa.
+addCirc :: (PackageName, SemVer) -> (PackageName, SemVer) -> NpmFetcher ()
+addCirc (name1, version1) (name2, version2) = do
+  putStrsLn [tshow name1, "@", tshow version1, " <==> ",
+             tshow name2, "@", tshow version2]
+  circs <- gets circularities
+  let circs1 = pmLookupDefault mempty name1 version1 circs
+      circs1' = HS.insert (name2, version2) circs1
+      circs2 = pmLookupDefault mempty name2 version2 circs
+      circs2' = HS.insert (name1, version1) circs2
+  modify $ \s -> do
+    s {circularities = pmInsert name1 version1 circs1'
+                        (pmInsert name2 version2 circs2' (circularities s))}
 
 
 -- | Resolve a dependency. Takes the name and version of a package,
@@ -506,7 +546,7 @@ resolveDependency pkgName pkgVersion depName depRange = do
       -- So now we have a version, but it might be circular. To
       -- determine this, check if there's a circularity from this
       -- package, version pair to the other.
-      isCircular pkgName pkgVersion depName depVersion >>= \case
+      isCircular (pkgName, pkgVersion) (depName, depVersion) >>= \case
         True -> return $ Circular $ CircularSemVer depVersion
         False -> return $ NotCircular depVersion
     handle reason = do
@@ -731,6 +771,8 @@ writePackage name version expr = do
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
 
+
+
 -- | Resolve a @VersionInfo@ and get the resulting @SemVer@, which
 -- might be circular.
 versionInfoToSemVer :: VersionInfo
@@ -738,10 +780,17 @@ versionInfoToSemVer :: VersionInfo
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
     True -> do
-      -- This is a cycle. We don't want to loop infinitely
-      -- so we just return.
+      -- This is a cycle. We don't want to loop infinitely, but we
+      -- need to record the circularity relationships here.
+      currentTrace <- gets packageStackTrace
+      let cycle = dropWhile (/= (viName, viVersion)) $ reverse currentTrace
+      -- Iterate through all pairs of (name, version), record each as
+      -- a circularity.
+      forM_ [(nv1, nv2) | (nv1:rest) <- tails cycle, nv2 <- rest] $
+        \(nv1, nv2) -> addCirc nv1 nv2
+      let trace = mapJoinBy " -> " (\(p, v) -> tshow p <> "@" <> tshow v) cycle
       warns ["Circular package detected: ", tshow viName, "@",
-              tshow viVersion]
+              tshow viVersion, ". Trace: ", trace]
       return viVersion
     False -> snd <$> resolveVersionInfo vInfo
 
@@ -833,7 +882,8 @@ startState = NpmFetcherState {
   packageStackTrace = mempty,
   pkgInfos = H.empty,
   currentlyResolving = mempty,
-  brokenPackages = mempty
+  brokenPackages = mempty,
+  circularities = mempty
   }
 
 -- | Run an npmfetcher action with given settings and state.

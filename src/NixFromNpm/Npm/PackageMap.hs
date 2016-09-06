@@ -117,6 +117,11 @@ pmLookup name version pmap = case H.lookup name pmap of
   Nothing -> Nothing
   Just vmap -> M.lookup version vmap
 
+pmLookupDefault :: a -> PackageName -> SemVer -> PackageMap a -> a
+pmLookupDefault def n v pmap = case pmLookup n v pmap of
+  Nothing -> def
+  Just x -> x
+
 pmDiff :: PackageMap a -> PackageMap b -> PackageMap a
 pmDiff pmap1 pmap2 = foldl' step pmap1 $ H.toList pmap2 where
   step result (pName, verMap) = case H.lookup pName result of
