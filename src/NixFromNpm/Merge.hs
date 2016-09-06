@@ -7,7 +7,6 @@ module NixFromNpm.Merge where
 import NixFromNpm.Common
 import NixFromNpm.Conversion.ToDisk (writeNodePackagesNix)
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
-import NixFromNpm.Npm.Resolve (updateLatestNix')
 
 -- Some types which are more expressive than their raw counterparts.
 -- Hey, if you have a cool type system, why not leverage it...
@@ -46,7 +45,4 @@ mergeInto mergeType (Source source) (Dest target) = do
                    pathToText targetVersionFile]
         if dryRun then putStrLn "  (Skipped due to dry run)" else
           copyFile versionFile targetVersionFile
-    putStrsLn ["Updating latest.nix files in ", pathToText srcDir]
-    if dryRun then putStrLn "  (Skipped due to dry run)" else
-      updateLatestNix' targetDir
   writeNodePackagesNix True target
