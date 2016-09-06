@@ -7,7 +7,7 @@ module NixFromNpm.Merge where
 import NixFromNpm.Common
 import NixFromNpm.Conversion.ToDisk (writeNodePackagesNix)
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
-import NixFromNpm.NpmLookup (updateLatestNix')
+import NixFromNpm.Npm.Resolve (updateLatestNix')
 
 -- Some types which are more expressive than their raw counterparts.
 -- Hey, if you have a cool type system, why not leverage it...

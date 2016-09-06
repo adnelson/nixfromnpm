@@ -5,15 +5,22 @@
   nodejs,
   # Which version of npm to use.
   npm ? nodejs,
-  # List of required native build inputs.
-  neededNatives,
   # Self-reference for overriding purposes.
   buildNodePackage,
+  xcode-wrapper,
 }:
 
 let
-  inherit (pkgs) stdenv;
-  inherit (pkgs.lib) showVal optional;
+  inherit (pkgs) stdenv python;
+  inherit (pkgs.lib) showVal optional foldl;
+  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
+                       intersectLists isAttrs listToAttrs nameValuePair hasAttr
+                       mapAttrs filterAttrs attrNames elem concatMapStrings
+                       attrValues concatStringsSep optionalString;
+
+  # Map a function and concatenate with newlines.
+  concatMapLines = list: func: concatStringsSep "\n" (map func list);
+
   # This expression builds the raw C headers and source files for the base
   # node.js installation. Node packages which use the C API for node need to
   # link against these files and use the headers.
@@ -25,7 +32,7 @@ let
   # Checks a derivation's structure; if it doesn't have certain attributes then
   # it isn't a node package and we error. Otherwise return the package.
   verifyNodePackage = pkg:
-    if !(builtins.hasAttr "namespace" pkg)
+    if !builtins.hasAttr "namespace" pkg
     then throw ''
       Package dependency does not appear to be a node package: ${showVal pkg}.
       Use "buildInputs" or "propagatedBuildInputs" for non-node dependencies,
@@ -39,6 +46,15 @@ let
     npm test
     runHook postCheck
   '';
+
+  # Convert a list of derivations into an attribute set. Ensure
+  # everything in the set is a node package. Keys of the set will be
+  # package names, and values will be the packages.
+  toAttrSet = obj:
+    if isAttrs obj then obj
+    else if obj == null then {}
+    else listToAttrs (map (x: nameValuePair x.name x)
+                     (map verifyNodePackage obj));
 in
 
 {
@@ -70,6 +86,11 @@ in
 
   # List of (runtime) dependencies.
   deps ? [],
+
+  # List of runtime dependencies which are circular, meaning that the
+  # package being defined here occurs somewhere in its own dependency
+  # tree.
+  circularDependencies ? [],
 
   # List of peer dependencies. See:
   # https://nodejs.org/en/blog/npm/peer-dependencies/
@@ -164,40 +185,49 @@ then throw "${uniqueName}: listed as broken, see definition for details"
 else
 
 let
-  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
-                       intersectLists isAttrs listToAttrs nameValuePair hasAttr
-                       mapAttrs filterAttrs attrNames elem concatMapStrings
-                       attrValues concatStringsSep;
-
+  # Types of npm dependencies as they appear as keys in a package.json file.
   dependencyTypes = ["dependencies" "devDependencies" "peerDependencies"
                      "optionalDependencies"];
-
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
   attrsToRemove = ["deps" "flags" "skipOptionalDependencies" "isBroken"
                    "passthru" "doCheck" "includeDevDependencies" "version"
-                   "namespace" "patchDependencies" "skipDevDependencyCleanup"]
-                   ++ dependencyTypes;
+                   "namespace" "patchDependencies" "skipDevDependencyCleanup"
+                   "circularDependencies"] ++ dependencyTypes;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
   self = let
-    toAttrSet = obj: if isAttrs obj then obj else if obj == null then {} else
-      (listToAttrs (map (x: nameValuePair x.name x) obj));
+    # Set of normal dependencies.
+    _dependencies = toAttrSet deps;
+    # Set of circular dependencies.
+    _circularDependencies = toAttrSet circularDependencies;
+    # Set of optional dependencies.
+    _optionalDependencies = toAttrSet optionalDependencies;
+    # Set of peer dependencies.
+    _peerDependencies = toAttrSet peerDependencies;
 
-    _dependencies = toAttrSet (map verifyNodePackage deps);
-    _optionalDependencies = toAttrSet (map verifyNodePackage optionalDependencies);
-    _peerDependencies = toAttrSet (map verifyNodePackage peerDependencies);
     # Dev dependencies will only be included if requested.
     _devDependencies = if !includeDevDependencies then {}
-                       else toAttrSet (map verifyNodePackage devDependencies);
+                       else toAttrSet devDependencies;
 
-    # Depencencies we need to propagate (all except devDependencies)
-    propagatedDependencies = _dependencies // _optionalDependencies // _peerDependencies;
+    # Dependencies we need to propagate, meaning they need to be
+    # available to the package at runtime. We don't include the
+    # circular dependencies here, even though they might be needed at
+    # runtime, because we have a "special way" of building them.
+    runtimeDependencies = _dependencies //
+                             _optionalDependencies //
+                             _peerDependencies;
+
+    # Names of packages to keep when cleaning up dev dependencies. We
+    # put them in a dictionary for fast lookup, but the values are
+    # just null.
+    packagesToRetain = mapAttrs (_: _: null) (
+      runtimeDependencies // _circularDependencies);
 
     # Required dependencies are those that we haven't filtered yet.
-    requiredDependencies = _devDependencies // propagatedDependencies;
+    requiredDependencies = _devDependencies // runtimeDependencies;
 
     # Flags that we will pass to `npm install`.
     npmFlags = concatStringsSep " " ([
@@ -239,12 +269,12 @@ let
         import json
         with open("package.json") as f:
             package_json = json.load(f)
-        ${flip concatMapStrings (attrNames patchDependencies) (name: let
+        ${concatMapLines (attrNames patchDependencies) (name: let
             version = patchDependencies."${name}";
           in
           # Iterate through all of the dependencies we're patching, and for
           # each one either remove it or set it to something else.
-          flip concatMapStrings dependencyTypes (depType: ''
+          concatMapLines dependencyTypes (depType: ''
             if "${name}" in package_json.setdefault("${depType}", {}):
                 ${if version == null then ''
                     print("removing ${name} from ${depType}")
@@ -262,38 +292,92 @@ let
       runHook postPatch
     '';
 
-    configurePhase = ''
-      runHook preConfigure
-      ${
-        let
-          # Symlink dependencies for node modules.
-          link = dep: ''
-            if ! [[ -e node_modules/${dep.fullName} ]]; then
-              ln -sv ${dep.fullPath} ${dep.modulePath}
-              if [[ -d ${dep}/bin ]]; then
-                find -L ${dep}/bin -maxdepth 1 -type f -executable \
-                  | while read exec_file; do
-                    echo "Symlinking $exec_file binary to node_modules/.bin"
-                    mkdir -p node_modules/.bin
-                    ln -s $exec_file node_modules/.bin/$(basename $exec_file)
-                done
-              fi
-            fi
-          '';
+    # Computes the "circular closure" of a package.
+    # See ./circular_dependencies.md for details.
+    circularClosure =
+      # Packages we've already seen.
+      seenPackages:
+      # Name of package we're inspecting.
+      package:
+        if hasAttr package.name seenPackages
+        # We've completed the cycle; stop here.
+        then seenPackages
+        else let
+          # Add package to seen.
+          seen = seenPackages // {"${package.name}" = package;};
+          # Recur on circular dependencies.
+          closure = map (circularClosure seen)
+                        (attrValues package.circularDependencies);
         in
-        flip concatMapStrings (attrValues requiredDependencies) (dep:
+        # Combine the results into a single set.
+        foldl (a: b: a // b) {} closure;
+
+    # Compute any cycles. Remove 'self' from the dependency closure.
+    circularDepClosure = removeAttrs (circularClosure {} self) [self.name];
+
+    # Turn the closure into a list of all circular dependencies.
+    circulars = attrValues circularDepClosure;
+
+    # All of the transitive dependencies (non-circular) of the
+    # circular packages.
+    transCircularDeps =
+      foldl (a: b: a // b) {} (map (p: p.runtimeDependencies) circulars);
+
+    configurePhase =
+    let
+      # Symlink dependencies for node modules.
+      link = dep: ''
+        if ! [[ -e node_modules/${dep.fullName} ]]; then
+          ln -sv ${dep.fullPath} ${dep.modulePath}
+          if [[ -d ${dep}/bin ]]; then
+            find -L ${dep}/bin -maxdepth 1 -type f -executable \
+              | while read exec_file; do
+                echo "Symlinking $exec_file binary to node_modules/.bin"
+                mkdir -p node_modules/.bin
+                ln -s $exec_file node_modules/.bin/$(basename $exec_file)
+            done
+          fi
+        fi
+      '';
+    in concatStringsSep "\n" (
+      ["runHook preConfigure"] ++
+      (flip map (attrValues requiredDependencies) (dep:
         # Create symlinks (or copies) of all of the required dependencies.
         ''
           mkdir -p ${dep.modulePath}
           ${link dep}
           ${concatMapStrings link (attrValues dep.peerDependencies)}
-        '')}
+        '')) ++
+      ["runHook postConfigure"] ++
+      (optional (circulars != []) (let
+       in concatStringsSep "\n" [
+        # Extract all of the circular dependencies' tarballs.
+        (concatMapLines circulars (dep: ''
+          echo Satisfying ${dep.fullName}, circular dependency \
+            of ${self.fullName}
+          mkdir -p node_modules
+          if [[ ! -d node_modules/${dep.fullName} ]]; then
+            tar xf ${dep.src}
+            if [[ ! -d package ]]; then
+              echo "Expected ${dep.src} to be a tarball containing a" \
+                   "'package' directory. Don't know how to handle this :("
+              exit 1
+            fi
+            mv package node_modules/${dep.fullName}
+          fi
+        ''))
+        # Symlink all of the transitive dependencies of the circular packages.
+        (concatMapLines (attrValues transCircularDeps) link)
+        # Create a temporary symlink to the current package directory,
+        # so that node knows that the dependency is satisfied when
+        # checking the recursive dependencies (grumble grumble).
+        "ln -s $PWD node_modules/${self.fullName}"
+      ]
+    )));
 
-      runHook postConfigure
-    '';
-
-    buildPhase = ''
-      runHook preBuild
+    buildPhase = concatStringsSep "\n" [
+      "runHook preBuild"
+      ''
       (
         # NPM reads the `HOME` environment variable and fails if it doesn't
         # exist, so set it here.
@@ -316,8 +400,17 @@ let
           exit 1
         }
       )
-      runHook postBuild
-    '';
+      ''
+      # If we have any circular dependencies, they will need to reference
+      # the current package at runtime. Make a symlink into the node modules
+      # folder which points at where the package will live in $out.
+      (optionalString (circulars != []) ''
+        rm node_modules/${self.fullName}
+        ln -s $out/lib/node_modules/${self.fullName} \
+          node_modules/${self.fullName}
+      '')
+      "runHook postBuild"
+    ];
 
     installPhase = ''
       runHook preInstall
@@ -334,7 +427,7 @@ let
         flip concatMapStrings (attrValues _devDependencies) (dep:
          let
            rm = dep:
-             if !hasAttr dep.name propagatedDependencies
+             if !hasAttr dep.name packagesToRetain
              then ''
                # Remove the dependency from node modules
                rm -rfv node_modules/${dep.fullName}
@@ -474,7 +567,8 @@ let
       # Propagate pieces of information about the package so that downstream
       # packages can reflect on them.
       passthru = (passthru // {
-        inherit uniqueName fullName namespace version requiredDependencies;
+        inherit uniqueName fullName namespace version runtimeDependencies;
+        circularDependencies = _circularDependencies;
         # The basic name is the name without namespace or version, in contrast
         # to the fullName which might have a namespace attached, or the
         # uniqueName which has a version attached.
@@ -512,18 +606,22 @@ let
              else if nameSuffix == null then throw "Name suffix is null"
              else "${namePrefix}${name}-${version}${nameSuffix}";
 
-      # Pass the required dependencies, any non-nodejs dependencies,
+      # Propagate the runtime dependencies, any non-nodejs dependencies,
       # and nodejs itself.
       propagatedBuildInputs = propagatedBuildInputs ++
-                              attrValues propagatedDependencies ++
+                              attrValues runtimeDependencies ++
                               [nodejs];
 
 
-      buildInputs = [npm] ++ buildInputs ++
+      # Give as buildInputs npm, python, dev dependencies (if any) and
+      # additional specified build inputs. In addition, on darwin we
+      # provide XCode, since node-gyp will use it, and on linux we add
+      # utillinux.
+      buildInputs = [npm python] ++
                     attrValues _devDependencies ++
-                    neededNatives ++
-                    # On Darwin we provide xcode
-                    (optional stdenv.isDarwin pkgs.xcodeenv.xcodewrapper);
+                    buildInputs ++
+                    (optional stdenv.isLinux pkgs.utillinux) ++
+                    (optional stdenv.isDarwin xcode-wrapper);
     };
 
     in stdenv.mkDerivation mkDerivationArgs;

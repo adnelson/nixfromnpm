@@ -36,7 +36,7 @@ module NixFromNpm.Common (
     module System.Console.ANSI,
     Name, AuthToken, Record, (//),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
-    errorC, joinBy, mapJoinBy, getEnv, modifyMap, pshow, unsafeParseURI,
+    errorC, joinBy, mapJoinBy, getEnv, modifyMap, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
     partitionEither, throw
   ) where
@@ -123,10 +123,6 @@ modifyMap test inputMap = foldl' step mempty $ M.toList inputMap where
     Just newElem -> M.insert k newElem result
 
 
--- | Show as text
-pshow :: Show t => t -> Text
-pshow = pack . show
-
 -- | Convert a URI into Text.
 uriToText :: URI -> Text
 uriToText = pack . uriToString
@@ -166,9 +162,11 @@ mapJoinBy sep func = joinBy sep . map func
 getEnv :: MonadIO m => Text -> m (Maybe Text)
 getEnv = shelly . silently . get_env
 
+-- | Call the monadic fail function, concatenating a list of Text.
 failC :: Monad m => [Text] -> m a
 failC = fail . unpack . concat
 
+-- | Throw an error after concatenation a list of Text.
 errorC :: [Text] -> a
 errorC = error . unpack . concat
 
@@ -180,12 +178,12 @@ uri // txt = do
         '/' -> uriToText uri
         _ -> uriToText uri <> "/"
   case parseRelativeReference (unpack txt) of
-    Nothing -> errorC ["Invalid appending URI: ", pshow txt]
+    Nothing -> errorC ["Invalid appending URI: ", tshow txt]
     Just uri' -> uri' `relativeTo` fixedUri
 
 unsafeParseURI :: Text -> URI
 unsafeParseURI txt = case parseURIText txt of
-  Nothing -> errorC ["Invalid URI text: ", pshow txt]
+  Nothing -> errorC ["Invalid URI text: ", tshow txt]
   Just uri -> uri
 
 parseURIText :: Text -> Maybe URI
@@ -229,9 +227,4 @@ fatalC = fatal . concat
 
 -- | Split up a list based on a predicate.
 partitionEither :: (a -> Either b c) -> [a] -> ([b], [c])
-partitionEither tester [] = ([], [])
-partitionEither tester (x:xs) = do
-  let (lefts, rights) = partitionEither tester xs
-  case tester x of
-    Left l -> (l:lefts, rights)
-    Right r -> (lefts, r:rights)
+partitionEither f = partitionEithers . map f

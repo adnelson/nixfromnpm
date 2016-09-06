@@ -14,7 +14,7 @@ import qualified Data.HashMap.Strict as H
 import Data.SemVer (anyVersion)
 import Options.Applicative
 
-import NixFromNpm.NpmLookup (getNpmTokens, parseNpmTokens)
+import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
 import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser (parseNpmVersionRange)

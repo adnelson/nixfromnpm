@@ -3,19 +3,19 @@
 module NixFromNpm (module NixFromNpm.Common,
                    module NixFromNpm.Options,
                    module Data.SemVer,
-                   module Data.SemVer.Parser,
-                   module NixFromNpm.NpmVersion,
-                   module NixFromNpm.NpmTypes,
-                   module NixFromNpm.Parsers.NpmVersion,
-                   module NixFromNpm.NpmLookup,
-                   module NixFromNpm.ConvertToNix) where
+                   module NixFromNpm.Npm.Version,
+                   module NixFromNpm.Npm.Types,
+                   module NixFromNpm.Npm.Resolve,
+                   module NixFromNpm.Conversion.ToDisk,
+                   module NixFromNpm.Conversion.ToNix,
+                   ) where
 
 import Data.SemVer
-import Data.SemVer.Parser
 
 import NixFromNpm.Common
 import NixFromNpm.Options
-import NixFromNpm.NpmVersion
-import NixFromNpm.NpmTypes
-import NixFromNpm.Parsers.NpmVersion
-import NixFromNpm.Conversion
+import NixFromNpm.Npm.Version
+import NixFromNpm.Npm.Types
+import NixFromNpm.Npm.Resolve
+import NixFromNpm.Conversion.ToDisk
+import NixFromNpm.Conversion.ToNix

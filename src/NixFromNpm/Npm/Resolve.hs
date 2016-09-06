@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
-module NixFromNpm.NpmLookup where
+module NixFromNpm.Npm.Resolve where
 
 --------------------------------------------------------------------------
 import qualified Prelude as P
@@ -20,6 +20,8 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Numeric (showHex)
 import System.IO.Temp (openTempFile, createTempDirectory)
+import Network.Curl (Long)
+import Data.List (tails)
 
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as BL8
@@ -29,7 +31,6 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import qualified Text.Parsec as Parsec
 import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
                silently)
-import Network.Curl
 import Network.URI (escapeURIString, isUnreserved)
 import Nix.Expr
 import Data.Digest.Pure.SHA (sha256, showDigest)
@@ -40,14 +41,15 @@ import NixFromNpm.Git.Types as Git hiding (Tag)
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     fixName, nodePackagesDir, toDotNix,
                                     writeNix, resolvedPkgToNix)
-import NixFromNpm.Npm.Types (VersionInfo(..),
+import NixFromNpm.HttpTools (HttpError(..), getHttpWith)
+import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
+                             CircularSemVer(..),
                              PackageInfo(..), BrokenPackageReason(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
---------------------------------------------------------------------------
 
 -- | Things which can be converted into nix expressions: either they
 -- are actual nix expressions themselves (which can be either
@@ -55,8 +57,7 @@ import NixFromNpm.Npm.PackageMap
 -- new packages which we have discovered.
 data FullyDefinedPackage
   = NewPackage ResolvedPkg
-  | FromExistingInOutput NExpr
-  | FromExistingInExtension Name NExpr
+  | Existing PreExistingPackage
   deriving (Show, Eq)
 
 -- | The type of pre-existing packages, which can either come from the
@@ -67,9 +68,9 @@ data PreExistingPackage
   deriving (Show, Eq)
 
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
-toFullyDefined (FromOutput expr) = FromExistingInOutput expr
-toFullyDefined (FromExtension name expr) = FromExistingInExtension name expr
+toFullyDefined = Existing
 
+-- | Settings that affect the behavior of the NPM fetcher.
 data NpmFetcherSettings = NpmFetcherSettings {
   nfsRegistries :: [URI],
   -- ^ List of URIs that we can use to query for NPM packages, in order of
@@ -113,10 +114,13 @@ data NpmFetcherState = NpmFetcherState {
   -- ^ For cycle detection.
   packageStackTrace :: [(PackageName, SemVer)],
   -- ^ Stack of packages that we are resolving so we can get the path to the
-  -- current package.
+  -- current package. The most recent package is first in this list.
   brokenPackages :: HashMap PackageName
-                    (Map NpmVersionRange BrokenPackageReport)
+                    (Map NpmVersionRange BrokenPackageReport),
   -- ^ Record of broken packages.
+  circularities :: PackageMap (HashSet (PackageName, SemVer))
+  -- ^ Set of circularities. (P2, V2) is a member of the set for (P1, V1)
+  -- if P1 @ V1 depends on P2 @ V2 and vice versa.
   }
 
 -- | The report of a broken package; stores why a package broke, and of what
@@ -129,84 +133,15 @@ data BrokenPackageReport = BrokenPackageReport {
   -- ^ Reason why it broke.
   } deriving (Eq, Show)
 
--- instance Show BrokenPackageReport where
---   show BrokenPackageReport{..} = do
---     let depsOf = unpack $ showPairs $ psToList bprDependencyOf
---     unlines $ catMaybes [
---       maybeIf (not $ H.null bprDependencyOf) ("Dependency of: " <> depsOf),
---       Just $ show bprReason
---       ]
-
 -- | The monad for fetching from NPM.
 type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
 
----------------------- HTTP Fetching -----------------------
-
-
-data HttpResult a
-  = HttpSuccess a
-  | HttpError HttpError
-  deriving (Show, Eq, Typeable)
-
-data HttpError
-  = HttpErrorWithCode Int
-  | HttpTimedOut Long
-  | CurlError CurlCode
-  deriving (Show, Eq, Typeable)
-
-instance Exception HttpError
-
--- | Given a URL and some options, perform a curl request and return the
--- resulting code, HTTP status, and response body.
-curlGetBS :: (MonadBaseControl IO io, MonadIO io)
-          => URLString
-          -> [CurlOption]
-          -> io (CurlCode, Int, BL8.ByteString)
-curlGetBS url opts = liftIO $ initialize >>= \ h -> do
-  (finalBody, gatherBody) <- newIncoming
-  setopt h (CurlFailOnError True)
-  setDefaultSSLOpts h url
-  setopt h (CurlURL url)
-  setopt h (CurlWriteFunction (gatherOutput_ gatherBody))
-  mapM (setopt h) opts
-  rc <- perform h
-  bs <- finalBody
-  status <- getResponseCode h
-  return (rc, status, bs)
-
--- | Convert (key, value) pairs into a curl Headers option.
-makeHeaders :: [(Text, ByteString)] -> CurlOption
-makeHeaders headers = CurlHttpHeaders $ map mk headers where
-  mk (key, val) = T.unpack key <> ": " <> B.unpack val
-
-getHttpWith :: (MonadBaseControl IO io, MonadIO io)
-            => Long -- ^ Timeout in seconds
-            -> Int  -- ^ Number of retries
-            -> [(Text, ByteString)] -- ^ Headers
-            -> URI -- ^ URI to hit
-            -> io BL8.ByteString -- ^ Response content
-getHttpWith timeout retries headers uri = loop retries where
-  opts = [makeHeaders headers, CurlFollowLocation True,
-          CurlTimeout timeout]
-  toErr status CurlHttpReturnedError = HttpErrorWithCode status
-  toErr _ CurlOperationTimeout = HttpTimedOut timeout
-  toErr _ err = CurlError err
-  loop retries = do
-    (code, status, content) <- curlGetBS (uriToString uri) opts
-    case code of
-      CurlOK -> return content
-      code | retries <= 0 -> throw $ toErr status code
-           | otherwise -> do
-               putStrsLn ["Request failed. ", pshow retries, " retries left."]
-               loop (retries - 1)
-
-
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
-getHttp :: URI -- ^ URI to hit
+npmGetHttp :: URI -- ^ URI to hit
         -> [(Text, ByteString)] -- ^ Additional headers to add
         -> NpmFetcher BL8.ByteString
-getHttp uri headers = do
+npmGetHttp uri headers = do
   let defaultHeaders = [("Connection", "Close"),
                         ("User-Agent", "nixfromnpm-fetcher")]
   timeout <- asks nfsRequestTimeout
@@ -214,14 +149,10 @@ getHttp uri headers = do
   putStrsLn ["Hitting URI ", uriToText uri]
   getHttpWith timeout retries (headers <> defaultHeaders) uri
 
----------------------------------------------------------
-
-
+-- | Insert a new, fully defined package into our state.
 addPackage :: PackageName -> SemVer -> FullyDefinedPackage -> NpmFetcher ()
 addPackage name version pkg = do
-  modify $ \s -> s {
-    resolved = pmInsert name version pkg (resolved s)
-    }
+  modify $ \s -> s { resolved = pmInsert name version pkg (resolved s) }
 
 rmPackage :: PackageName -> SemVer -> NpmFetcher ()
 rmPackage name version = do
@@ -245,20 +176,20 @@ hexSha256 = SHA256 . pack . showDigest . sha256
 _getPackageInfo :: PackageName -> URI -> NpmFetcher PackageInfo
 _getPackageInfo pkgName registryUri = do
   putStrsLn ["Querying ", uriToText registryUri,
-             " for package ", pshow pkgName, "..."]
+             " for package ", tshow pkgName, "..."]
   authHeader <- case pkgName of
     PackageName name Nothing -> return [] -- no namespace, no auth
     PackageName name (Just namespace) -> do
       H.lookup namespace <$> asks nfsNpmAuthTokens >>= \case
         Nothing -> return []
         Just token -> do
-          putStrsLn ["Using token ", pshow token, " for namespace ", namespace]
+          putStrsLn ["Using token ", tshow token, " for namespace ", namespace]
           return [("Authorization", "Bearer " <> token)]
   let route = case pkgName of
         PackageName name Nothing -> name
         PackageName name (Just namespace) ->
           concat ["@", namespace, "%2f", name]
-  jsonStr <- getHttp (registryUri // route) authHeader
+  jsonStr <- npmGetHttp (registryUri // route) authHeader
              `catches` [
                Handler (\case
                 HttpErrorWithCode 404 -> throw $ NoMatchingPackage pkgName
@@ -344,7 +275,7 @@ prefetchSha256 uri = do
   let outPath = dir </> "outfile"
   putStrsLn ["putting in location ", pathToText outPath]
   -- Download the file into memory, calculate the hash.
-  tarball <- getHttp uri []
+  tarball <- npmGetHttp uri []
   let hash = hexSha256 tarball
   -- Return the hash and the path.
   path <- liftIO $ do
@@ -394,7 +325,7 @@ fetchHttp uri = do
   let dist = DistInfo {diUrl = uriToText uri,
                        diShasum = hash}
   -- Add the dist information to the version info and resolve it.
-  versionInfoToSemVer $ versionInfo {viDist = Just dist}
+  versionInfoToSemVer (versionInfo {viDist = Just dist})
 
 -- | Send a curl to github with some extra headers set.
 githubCurl :: FromJSON a => URI -> NpmFetcher a
@@ -406,9 +337,9 @@ githubCurl uri = do
   let headers = extraHeaders <>
               [("Accept", "application/vnd.github.quicksilver-preview+json")]
   putStrsLn ["GET ", uriToText uri]
-  jsonStr <- getHttp uri headers
+  jsonStr <- npmGetHttp uri headers
   case eitherDecode jsonStr of
-    Left err -> throw $ InvalidJsonFromGithub (pshow err)
+    Left err -> throw $ InvalidJsonFromGithub (tshow err)
     Right info -> return info
 
 makeGithubURI :: Name -> Name -> URI
@@ -557,38 +488,84 @@ addReport name range depOfName depOfVersion = do
          return $ H.insert name reports'
   modify $ \s -> s {brokenPackages = update (brokenPackages s)}
 
--- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
--- figure out how to resolve the dependency. Checks the cache first, and does
--- error handling if @_resolveNpmVersionRange@ fails.
-resolveNpmVersionRange :: PackageName -- ^ Name of the package.
-                       -> NpmVersionRange -- ^ Version bounds of the package.
-                       -> NpmFetcher ResolvedDependency
-                       -- ^ Resolved version, or an error.
-resolveNpmVersionRange pkgName pkgRange = do
-  -- | We need to see if the package has been marked as broken first.
-  getBroken pkgName pkgRange >>= \case
-    -- If it's not broken, we can proceed normally here, and catch an error
-    -- if it breaks.
-    Nothing -> do
-      (Resolved <$> _resolveNpmVersionRange pkgName pkgRange)
-        `catches` [
-        Handler (\reason -> do
-                     addBroken pkgName pkgRange reason
-                     return $ Broken reason),
-        Handler (\(e::GithubError) -> do
-                     addBroken pkgName pkgRange $ GithubError e
-                     return $ Broken $ Reason $ show e)
-        ]
-    -- If it is already marked as broken, we add the upstream name and
-    -- version to the set of packages depending on this broken dependency.
-    Just report -> return $ Broken (bprReason report)
+-- | Given two (name, version) pairs, determine if there is
+-- circularity between them. Circularity between A and B means that A
+-- depends on B and A also appears somewhere in B's dependency
+-- closure. The algorithm can be expressed mathematically as:
+--
+-- isCirc (X, Y) = (X, Y) in circularities OR
+--                 any (isCirc (X', Y) for X' in circs(X)) where
+--                 where circs(X) = {X' | (X, X') in circularities}
+
+isCircular :: (PackageName, SemVer) -> (PackageName, SemVer) -> NpmFetcher Bool
+isCircular (name1, version1) (name2, version2) = do
+  circs <- gets circularities
+  let
+    -- Prevent infinite loops by bombing out if we hit a cycle.
+    go seen (name, version) | HS.member (name, version) seen = False
+    go seen (name, version) = case pmLookup name version circs of
+      -- No circularities recorded for this name, version pair.
+      Nothing -> False
+      -- Some circularities recorded. Then possibly the second pair is
+      -- in the circularity set, or it could be a transitive dependency
+      -- meaning it's somewhere further down the chain.
+      Just pairs -> case HS.member (name2, version2) pairs of
+        True -> True
+        False -> any (go (HS.insert (name, version) seen)) (HS.toList pairs)
+  return $ go mempty (name1, version1) where
+
+-- | Given two (name, version) pairs, store that they are circularly
+-- dependent. Do this by putting the first pair in the set of circular
+-- dependencies for the first, and vice versa.
+addCirc :: (PackageName, SemVer) -> (PackageName, SemVer) -> NpmFetcher ()
+addCirc (name1, version1) (name2, version2) = do
+  putStrsLn [tshow name1, "@", tshow version1, " <==> ",
+             tshow name2, "@", tshow version2]
+  circs <- gets circularities
+  let circs1 = pmLookupDefault mempty name1 version1 circs
+      circs1' = HS.insert (name2, version2) circs1
+      circs2 = pmLookupDefault mempty name2 version2 circs
+      circs2' = HS.insert (name1, version1) circs2
+  modify $ \s -> do
+    s {circularities = pmInsert name1 version1 circs1'
+                        (pmInsert name2 version2 circs2' (circularities s))}
+
+
+-- | Resolve a dependency. Takes the name and version of a package,
+-- and the name and version *range* of one of its dependencies.
+resolveDependency :: PackageName -- ^ Name of the package.
+                  -> SemVer      -- ^ Version of the package.
+                  -> PackageName -- ^ Name of the dependency.
+                  -> NpmVersionRange -- ^ Version bounds of the dependency.
+                  -> NpmFetcher ResolvedDependency
+                  -- ^ Resolved version, or an error.
+resolveDependency pkgName pkgVersion depName depRange = do
+  map Resolved resolver `catches` handleError where
+    resolver = do
+      depVersion <- resolveNpmVersionRange depName depRange
+      -- So now we have a version, but it might be circular. To
+      -- determine this, check if there's a circularity from this
+      -- package, version pair to the other.
+      isCircular (pkgName, pkgVersion) (depName, depVersion) >>= \case
+        True -> return $ Circular $ CircularSemVer depVersion
+        False -> return $ NotCircular depVersion
+    handle reason = do
+      warns ["Failed to fetch dependency ", tshow depName, " version ",
+             tshow depRange, ": ", tshow reason]
+      addBroken depName depRange reason
+      addReport depName depRange pkgName pkgVersion
+      return $ Broken reason
+    handleError = [
+      (Handler handle),
+      (Handler $ handle . GithubError)
+      ]
 
 -- | Resolve a version range. Figures out if it should query NPM, or download
 -- a package from git or http, etc.
-_resolveNpmVersionRange :: PackageName
-                        -> NpmVersionRange
-                        -> NpmFetcher SemVer
-_resolveNpmVersionRange name range = case range of
+resolveNpmVersionRange :: PackageName
+                       -> NpmVersionRange
+                       -> NpmFetcher SemVer
+resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
   NpmUri uri | isGithubUri uri -> fromGithubUri uri
              | otherwise -> case uriScheme uri of
@@ -619,17 +596,17 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
     [] -> _resolveDep name range -- No matching versions, need to fetch.
     vs -> do
       let bestVersion = maximum vs
-          versionDots = pshow bestVersion
+          versionDots = tshow bestVersion
           package = fromJust $ M.lookup bestVersion versions
-      putStrs ["Requirement ", pshow name, " version ",
+      putStrs ["Requirement ", tshow name, " version ",
                pack $ show range, " already satisfied: "]
       putStrsLn $ case package of
         NewPackage _ -> ["fetched package version ", versionDots]
-        FromExistingInOutput _ -> ["already had version ", versionDots,
+        Existing (FromOutput _) -> ["already had version ", versionDots,
                                    " in output directory (use --no-cache",
                                    " to override)"]
-        FromExistingInExtension name _ -> ["version ", versionDots,
-                                           " provided by extension ", name]
+        Existing (FromExtension name _) -> ["version ", versionDots,
+                                            " provided by extension ", name]
       return bestVersion
   -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
@@ -648,7 +625,7 @@ finishResolving name ver = do
   modify $ \s ->
     s {currentlyResolving = pmDelete name ver $ currentlyResolving s,
        packageStackTrace = P.tail $ packageStackTrace s}
-  putStrsLn ["Finished resolving ", pshow name, " ", pshow ver]
+  putStrsLn ["Finished resolving ", tshow name, " ", tshow ver]
 
 -- | Print the current package stack trace.
 showTrace :: NpmFetcher ()
@@ -678,19 +655,12 @@ recurOn packageName version deptype deps = do
         getDesc OptionalDependency = app "optional" (getDesc Dependency)
         (desc, descPlural) = getDesc deptype
     when (length depList > 0) $ do
-      putStrsLn [pshow packageName, " version ", pshow version, " has ",
+      putStrsLn [tshow packageName, " version ", tshow version, " has ",
                  descPlural, ": ", showDeps depList]
     forM depList $ \(depName, depRange) -> do
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair packageName version]
-      result <- resolveNpmVersionRange depName depRange
-      case result of
-        Broken reason -> do
-          warns ["Failed to fetch dependency ", pshow depName, " version ",
-                 pshow depRange, ": ", pshow reason]
-          addReport depName depRange packageName version
-        _ -> return ()
-      return (depName, result)
+      (,) depName <$> resolveDependency packageName version depName depRange
 
 -- | Current depth, which is 0 if we're at the top level (in which case the
 -- package stack trace would be length 1)
@@ -779,8 +749,8 @@ updateLatestNix maybePkgName dir = do
       let latest = maximum versions
           label = case maybePkgName of
             Nothing -> getFilename dir
-            Just pkgName -> pshow pkgName
-      putStrsLn ["Latest version of ", label, " is ", pshow latest]
+            Just pkgName -> tshow pkgName
+      putStrsLn ["Latest version of ", label, " is ", tshow latest]
       createSymbolicLink (toDotNix latest) (dir </> "latest.nix")
 
 -- | Where we're deriving the name from the path.
@@ -801,19 +771,34 @@ writePackage name version expr = do
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
 
--- | Resolve a @VersionInfo@ and get the resulting @SemVer@.
-versionInfoToSemVer :: VersionInfo -> NpmFetcher SemVer
+
+
+-- | Resolve a @VersionInfo@ and get the resulting @SemVer@, which
+-- might be circular.
+versionInfoToSemVer :: VersionInfo
+                    -> NpmFetcher SemVer
 versionInfoToSemVer vInfo@VersionInfo{..} =
   isBeingResolved viName viVersion >>= \case
-    True -> do -- This is a cycle: allowed for dev dependencies, but we
-               -- don't want to loop infinitely so we just return.
-               return viVersion
+    True -> do
+      -- This is a cycle. We don't want to loop infinitely, but we
+      -- need to record the circularity relationships here.
+      currentTrace <- gets packageStackTrace
+      let cycle = dropWhile (/= (viName, viVersion)) $ reverse currentTrace
+      -- Iterate through all pairs of (name, version), record each as
+      -- a circularity.
+      forM_ [(nv1, nv2) | (nv1:rest) <- tails cycle, nv2 <- rest] $
+        \(nv1, nv2) -> addCirc nv1 nv2
+      let trace = mapJoinBy " -> " (\(p, v) -> tshow p <> "@" <> tshow v) cycle
+      warns ["Circular package detected: ", tshow viName, "@",
+              tshow viVersion, ". Trace: ", trace]
+      return viVersion
     False -> snd <$> resolveVersionInfo vInfo
 
 -- | Resolves a dependency given a name and version range.
-_resolveDep :: PackageName -> SemVerRange -> NpmFetcher SemVer
+_resolveDep :: PackageName -> SemVerRange
+            -> NpmFetcher SemVer
 _resolveDep name range = do
-  putStrsLn ["Resolving ", pshow name, " (", pshow range, ")"]
+  putStrsLn ["Resolving ", tshow name, " (", tshow range, ")"]
   pInfo <- getPackageInfo name
   current <- gets currentlyResolving
   -- Choose the entry with the highest version that matches the range.
@@ -833,8 +818,8 @@ resolveByTag tag pkgName = do
     Nothing -> throw $ NoSuchTag tag
     Just version -> case H.lookup version $ piVersions pInfo of
       Nothing -> errorC ["Tag ", tag, " points to version ",
-                         pshow version, ", but no such version of ",
-                         pshow pkgName, " exists."]
+                         tshow version, ", but no such version of ",
+                         tshow pkgName, " exists."]
       Just versionInfo -> versionInfoToSemVer versionInfo
 
 -- | Default settings. The one caveat here is that there's no good way
@@ -897,7 +882,8 @@ startState = NpmFetcherState {
   packageStackTrace = mempty,
   pkgInfos = H.empty,
   currentlyResolving = mempty,
-  brokenPackages = mempty
+  brokenPackages = mempty,
+  circularities = mempty
   }
 
 -- | Run an npmfetcher action with given settings and state.

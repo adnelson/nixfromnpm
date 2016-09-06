@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ViewPatterns #-}
 module NixFromNpm.Conversion.ToNix where
 
 import qualified Prelude as P
@@ -87,9 +88,9 @@ toSelectorNoVersion (PackageName name mNamespace) = do
 
 -- | Converts a ResolvedDependency to a nix expression.
 toNixExpr :: PackageName -> ResolvedDependency -> NExpr
-toNixExpr name (Resolved semver) = toDepExpr name semver
+toNixExpr name (Resolved (unpackPSC -> semver)) = toDepExpr name semver
 toNixExpr name (Broken reason) = "brokenPackage" @@ mkNonRecSet
-  ["name" $= mkStr (pshow name), "reason" $= mkStr (pshow reason)]
+  ["name" $= mkStr (tshow name), "reason" $= mkStr (tshow reason)]
 
 -- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
@@ -97,7 +98,7 @@ writeNix path = writeFile path . (<> "\n") . show . prettyNix
 
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> FilePath
-toDotNix v = fromText $ pshow v <> ".nix"
+toDotNix v = fromText $ tshow v <> ".nix"
 
 -- | Get the .nix filename relative to the nodePackages folder of a package.
 toRelPath :: PackageName -> SemVer -> FilePath
@@ -229,8 +230,23 @@ packageMapToNix pMap = do
 resolvedPkgToNix :: ResolvedPkg -> NExpr
 resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
   where
-    -- Get a string representation of each dependency in name-version format.
-    deps = map (uncurry toNixExpr) $ H.toList rpDependencies
+    ---------------------------------------------------------------------------
+    -- Circular dependency resolution
+    --
+    -- This is pretty gnarly but for now just deal with it...
+    -- Step 1: throw out the "broken" packages from the dependencies.
+    withoutBrokens = H.fromList $ go (H.toList rpDependencies)
+      where go [] = []
+            go ((_, Broken _):rest) = go rest
+            go ((k, Resolved v):rest) = (k, v):go rest
+    -- Step 2: separate the dependencies into circular and non-circular.
+    (noncircDepMap, circDepMap) = sepCircularMap withoutBrokens
+    -- Step 3: create lists of nix expressions for the circular and
+    -- non-circular dependencies.
+    deps = map (uncurry toDepExpr) $ H.toList noncircDepMap
+    circDeps = flip map (H.toList circDepMap) $ \(name, CircularSemVer ver) ->
+                 toDepExpr name ver
+    ---------------------------------------------------------------------------
     peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
     optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
     -- Same for dev dependencies.
@@ -258,15 +274,16 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       [] -> if noneIfEmpty then Nothing else Just $ mkList []
       _ -> Just $ mkWith "nodePackages" $ mkList list
     devDepBinding = case devDeps of
-        Nothing -> Nothing
-        Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
+      Nothing -> Nothing
+      Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
     PackageName name namespace = rpName
     args = mkNonRecSet $ catMaybes [
       Just $ "name" $= mkStr name,
-      Just $ "version" $= (mkStr $ pshow rpVersion),
+      Just $ "version" $= (mkStr $ tshow rpVersion),
       Just $ "src" $= distInfoToNix (pnNamespace rpName) rpDistInfo,
       bindTo "namespace" <$> map mkStr namespace,
       bindTo "deps" <$> withNodePackages False deps,
+      bindTo "circularDependencies" <$> withNodePackages True circDeps,
       bindTo "peerDependencies" <$> withNodePackages True peerDeps,
       bindTo "optionalDependencies" <$> withNodePackages True optDeps,
       devDepBinding,
