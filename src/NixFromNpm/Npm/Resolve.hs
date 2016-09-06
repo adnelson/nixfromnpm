@@ -484,6 +484,13 @@ addReport name range depOfName depOfVersion = do
          return $ H.insert name reports'
   modify $ \s -> s {brokenPackages = update (brokenPackages s)}
 
+-- | Given two (name, version) pairs, determine if there is
+-- circularity between them. Circularity between A and B means that A
+-- depends on B and A also appears somewhere in B's dependency closure.
+isCircular :: PackageName -> SemVer -> PackageName -> SemVer -> NpmFetcher Bool
+isCircular = undefined
+
+
 -- | Resolve a dependency. Takes the name and version of a package,
 -- and the name and version *range* of one of its dependencies.
 resolveDependency :: PackageName -- ^ Name of the package.
@@ -493,9 +500,15 @@ resolveDependency :: PackageName -- ^ Name of the package.
                   -> NpmFetcher ResolvedDependency
                   -- ^ Resolved version, or an error.
 resolveDependency pkgName pkgVersion depName depRange = do
-  map Resolved resolver `catches` handleError
-  where
-    resolver = NotCircular <$> resolveNpmVersionRange depName depRange
+  map Resolved resolver `catches` handleError where
+    resolver = do
+      depVersion <- resolveNpmVersionRange depName depRange
+      -- So now we have a version, but it might be circular. To
+      -- determine this, check if there's a circularity from this
+      -- package, version pair to the other.
+      isCircular pkgName pkgVersion depName depVersion >>= \case
+        True -> return $ Circular $ CircularSemVer depVersion
+        False -> return $ NotCircular depVersion
     handle reason = do
       warns ["Failed to fetch dependency ", tshow depName, " version ",
              tshow depRange, ": ", tshow reason]
