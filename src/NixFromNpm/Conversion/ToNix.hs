@@ -274,8 +274,8 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       [] -> if noneIfEmpty then Nothing else Just $ mkList []
       _ -> Just $ mkWith "nodePackages" $ mkList list
     devDepBinding = case devDeps of
-        Nothing -> Nothing
-        Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
+      Nothing -> Nothing
+      Just ddeps -> bindTo "devDependencies" <$> withNodePackages False ddeps
     PackageName name namespace = rpName
     args = mkNonRecSet $ catMaybes [
       Just $ "name" $= mkStr name,

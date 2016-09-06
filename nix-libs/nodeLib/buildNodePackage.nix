@@ -7,6 +7,7 @@
   npm ? nodejs,
   # Self-reference for overriding purposes.
   buildNodePackage,
+  xcode-wrapper,
 }:
 
 let
@@ -620,7 +621,7 @@ let
                     attrValues _devDependencies ++
                     buildInputs ++
                     (optional stdenv.isLinux pkgs.utillinux) ++
-                    (optional stdenv.isDarwin pkgs.xcodeenv.xcodewrapper);
+                    (optional stdenv.isDarwin xcode-wrapper);
     };
 
     in stdenv.mkDerivation mkDerivationArgs;

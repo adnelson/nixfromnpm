@@ -33,11 +33,17 @@ let
   # Concatenate a list of sets.
   joinSets = foldl (a: b: a // b) {};
 
-  # Builds the extracted nix file. Since of course it can't use npm3,
+  # Builds npm3 from the package set. Since of course it can't use npm3,
   # being that it hasn't been built yet, we disable npm3 for this.
-  _npm3 = ((self (args // {npm3 = false;}))
-          .generatePackages {nodePackagesPath = ../nodePackages;})
-          .nodePackages.npm;
+  _npm3 = let
+     inherit ((self (args // {npm3 = false;}))
+                  .generatePackages {nodePackagesPath = ../nodePackages;})
+       nodePackages;
+    in
+    if !hasAttr "npm" nodePackages
+    then throw ("Cannot enable npm3 because the expression for npm3 has " +
+                "not been generated. Please run `nixfromnpm -p npm`.")
+    else nodePackages.npm;
 
   # Parse the `NPM_AUTH_TOKENS` environment variable to discover
   # namespace-token associations and turn them into an attribute set
@@ -63,13 +69,49 @@ let
       headers = {inherit Authorization;} // headers;
     in
     fetchUrlWithHeaders (removeAttrs args ["namespace"] // {inherit headers;});
+
+  xcode-wrapper = let
+    xcodeBaseDir = if getEnv "XCODE_BASE_DIR" != ""
+                   then getEnv "XCODE_BASE_DIR"
+                   else "/Applications/Xcode.app";
+  in pkgs.stdenv.mkDerivation {
+    name = "xcode-wrapper";
+    buildCommand = ''
+      # Wrap ln -s with logic checking that target exists.
+      link() {
+        if [[ -e $1 ]]; then
+          ln -s "$1" $2
+        else
+          echo "Error: $1 does not exist. Check that XCode is installed." >&2
+          exit 1
+        fi
+      }
+      mkdir -p $out/bin
+      cd $out/bin
+      link /usr/bin/xcode-select
+      link /usr/bin/security
+      link /usr/bin/codesign
+      link ${xcodeBaseDir}/Contents/Developer/usr/bin/xcodebuild
+      link ${xcodeBaseDir}/Contents/Developer/usr/bin/xcrun
+      link "${xcodeBaseDir}/Contents/Developer/Applications/iOS Simulator.app/Contents/MacOS/iOS Simulator"
+
+      cd $out
+      link "${xcodeBaseDir}/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs"
+
+      # Check if we have the xcodebuild version that we want
+      if ! $out/bin/xcodebuild -version; then
+        echo "xcodebuild does not seem to be working. :(" >&2
+        exit 1
+      fi
+    '';
+  };
 in
 
 rec {
   inherit nodejs;
 
   buildNodePackage = import ./buildNodePackage.nix ({
-    inherit pkgs nodejs buildNodePackage;
+    inherit pkgs nodejs buildNodePackage xcode-wrapper;
   } // (if npm3 then {npm = _npm3;} else {}));
   # A generic package that will fail to build. This is used to indicate
   # packages that are broken, without failing the entire generation of
