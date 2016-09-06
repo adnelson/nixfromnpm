@@ -189,18 +189,6 @@ initializeOutput = do
         writeNix defaultNixPath $
           defaultNixExtending extName extensions npm3
 
--- | Update all of the latest.nix symlinks in an output folder.
-updateLatestNixes :: MonadIO io => FilePath -> io ()
-updateLatestNixes outputDir = do
-  whenM (doesDirectoryExist (outputDir </> nodePackagesDir)) $ do
-    forItemsInDir_ (outputDir </> nodePackagesDir) $ \pkgDir -> do
-      case "@" `isPrefixOf` getFilename pkgDir of
-        -- If the directory starts with '@', then it's a namespace
-        -- directory and we should recur on its contents.
-        True -> forItemsInDir_ pkgDir $ updateLatestNix'
-        -- Otherwise, just update the latest.nix in this directory.
-        False -> updateLatestNix' pkgDir
-
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
 writeNewPackages :: NpmFetcher ()
@@ -210,7 +198,6 @@ writeNewPackages = takeNewPackages <$> gets resolved >>= \case
     | otherwise -> forM_ (H.toList newPackages) $ \(pkgName, pkgVers) -> do
         forM_ (M.toList pkgVers) $ \(ver, expr) -> do
           writePackage pkgName ver expr
-        updateLatestNix' =<< outputDirOf pkgName
 
 dumpFromPkgJson :: FilePath -- ^ Path to folder containing package.json.
                 -> NpmFetcher ()

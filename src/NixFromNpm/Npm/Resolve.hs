@@ -728,35 +728,6 @@ dotNixPathOf name version = do
   dir <- outputDirOf name
   return $ dir </> toDotNix version
 
--- | Looks at all nix files in a folder, finds the one with the most
--- recent version, and creates a `latest.nix` symlink to that file.
-updateLatestNix :: MonadIO io
-                => Maybe PackageName -- ^ Package which we're updating
-                -> FilePath -- ^ Directory containing .nix files
-                -> io ()
-updateLatestNix maybePkgName dir = do
-  -- Remove the `latest.nix` symlink if it exists.
-  whenM (doesFileExist $ dir </> "latest.nix") $
-    removeFile (dir </> "latest.nix")
-  -- Grab the latest version and create a symlink `latest.nix`
-  -- to that.
-  let convert fname = case parseSemVer (getBaseName fname) of
-        Left _ -> Nothing -- not a semver, so we don't consider it
-        Right ver -> Just ver -- return the version
-  catMaybes . map convert <$> listDirFullPaths dir >>= \case
-    [] -> return ()
-    versions -> do
-      let latest = maximum versions
-          label = case maybePkgName of
-            Nothing -> getFilename dir
-            Just pkgName -> tshow pkgName
-      putStrsLn ["Latest version of ", label, " is ", tshow latest]
-      createSymbolicLink (toDotNix latest) (dir </> "latest.nix")
-
--- | Where we're deriving the name from the path.
-updateLatestNix' :: MonadIO io => FilePath -> io ()
-updateLatestNix' = updateLatestNix Nothing
-
 -- | Write a resolved package to disk.
 writePackage :: PackageName -> SemVer -> NExpr -> NpmFetcher ()
 writePackage name version expr = do
@@ -765,13 +736,10 @@ writePackage name version expr = do
   createDirectoryIfMissing dirPath
   putStrsLn ["Writing package file at ", pathToText dotNixPath]
   writeNix dotNixPath expr
-  updateLatestNix (Just name) dirPath
 
 -- | Resolve a @VersionInfo@ and get the resulting @ResolvedPkg@.
 versionInfoToResolved :: VersionInfo -> NpmFetcher ResolvedPkg
 versionInfoToResolved = map fst . resolveVersionInfo
-
-
 
 -- | Resolve a @VersionInfo@ and get the resulting @SemVer@, which
 -- might be circular.
