@@ -484,38 +484,35 @@ addReport name range depOfName depOfVersion = do
          return $ H.insert name reports'
   modify $ \s -> s {brokenPackages = update (brokenPackages s)}
 
--- | Given an arbitrary NPM version range (e.g. a semver range, a URL, etc),
--- figure out how to resolve the dependency. Checks the cache first, and does
--- error handling if @_resolveNpmVersionRange@ fails.
-resolveNpmVersionRange :: PackageName -- ^ Name of the package.
-                       -> NpmVersionRange -- ^ Version bounds of the package.
-                       -> NpmFetcher ResolvedDependency
-                       -- ^ Resolved version, or an error.
-resolveNpmVersionRange pkgName pkgRange = do
-  -- | We need to see if the package has been marked as broken first.
-  getBroken pkgName pkgRange >>= \case
-    -- If it's not broken, we can proceed normally here, and catch an error
-    -- if it breaks.
-    Nothing -> do
-      (Resolved . NotCircular <$> _resolveNpmVersionRange pkgName pkgRange)
-        `catches` [
-        Handler (\reason -> do
-                     addBroken pkgName pkgRange reason
-                     return $ Broken reason),
-        Handler (\(e::GithubError) -> do
-                     addBroken pkgName pkgRange $ GithubError e
-                     return $ Broken $ Reason $ show e)
-        ]
-    -- If it is already marked as broken, we add the upstream name and
-    -- version to the set of packages depending on this broken dependency.
-    Just report -> return $ Broken (bprReason report)
+-- | Resolve a dependency. Takes the name and version of a package,
+-- and the name and version *range* of one of its dependencies.
+resolveDependency :: PackageName -- ^ Name of the package.
+                  -> SemVer      -- ^ Version of the package.
+                  -> PackageName -- ^ Name of the dependency.
+                  -> NpmVersionRange -- ^ Version bounds of the dependency.
+                  -> NpmFetcher ResolvedDependency
+                  -- ^ Resolved version, or an error.
+resolveDependency pkgName pkgVersion depName depRange = do
+  map Resolved resolver `catches` handleError
+  where
+    resolver = NotCircular <$> resolveNpmVersionRange depName depRange
+    handle reason = do
+      warns ["Failed to fetch dependency ", tshow depName, " version ",
+             tshow depRange, ": ", tshow reason]
+      addBroken depName depRange reason
+      addReport depName depRange pkgName pkgVersion
+      return $ Broken reason
+    handleError = [
+      (Handler handle),
+      (Handler $ handle . GithubError)
+      ]
 
 -- | Resolve a version range. Figures out if it should query NPM, or download
 -- a package from git or http, etc.
-_resolveNpmVersionRange :: PackageName
-                        -> NpmVersionRange
-                        -> NpmFetcher SemVer
-_resolveNpmVersionRange name range = case range of
+resolveNpmVersionRange :: PackageName
+                       -> NpmVersionRange
+                       -> NpmFetcher SemVer
+resolveNpmVersionRange name range = case range of
   SemVerRange svr -> resolveDep name svr
   NpmUri uri | isGithubUri uri -> fromGithubUri uri
              | otherwise -> case uriScheme uri of
@@ -610,14 +607,7 @@ recurOn packageName version deptype deps = do
     forM depList $ \(depName, depRange) -> do
       putStrsLn ["Resolving ", showRangePair depName depRange, ", ", desc,
                  " of ", showPair packageName version]
-      result <- resolveNpmVersionRange depName depRange
-      case result of
-        Broken reason -> do
-          warns ["Failed to fetch dependency ", tshow depName, " version ",
-                 tshow depRange, ": ", tshow reason]
-          addReport depName depRange packageName version
-        _ -> return ()
-      return (depName, result)
+      (,) depName <$> resolveDependency packageName version depName depRange
 
 -- | Current depth, which is 0 if we're at the top level (in which case the
 -- package stack trace would be length 1)

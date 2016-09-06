@@ -323,7 +323,7 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
           return $ ("npm", SemVerRange anyVersion) : nfnoPkgNames
       False -> return nfnoPkgNames
     forM packageNames $ \(name, range) -> do
-      _resolveNpmVersionRange name range
+      resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
           warns ["Failed to build ", tshow name, "@", tshow range,
                  ": ", tshow e]
