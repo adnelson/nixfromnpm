@@ -44,21 +44,25 @@ gitIdParsingSpec = describe "parse git identifiers" $ do
 
 npmVersionParserSpec :: Spec
 npmVersionParserSpec = describe "npm version parser" $ do
-  describe "semvers" $ do
-    it "should parse a semver" $ do
-      parseNpmVersionRange "0.0.0" `shouldBeJ` SemVerRange (Eq (semver 0 0 0))
+  it "should parse a semver" $ do
+    parseNpmVersionRange "0.0.0" `shouldBeJ` SemVerRange (Eq (semver 0 0 0))
 
-    it "should parse a tag" $ do
-      parseNpmVersionRange "xyz" `shouldBeJ` NixFromNpm.Tag "xyz"
+  it "should parse a tag" $ do
+    parseNpmVersionRange "xyz" `shouldBeJ` NixFromNpm.Tag "xyz"
 
-    it "should parse a github uri" $ do
-      let owner = "holidaycheck"
-          repo = "reactautosuggest"
-          ref = SomeRef "43074a439d26243ea07110f0c5752a6fc8aebe4d"
-      let uri = joinBy "/" ["https://github.com", owner, repo]
-                  <> "#" <> refText ref
-      parseNpmVersionRange uri `shouldBeJ`
-        GitIdentifier (GitId Github owner repo (Just ref))
+  it "should parse a github uri" $ do
+    let owner = "holidaycheck"
+        repo = "reactautosuggest"
+        ref = SomeRef "43074a439d26243ea07110f0c5752a6fc8aebe4d"
+    let uri = joinBy "/" ["https://github.com", owner, repo]
+                <> "#" <> refText ref
+    parseNpmVersionRange uri `shouldBeJ`
+      GitIdentifier (GitId Github owner repo (Just ref))
+  it "should parse a local file path" $ do
+    parseNpmVersionRange "/foo/bar" `shouldBeJ` LocalPath "/foo/bar"
+    parseNpmVersionRange "./foo/bar" `shouldBeJ` LocalPath "./foo/bar"
+    parseNpmVersionRange "../foo/bar" `shouldBeJ` LocalPath "../foo/bar"
+    parseNpmVersionRange "~/foo/bar" `shouldBeJ` LocalPath "~/foo/bar"
 
 main :: IO ()
 main = hspec $ do
