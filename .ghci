@@ -1,0 +1,14 @@
+:set -XFlexibleContexts
+:set -XFlexibleInstances
+:set -XLambdaCase
+:set -XNoImplicitPrelude
+:set -XNoMonomorphismRestriction
+:set -XOverloadedStrings
+:set -XQuasiQuotes
+:set -XRecordWildCards
+:set -XScopedTypeVariables
+:set -XTypeFamilies
+:set -XTypeSynonymInstances
+:set -XViewPatterns
+import ClassyPrelude
+import qualified Data.Text as T

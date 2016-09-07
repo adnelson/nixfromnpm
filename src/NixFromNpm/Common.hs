@@ -38,7 +38,7 @@ module NixFromNpm.Common (
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
-    partitionEither, throw
+    partitionEither, throw, eitherToMaybe
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -228,3 +228,8 @@ fatalC = fatal . concat
 -- | Split up a list based on a predicate.
 partitionEither :: (a -> Either b c) -> [a] -> ([b], [c])
 partitionEither f = partitionEithers . map f
+
+-- | Convert an `Either` to a `Maybe`.
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe (Left _) = Nothing
+eitherToMaybe (Right x) = Just x

@@ -25,7 +25,6 @@ import Data.SemVer
 import NixFromNpm.Common
 import NixFromNpm.Git.Types (getObject, GithubError)
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
 
 -- | Package information; specifically all of the different versions.
@@ -207,7 +206,7 @@ instance FromJSON VersionInfo where
       return $ PackageMeta description author homepage keywords
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
-      Left err -> throw $ VersionSyntaxError version err
+      Left _ -> throw $ VersionSyntaxError version
       Right semver -> return $ VersionInfo {
         viDependencies = dependencies,
         viDevDependencies = devDependencies,

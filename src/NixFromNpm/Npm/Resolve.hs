@@ -48,7 +48,6 @@ import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
 
 -- | Things which can be converted into nix expressions: either they
@@ -370,23 +369,22 @@ gitRefToSha owner repo ref = case ref of
   where
     uri = makeGithubURI owner repo
     fromBranch ref = do
+      putStrsLn ["Trying ref ", ref, " as a branch"]
       let bSha = cSha . bCommit
       bSha <$> githubCurl (uri // "branches" // ref)
     fromTag tag = do
+      putStrsLn ["Trying ref ", tag, " as a tag"]
       tagMap <- tagListToMap <$> githubCurl (uri // "tags")
       case H.lookup tag tagMap of
         Just sha -> return sha
         Nothing -> throw (InvalidGitRef ref)
     fromCommit ref = do
+      putStrsLn ["Trying ref ", ref, " as a commit"]
       cSha <$> githubCurl (uri // "commits" // ref)
-    catch404 action1 action2 = action1 `catch` \case
+    if404 action1 action2 = action1 `catch` \case
       HttpErrorWithCode 404 -> action2
       err -> throw err
-    tryAll txt =
-      fromBranch txt `catch404`
-        fromTag txt `catch404`
-          fromCommit txt `catch404`
-            throw (InvalidGitRef ref)
+    tryAll txt = fromBranch txt `if404` fromCommit txt `if404` fromTag txt
 
 -- | Fetches an arbitrary git repo from a uri.
 fetchArbitraryGit :: URI -> NpmFetcher SemVer
@@ -572,7 +570,7 @@ resolveNpmVersionRange name range = case range of
       s | "http" `isPrefixOf` s -> fetchHttp uri
         | "git" `isPrefixOf` s -> fetchArbitraryGit uri
         | otherwise -> throw $ UnsupportedUriScheme s
-  GitId src owner repo rev -> case src of
+  GitIdentifier (GitId src owner repo rev) -> case src of
     Github -> do
       sha <- gitRefToSha owner repo =<< case rev of
                Nothing -> getDefaultBranch owner repo

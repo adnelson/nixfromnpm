@@ -4,6 +4,7 @@
 , system-filepath, text, text-render, unordered-containers
 , optparse-applicative, curl, cabal-install, ansi-terminal
 , temporary, SHA, pkgs, lifted-base, transformers, semver-range
+, pcre-heavy
 }:
 
 let
@@ -29,7 +30,7 @@ mkDerivation {
     directory hnix MissingH mtl network-uri parsec shelly
     system-filepath text text-render unordered-containers
     optparse-applicative cabal-install curl SHA temporary lifted-base
-    transformers ansi-terminal semver-range
+    transformers ansi-terminal semver-range pcre-heavy
   ];
   executableHaskellDepends = with pkgs; [nix cacert silver-searcher];
   testDepends = [

@@ -17,7 +17,6 @@ import Options.Applicative
 import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
 import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser (parseNpmVersionRange)
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common hiding ((<>))
 
@@ -168,8 +167,8 @@ parseNameAndRange name = do
       Right pkgName -> return (pkgName, SemVerRange anyVersion)
     -- If a @ occurs in the middle, treat it as a name and range identifier.
     [name', range] -> case parseNpmVersionRange range of
-      Left err -> throw $ NpmVersionError (VersionSyntaxError range err)
-      Right nrange -> case parsePackageName name' of
+      Nothing -> throw $ NpmVersionError (VersionSyntaxError range)
+      Just nrange -> case parsePackageName name' of
         Left err -> throw $ NpmVersionError $ badFormat err
         Right pkgName -> return (pkgName, nrange)
     -- Anything else is invalid.
