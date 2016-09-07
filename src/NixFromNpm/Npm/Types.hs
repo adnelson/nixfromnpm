@@ -207,7 +207,7 @@ instance FromJSON VersionInfo where
       return $ PackageMeta description author homepage keywords
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
-      Left err -> throw $ VersionSyntaxError version err
+      Left _ -> throw $ VersionSyntaxError version
       Right semver -> return $ VersionInfo {
         viDependencies = dependencies,
         viDevDependencies = devDependencies,

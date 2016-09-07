@@ -11,7 +11,7 @@ import qualified Text.Parsec as Parsec
 import Data.Aeson
 import qualified Data.Aeson.Types as DAT
 
-import Data.SemVer (pSemVerRange, anyVersion)
+import Data.SemVer (pSemVerRange, anyVersion, parseSemVerRange)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Git.Types hiding (Tag)
 
@@ -54,7 +54,6 @@ pInt = lexeme pInt'
 pInt' :: Parser Int
 pInt' = P.read <$> many1 digit
 
-
 pUri :: Parser NpmVersionRange
 pUri = try $ fmap NpmUri $ do
   parseURI <$> many anyChar >>= \case
@@ -82,7 +81,7 @@ pGitId = try $ do
   char '/'
   repo <- many1 $ noneOf "#"
   ref <- map (map SomeRef) $ optionMaybe $ char '#' *> (pack <$> many1 anyChar)
-  return $ GitId source (pack account) (pack repo) ref
+  return $ GitIdentifier $ GitId source (pack account) (pack repo) ref
 
 pLocalPath :: Parser NpmVersionRange
 pLocalPath = LocalPath . fromText . pack <$> do
@@ -103,21 +102,35 @@ pTag = do
     tag -> return $ Tag $ pack tag
 
 pNpmVersionRange :: Parser NpmVersionRange
-pNpmVersionRange = choice [pEmptyString,
-                           SemVerRange <$> pSemVerRange,
-                           pUri,
+pNpmVersionRange = choice [try $ SemVerRange <$> (pSemVerRange <* eof),
                            pGitId,
+                           pUri,
                            pLocalPath,
                            pTag]
 
-parseNpmVersionRange :: Text -> Either ParseError NpmVersionRange
-parseNpmVersionRange = parse pNpmVersionRange
+parseNpmVersionRange' :: Text -> Either ParseError NpmVersionRange
+parseNpmVersionRange' = parse pNpmVersionRange
+
+parseNpmVersionRange :: Text -> Maybe NpmVersionRange
+parseNpmVersionRange t = do
+  SemVerRange <$> eitherToMaybe (parseSemVerRange t)
+  <|> GitIdentifier <$> parseGitId (unpack t)
+  <|> NpmUri <$> parseURI (unpack t)
+  <|> LocalPath <$> asPath
+  <|> Tag <$> asTag
+  where
+    asPath = case unpack t of
+      '/':_ -> Just $ fromText t
+      '.':'/':_ -> Just $ fromText t
+      '.':'.':'/':_ -> Just $ fromText t
+      '~':'/':_ -> Just $ fromText t
+      _ -> Nothing
+    asTag = if t == "" || " " `isInfixOf` t then Nothing else Just t
 
 instance FromJSON NpmVersionRange where
   parseJSON v = case v of
     String s -> case parseNpmVersionRange s of
-      Left err -> DAT.typeMismatch
-                    ("valid NPM version (got " <> show v <> ")"
-                     <> " Error: " <> show err) v
-      Right range -> return range
+      Nothing -> DAT.typeMismatch
+        ("valid NPM version (got " <> show v <> ")") v
+      Just range -> return range
     _ -> DAT.typeMismatch "string" v

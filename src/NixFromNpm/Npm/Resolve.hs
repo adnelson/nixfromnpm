@@ -572,7 +572,7 @@ resolveNpmVersionRange name range = case range of
       s | "http" `isPrefixOf` s -> fetchHttp uri
         | "git" `isPrefixOf` s -> fetchArbitraryGit uri
         | otherwise -> throw $ UnsupportedUriScheme s
-  GitId src owner repo rev -> case src of
+  GitIdentifier (GitId src owner repo rev) -> case src of
     Github -> do
       sha <- gitRefToSha owner repo =<< case rev of
                Nothing -> getDefaultBranch owner repo
