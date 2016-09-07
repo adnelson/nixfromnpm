@@ -15,12 +15,6 @@ import NixFromNpm.Npm.PackageMap
 import NixFromNpm.Git.Types hiding (Tag)
 import Text.Parsec (ParseError)
 
--- instance Show GitIdentifier where
---   show (GitId Github account repo Nothing) = show $ account <> "/" <> repo
---   show (GitId Github account repo (Just ref)) = show $
---     account <> "/" <> repo <> "#" <> refText ref
---   show (GitId src _ _ _) = "git fetch from " <> show src
-
 data NpmVersionRange
   = SemVerRange SemVerRange
   | Tag Name

@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE QuasiQuotes #-}
 module NixFromNpm.Git.Types where
 
@@ -61,7 +63,16 @@ data GitIdentifier = GitId {
   giOwner::Name,
   giRepo::Name,
   giRef:: Maybe GitRef
-  } deriving (Show, Eq, Ord)
+  } deriving (Eq, Ord)
+
+instance Show GitIdentifier where
+  show (GitId source account repo ref) = do
+    let ref' = case ref of
+          Nothing -> ""
+          Just r -> "#" <> refText r
+        proto = toLower (show source) <> "://"
+    proto <> unpack (account <> "/" <> repo <> ref')
+
 
 data GithubError
   = GithubUnreachable
@@ -149,11 +160,10 @@ instance IsGitId String where
   -- simply by owner/repo or owner/repo#ref
   parseGitId str = case scan githubIdRegex str of
     [(_, [owner, repo])] -> do
-      traceM "hey"
-      Just $ GitId Github (pack owner) (pack repo) Nothing
-    [(_, [owner, repo, '#':ref])] -> Just $
-      GitId Github (pack owner) (pack repo) $ Just $ fromString ref
-    x -> do
+      return $ GitId Github (pack owner) (pack repo) Nothing
+    [(_, [owner, repo, '#':ref])] -> do
+      return $ GitId Github (pack owner) (pack repo) $ Just $ fromString ref
+    _ -> do
       parseGitId =<< parseURI str
     where
-      githubIdRegex = [re|^(\w+)/(\w+)(\#\w+)?$|]
+      githubIdRegex = [re|^([\w._-]+)/([\w._-]+)(\#[^\s]+)?$|]
