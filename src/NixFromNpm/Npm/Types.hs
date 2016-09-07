@@ -25,7 +25,6 @@ import Data.SemVer
 import NixFromNpm.Common
 import NixFromNpm.Git.Types (getObject, GithubError)
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
 
 -- | Package information; specifically all of the different versions.

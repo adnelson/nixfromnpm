@@ -48,7 +48,6 @@ import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser
 import NixFromNpm.Npm.PackageMap
 
 -- | Things which can be converted into nix expressions: either they

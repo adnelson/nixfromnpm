@@ -17,7 +17,6 @@ import Options.Applicative
 import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
 import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
-import NixFromNpm.Npm.Version.Parser (parseNpmVersionRange)
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common hiding ((<>))
 

@@ -8,7 +8,7 @@ import qualified Data.Text as T
 
 import NixFromNpm
 import NixFromNpm.Git.Types as Git
-import NixFromNpm.Npm.Version.Parser as Npm
+import NixFromNpm.Npm.Version as Npm
 
 shouldBeR :: (Eq a, Eq b, Show a, Show b) => Either a b -> b -> Expectation
 shouldBeR a b = a `shouldBe` Right b
@@ -58,6 +58,7 @@ npmVersionParserSpec = describe "npm version parser" $ do
                 <> "#" <> refText ref
     parseNpmVersionRange uri `shouldBeJ`
       GitIdentifier (GitId Github owner repo (Just ref))
+
   it "should parse a local file path" $ do
     parseNpmVersionRange "/foo/bar" `shouldBeJ` LocalPath "/foo/bar"
     parseNpmVersionRange "./foo/bar" `shouldBeJ` LocalPath "./foo/bar"
