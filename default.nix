@@ -32,11 +32,11 @@ let
 
   semver-range = with haskellPackages; mkDerivation rec {
     pname = "semver-range";
-    version = "0.2.4";
+    version = "0.2.5";
     src = pkgs.fetchurl {
       url = "https://api.github.com/repos/adnelson/semver-range/tarball/${version}";
       name = "semver-range-${version}.tar.gz";
-      sha256 = "128g7pzwr815q42sf83y0f7344qshkl304j4dxlvvds54d8b9nim";
+      sha256 = "1hapz05mz1yfv3nw7ka0hdcx05qilp7ny65lybaf7hh5pv4nwlfb";
     };
     isLibrary = true;
     buildDepends = [ base classy-prelude parsec text cabal-install QuickCheck

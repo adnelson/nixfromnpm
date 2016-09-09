@@ -7,7 +7,7 @@ import qualified Data.Text as T
 
 import Data.SemVer
 import Data.Aeson
-import qualified Data.Aeson.Types as DAT
+import qualified Data.Aeson.Types as Aeson
 
 
 import NixFromNpm.Common
@@ -17,10 +17,21 @@ import Text.Parsec (ParseError)
 
 data NpmVersionRange
   = SemVerRange SemVerRange
+  -- ^ The most common: parsing from a semver range.
   | Tag Name
+  -- ^ From an npm "tag"; this mapping lives in the package metadata.
   | NpmUri URI
+  -- ^ From a URL (e.g. a tarball or zip file)
   | GitIdentifier GitIdentifier
+  -- ^ From one of the "known" git services (e.g. github, bitbucket).
   | LocalPath FilePath
+  -- ^ From a local file path.
+  | InvalidVersion Text
+  -- ^ An invalid version string: this results in a downstream failure
+  -- but allows us to ignore an invalid version unless we actually
+  -- need to resolve it. While proper Haskell idioms might dictate we
+  -- use an Either or similar here, this is somewhat of a path of
+  -- least resistance.
   deriving (Eq, Ord)
 
 data NpmVersionError
@@ -39,6 +50,7 @@ instance Show NpmVersionRange where
   show (NpmUri uri) = uriToString uri
   show (GitIdentifier ident) = show ident
   show (LocalPath pth) = show pth
+  show (InvalidVersion v) = "Version string unable to be parsed: " <> show v
 
 showPair :: PackageName -> SemVer -> Text
 showPair name version = tshow name <> "@" <> tshow version
@@ -71,7 +83,6 @@ parseNpmVersionRange t = do
 instance FromJSON NpmVersionRange where
   parseJSON v = case v of
     String s -> case parseNpmVersionRange s of
-      Nothing -> DAT.typeMismatch
-        ("valid NPM version (got " <> show v <> ")") v
+      Nothing -> return $ InvalidVersion s
       Just range -> return range
-    _ -> DAT.typeMismatch "string" v
+    _ -> Aeson.typeMismatch "string" v
