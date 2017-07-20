@@ -18,7 +18,7 @@ import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
 import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
-import NixFromNpm.Common hiding ((<>))
+import NixFromNpm.Common
 
 -- | Errors about node libraries
 data InvalidNodeLib

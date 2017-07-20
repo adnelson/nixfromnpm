@@ -36,15 +36,15 @@ getDataFileName :: MonadIO io => FilePath -> io FilePath
 getDataFileName = map decodeString . generalize Paths.getDataFileName
 
 -- | Write some stuff to disk.
-writeFile :: (MonadIO io, IOData dat) => FilePath -> dat -> io ()
-writeFile path = CP.writeFile (pathToString path)
+writeFile :: MonadIO io => FilePath -> Text -> io ()
+writeFile path = CP.writeFileUtf8 (pathToString path)
 
 -- | Read a file from disk.
-readFile :: (MonadIO io, IOData dat) => FilePath -> io dat
-readFile = generalize CP.readFile
+readFile :: MonadIO io => FilePath -> io Text
+readFile = generalize CP.readFileUtf8
 
 -- | Read a data file, as included by cabal.
-readDataFile :: (MonadIO io, IOData dat) => FilePath -> io dat
+readDataFile :: MonadIO io => FilePath -> io Text
 readDataFile = getDataFileName >=> readFile
 
 -- | Create a symbolic link at `path2` pointing to `path1`.
