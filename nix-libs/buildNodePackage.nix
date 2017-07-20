@@ -7,19 +7,26 @@
   npm ? nodejs,
   # Self-reference for overriding purposes.
   buildNodePackage,
+  # Provides xcode binaries to OSX builds (for native packages).
   xcode-wrapper,
+  # Scripts that we use during the npm builds.
+  node-build-tools,
 }:
 
 let
-  inherit (pkgs) stdenv python;
+  inherit (pkgs) stdenv python2 file;
   inherit (pkgs.lib) showVal optional foldl;
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
                        intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
-                       attrValues concatStringsSep optionalString;
+                       attrValues concatStringsSep optionalString filter
+                       optionalAttrs;
+
+  # Join a list of strings with newlines, filtering out empty lines.
+  joinLines = strings: concatStringsSep "\n" (filter (s: s != "") strings);
 
   # Map a function and concatenate with newlines.
-  concatMapLines = list: func: concatStringsSep "\n" (map func list);
+  concatMapLines = list: func: joinLines (map func list);
 
   # This expression builds the raw C headers and source files for the base
   # node.js installation. Node packages which use the C API for node need to
@@ -129,15 +136,18 @@ in
   # Build inputs in addition to npm and dev dependencies.
   buildInputs ? [],
 
-  # Whether to strip debugging symbols from binaries and patch ELF executables.
-  # These should both probably be true but can be overridden.
+  # Whether to strip debugging symbols from binaries.
+  # This normally shouldn't be necessary but it can be enabled if desired.
   # Doc for details: https://nixos.org/wiki/NixPkgs_Standard_Environment.
-  dontStrip ? true, dontPatchELF ? true,
+  dontStrip ? true,
 
   # Optional attributes to pass through to downstream derivations.
   passthru ? {},
 
-  # A set of dependencies to patch.
+  # A set of dependencies to patch, changing the version given in the
+  # package.json. Keys are dependency names, values are new
+  # versions. Alternatively, a value can be `null`, which will have
+  # the effect of removing the dependency from the package.json.
   patchDependencies ? {},
 
   # We attempt to automatically remove dev dependencies from the node_modules
@@ -152,6 +162,12 @@ in
   # Metadata about the package.
   meta ? {},
 
+  # Overrides to the arguments to mkDerivation. This can be used to
+  # set custom values for the arguments that buildNodePackage would
+  # set, so it's only necessary for a certain set of keys (everything
+  # else can just be passed in directly).
+  derivationOverrides ? {},
+
   # Any remaining flags are passed through to mkDerivation.
   ...
 } @ args:
@@ -160,8 +176,7 @@ let
   # The package name as it appears in the package.json. This contains a
   # namespace if there is one, so it will be a distinct identifier for
   # different packages.
-  fullName = if namespace == null then name
-                    else "@${namespace}/${name}";
+  fullName = if namespace == null then name else "@${namespace}/${name}";
 
   # The package name with a version appended. This should be unique amongst
   # all packages.
@@ -193,8 +208,8 @@ let
   # to be passed through to mkDerivation. They are removed below.
   attrsToRemove = ["deps" "flags" "skipOptionalDependencies" "isBroken"
                    "passthru" "doCheck" "includeDevDependencies" "version"
-                   "namespace" "patchDependencies" "skipDevDependencyCleanup"
-                   "circularDependencies"] ++ dependencyTypes;
+                   "namespace" "skipDevDependencyCleanup" "patchDependencies"
+                   "circularDependencies" "derivationOverrides"] ++ dependencyTypes;
 
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
@@ -250,47 +265,19 @@ let
       # Add any extra headers that the user has passed in.
       extraNpmFlags);
 
-    patchPhase = ''
-      runHook prePatch
-      patchShebangs $PWD >/dev/null
-
+    patchPhase = joinLines [
+      "runHook prePatch"
+      "patchShebangs $PWD >/dev/null"
       # Ensure that the package name matches what is in the package.json.
-      node ${./checkPackageJson.js} checkPackageName ${fullName}
-
+      "check-package-json checkPackageName ${fullName}"
       # Remove any impure dependencies from the package.json (see script
-      # for details)
-      node ${./removeImpureDependencies.js}
-
+      # for details). Apply patches in patchDependencies arguments.
+      "patch-dependencies"
       # We do not handle shrinkwraps yet
-      rm npm-shrinkwrap.json 2>/dev/null || true
-
-      ${if patchDependencies == {} then "" else ''
-        cat <<EOF | python
-        import json
-        with open("package.json") as f:
-            package_json = json.load(f)
-        ${concatMapLines (attrNames patchDependencies) (name: let
-            version = patchDependencies."${name}";
-          in
-          # Iterate through all of the dependencies we're patching, and for
-          # each one either remove it or set it to something else.
-          concatMapLines dependencyTypes (depType: ''
-            if "${name}" in package_json.setdefault("${depType}", {}):
-                ${if version == null then ''
-                    print("removing ${name} from ${depType}")
-                    package_json["${depType}"].pop("${name}", None)
-                  '' else ''
-                    print("Patching ${depType} ${name} to version ${version}")
-                    package_json["dependencies"]["${name}"] = "${version}"
-                  ''}
-            ''))}
-        with open("package.json", "w") as f:
-            f.write(json.dumps(package_json))
-        EOF
-      ''}
-
-      runHook postPatch
-    '';
+      "rm -fv npm-shrinkwrap.json"
+      (args.patchPhase or "")
+      "runHook postPatch"
+    ];
 
     # Computes the "circular closure" of a package.
     # See ./circular_dependencies.md for details.
@@ -390,7 +377,7 @@ let
         npm install ${npmFlags} >/dev/null 2>&1 || {
           echo "Installation of ${name}@${version} failed!"
           echo "Checking dependencies to see if any aren't satisfied..."
-          node ${./checkPackageJson.js} checkDependencies
+          check-package-json checkDependencies
           echo "Dependencies seem ok. Rerunning with verbose logging:"
           npm install . ${npmFlags} --loglevel=verbose
           if [[ -d node_modules ]]; then
@@ -416,7 +403,7 @@ let
       runHook preInstall
 
       # Ensure that the main entry point appears post-build.
-      node ${./checkPackageJson.js} checkMainEntryPoint
+      check-package-json checkMainEntryPoint
 
       # Install the package that we just built.
       mkdir -p $out/lib/${self.modulePath}
@@ -476,19 +463,18 @@ let
       '') (attrValues _peerDependencies)}
 
       # Install binaries using the `bin` object in the package.json
-      python ${./installBinaries.py}
+      install-binaries
 
       runHook postInstall
     '';
 
     # These are the arguments that we will pass to `stdenv.mkDerivation`.
-    mkDerivationArgs = {
+    mkDerivationArgs = removeAttrs args attrsToRemove // {
       inherit
         buildPhase
         checkPhase
         configurePhase
         doCheck
-        dontPatchELF
         dontStrip
         fullName
         installPhase
@@ -496,6 +482,8 @@ let
         npmFlags
         patchPhase
         src;
+
+      patchDependencies = builtins.toJSON patchDependencies;
 
       # Informs lower scripts not to check dev dependencies
       NO_DEV_DEPENDENCIES = devDependencies == null;
@@ -508,17 +496,13 @@ let
         # This creates a string for this package which is unique but
         # deterministic. We can use it to create temporary directories
         # and URLs and be confident there will be no collisions.
-        export HASHEDNAME=$(echo "$propagatedNativeBuildInputs $name" \
-                          | md5sum | awk '{print $1}')
+        HASHEDNAME=$(echo "$propagatedNativeBuildInputs $name" \
+                     | md5sum | awk '{print $1}')
+        export HASHEDNAME
 
         # This appends the package name and version to the hash string
         # we defined above, so that it is more human-readable.
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
-
-        # This is used by the checkPackageJson script so that it can
-        # confirm that version ranges are satisfied by installed
-        # versions.
-        export SEMVER_PATH=${npm}/lib/node_modules/npm/node_modules/semver
       '';
 
       shellHook = ''
@@ -538,28 +522,43 @@ let
         export NODE_PATH=$NODE_MODULES:$NODE_PATH
         # Check if the current directory contains the package.json for
         # this package.
-        if python -c "import json; assert json.load(open('package.json'))['name'] == '$fullName'" 2>/dev/null; then
+        py_cmd='import json; print(json.load(open("package.json"))["name"])'
+        if [[ -e package.json ]] && \
+            [[ $(python -c "$py_cmd" 2>/dev/null) == "$fullName" ]]; then
+          IN_PACKAGE_DIR=true
           # If we're in the package directory, symlink it into the
           # temporary node modules folder we're building and then
           # attempt to import it. Issue a warning if we're not
           # successful.
           echo "Symlinking current directory into node modules folder..."
-          mkdir -p $(dirname $NODE_MODULES/$fullName)
-          ln -s $(pwd) $NODE_MODULES/$fullName
-          if echo "require('$fullName')" | node; then
-            echo "Successfully set up $fullName in local environment."
+          mkdir -pv $(dirname $NODE_MODULES/$fullName)
+          ln -sv $(pwd) $NODE_MODULES/$fullName
+          # Symlink the node modules folder to whatever has been built.
+          # Don't do this if there is a node_modules directory because this
+          # could break current directory state. However, issue a warning in
+          # this case.
+          if [[ -e node_modules ]] && [[ ! -L node_modules ]]; then
+            echo "Warning: node_modules exists but is not a symlink." >&2
+            echo "You can remove it (rm -r node_modules) and re-enter the" >&2
+            echo 'shell, or run `ln -sf $NODE_MODULES node_modules`' >&2
           else
-            echo "WARNING: could not set up $fullName in local environment."
+            rm -fv node_modules
+            ln -sfv $NODE_MODULES node_modules
           fi
         else
-          echo "WARNING: you are not in the directory for package $fullName," \
-               "so the shell hook can't symlink the local source code into" \
-               "the temporary node_modules directory. This might, for" \
-               "example, prevent you from being able to" \
-               "\`require('$fullName')\` in a node REPL. You might need to" \
-               "do something manually to set this up; for example if this" \
-               "package's source is a tarball, the command" '`tar -xf $src;' \
-               'ln -s $PWD/package $NODE_MODULES/$fullName` might work.'
+          echo >&2
+          echo "WARNING:" >&2
+          echo "You are not in the directory for $fullName, so the shell"\
+               "hook can't symlink the local source code into the temporary"\
+               "node_modules directory. This will probably prevent you from"\
+               "using $fullName in a node REPL or running its code." >&2
+          echo "You might be able to do something manually to"\
+               "set this up. For example if this package's source is a "\
+               "tarball, running these commands might work:" >&2
+          echo >&2
+          echo '  $ tar -xf $src' >&2
+          echo '  $ ln -s $PWD/package $NODE_MODULES/$fullName' >&2
+          echo >&2
         fi
         runHook postShellHook
       '';
@@ -599,7 +598,7 @@ let
         # if the derivation is the result of a `callPackage` application.
         overrideNodePackage = newArgs: buildNodePackage (args // newArgs);
       });
-    } // (removeAttrs args attrsToRemove) // {
+    } // {
       name = if namePrefix == null then throw "Name prefix is null"
              else if name == null then throw "Name is null"
              else if version == null then throw "Version of ${name} is null"
@@ -617,13 +616,14 @@ let
       # additional specified build inputs. In addition, on darwin we
       # provide XCode, since node-gyp will use it, and on linux we add
       # utillinux.
-      buildInputs = [npm python] ++
+      buildInputs = [npm python2 file node-build-tools] ++
                     attrValues _devDependencies ++
                     buildInputs ++
                     (optional stdenv.isLinux pkgs.utillinux) ++
                     (optional stdenv.isDarwin xcode-wrapper);
-    };
+    } // optionalAttrs stdenv.isLinux {
+      LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
+    } // derivationOverrides;
 
     in stdenv.mkDerivation mkDerivationArgs;
-
 in self

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // These packages come packaged with nodejs.
 var fs = require('fs');
 var url = require('url');
@@ -20,7 +21,8 @@ function versionSpecIsImpure(versionSpec) {
 var packageObj = JSON.parse(fs.readFileSync('./package.json'));
 
 // Purify dependencies.
-var depTypes = ['dependencies', 'devDependencies', 'optionalDependencies'];
+var depTypes = ['dependencies', 'devDependencies', 'optionalDependencies',
+                'peerDependencies'];
 for (var i in depTypes) {
   var depType = depTypes[i];
   var depSet = packageObj[depType];
@@ -64,6 +66,38 @@ if (process.env.removePeerDependencies && packageObj.peerDependencies) {
     console.log("  " + key + ": " + packageObj.peerDependencies[key]);
   }
   delete packageObj.peerDependencies;
+}
+
+/* Patch dependencies as set by the patchDependencies variable */
+var patches = JSON.parse(process.env.patchDependencies || "{}");
+if (Object.keys(patches).length > 0) {
+  console.log("Applying patches from patchDependencies argument...");
+  var errors = false;
+  // Iterate through all of the dependencies we're patching, and for
+  // each one either remove it or set it to something else.
+  for (var depName in patches) {
+    var version = patches[depName];
+    var found = false;
+    for (var i in depTypes) {
+      var depType = depTypes[i];
+      if (packageObj[depType] && packageObj[depType][depName] != null) {
+        found = true;
+        var bound = packageObj[depType][depName];
+        console.log("Found " + depName + "@" + bound + " in " + depType + ". " +
+                    (version === null ? "Removing"
+                                      : ("Setting to version " + version)));
+        if (version === null) delete packageObj[depType][depName];
+        else packageObj[depType][depName] = version;
+      }
+    }
+    if (!found) {
+      console.log("Can't patch dependency " + depName + " for package " +
+                  packageObj.name + "@" + packageObj.version + ", because " +
+                  "it's not listed as a dependency.");
+      errors = true;
+    }
+  }
+  if (errors) process.exit(1);
 }
 
 /* Write the fixed JSON file */

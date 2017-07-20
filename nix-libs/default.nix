@@ -81,6 +81,8 @@ let
       link() {
         if [[ -e $1 ]]; then
           ln -s "$1" $2
+        elif [[ $2 == if_exists ]]; then
+          echo "WARNING: $1 doesn't exist, something might not work." >&2
         else
           echo "Error: $1 does not exist. Check that XCode is installed." >&2
           exit 1
@@ -91,27 +93,54 @@ let
       link /usr/bin/xcode-select
       link /usr/bin/security
       link /usr/bin/codesign
-      link ${xcodeBaseDir}/Contents/Developer/usr/bin/xcodebuild
-      link ${xcodeBaseDir}/Contents/Developer/usr/bin/xcrun
-      link "${xcodeBaseDir}/Contents/Developer/Applications/iOS Simulator.app/Contents/MacOS/iOS Simulator"
+      link /usr/bin/xcodebuild
+      link /usr/bin/xcrun
+      link "${xcodeBaseDir}/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator" if_exists
 
       cd $out
-      link "${xcodeBaseDir}/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs"
+      link "${xcodeBaseDir}/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs" if_exists
 
-      # Check if we have the xcodebuild version that we want
+      # Check that xcodebuild can run, as a canary for a working result
       if ! $out/bin/xcodebuild -version; then
         echo "xcodebuild does not seem to be working. :(" >&2
         exit 1
       fi
     '';
   };
+  # Directory containing build tools for buildNodePackage
+  node-build-tools = pkgs.stdenv.mkDerivation {
+    name = "node-build-tools";
+    buildInputs = [pkgs.makeWrapper];
+    buildCommand = ''
+      mkdir -p $out
+      cp -r ${./tools} $out/bin
+      chmod -R +w $out/bin
+      wrapProgram $out/bin/check-package-json \
+        --set SEMVER_PATH ${nodejs}/lib/node_modules/npm/node_modules/semver
+      patchShebangs $out/bin
+    '';
+  };
+
+  # A script performing various sanity/correctness checks on the package.json
+  checkPackageJson = pkgs.writeScript "checkPackageJson" ''
+    #!${pkgs.stdenv.shell}
+    export SEMVER_PATH=${nodejs}/lib/node_modules/npm/node_modules/semver
+    exec ${nodejs}/bin/node ${./tools/check-package-json} "$@"
+  '';
+
+  # A script which will install all of the binaries a package.json
+  # declares into the output folder.
+  installPackageJsonBinaries = pkgs.writeScript "installPackageJsonBinaries" ''
+    #!${pkgs.stdenv.shell}
+    exec ${pkgs.python2.interpreter} ${./tools/install-binaries} "$@"
+  '';
 in
 
 rec {
   inherit nodejs;
 
   buildNodePackage = import ./buildNodePackage.nix ({
-    inherit pkgs nodejs buildNodePackage xcode-wrapper;
+    inherit pkgs nodejs buildNodePackage xcode-wrapper node-build-tools;
   } // (if npm3 then {npm = _npm3;} else {}));
   # A generic package that will fail to build. This is used to indicate
   # packages that are broken, without failing the entire generation of
@@ -185,7 +214,7 @@ rec {
       };
     in
     {
-      inherit callPackage namespaceTokens pkgs;
+      inherit callPackage namespaceTokens pkgs node-build-tools;
       nodePackages = nodePackages // {inherit nodejs;};
       nodeLib = self args;
       npm3 = _npm3;
