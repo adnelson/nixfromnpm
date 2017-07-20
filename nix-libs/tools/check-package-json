@@ -1,6 +1,10 @@
+#!/usr/bin/env node
 'use strict'
 var fs = require('fs');
-var semver = require(process.env.SEMVER_PATH);
+
+if (!fs.existsSync('./package.json')) {
+  throw new Error('This must be run in a directory with a package.json');
+}
 
 // Load up the package object.
 var packageObj = JSON.parse(fs.readFileSync('./package.json'));
@@ -33,7 +37,9 @@ function exists(path) {
 function checkMainEntryPoint() {
   var mainEntryPoint = packageObj.main || 'index.js';
   if ('main' in packageObj) {
-    if (!(exists(mainEntryPoint) || exists(mainEntryPoint + ".js"))) {
+    if (!(exists(mainEntryPoint) ||
+          exists(mainEntryPoint + ".js") ||
+          exists(mainEntryPoint + ".node"))) {
       fail("Main entry point " + mainEntryPoint + " does not exist");
     }
   }
@@ -43,6 +49,10 @@ function checkMainEntryPoint() {
 // should only be called when npm fails, assuming it failed because of
 // a missing dependency.
 function checkDependencies() {
+  if (!process.env.SEMVER_PATH) {
+    throw new Error("No path to the semver module is set.");
+  };
+  var semver = require(process.env.SEMVER_PATH);
   // This will be keyed on the dependency name and version, and valued with
   // the error.
   var errorsFound = {}
@@ -51,8 +61,7 @@ function checkDependencies() {
   // * That a package with the given name exists in the node_modules folder.
   // * That its version satisfies the given version bounds.
   function checkDependency(name, versionRange, dependencyType) {
-    process.stderr.write("Checking dependency " + name + "@" + versionRange +
-                         "(from " + dependencyType + ")...");
+    process.stderr.write("  " + name + "@" + versionRange + " -> ");
     var dependencyPackageObj;
     var pkgJsonPath = process.cwd() + "/node_modules/" + name + "/package.json";
     var errorKey = name + "@" + versionRange;
@@ -73,7 +82,7 @@ function checkDependencies() {
       console.error("ERROR: " + message);
       return
     }
-    console.error("OK");
+    console.error("OK (found version " + dependencyPackageObj.version + ")");
   }
 
   // Verify that all of the declared dependencies in a package.json file
@@ -84,8 +93,8 @@ function checkDependencies() {
     if (depType === "devDependencies" && process.env.NO_DEV_DEPENDENCIES) {
       continue;
     }
-    console.log("Checking " + depType);
     if (packageObj[depType]) {
+      console.log("Checking " + depType);
       for (var depName in packageObj[depType]) {
         checkDependency(depName, packageObj[depType][depName], depType);
       }
@@ -101,6 +110,7 @@ function checkDependencies() {
   }
 }
 
+var commands = ['checkPackageName', 'checkMainEntryPoint', 'checkDependencies'];
 switch (process.argv[2]) {
   case 'checkPackageName': {
     if (!process.argv[3]) {
@@ -113,5 +123,9 @@ switch (process.argv[2]) {
   }
   case 'checkDependencies': {
     checkDependencies(); break;
+  }
+  default: {
+    fail('No command, or unrecognized command given. Commands are: '
+         + commands.join(", "));
   }
 }

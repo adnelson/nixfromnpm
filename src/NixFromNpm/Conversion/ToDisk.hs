@@ -66,7 +66,7 @@ parseVersionFiles verbose pkgName folder = do
     case parseSemVer (pathToText versionTxt) of
       _ | ext /= Just "nix" -> return Nothing -- not a nix file
       Left _ -> return Nothing -- not a version file
-      Right version -> parseNixString . pack <$> readFile path >>= \case
+      Right version -> parseNixString . T.unpack <$> readFile path >>= \case
         Failure err -> do
           putStrsLn ["Warning: expression for ", tshow pkgName, " version ",
                      pathToText versionTxt, " failed to parse:\n", tshow err]

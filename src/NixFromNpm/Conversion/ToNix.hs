@@ -11,6 +11,7 @@ import qualified Prelude as P
 import Data.Fix (Fix(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
+import qualified Data.ByteString.Char8 as C8
 import Data.Text (Text, replace)
 import qualified Data.Text as T
 
@@ -94,7 +95,7 @@ toNixExpr name (Broken reason) = "brokenPackage" @@ mkNonRecSet
 
 -- | Write a nix expression pretty-printed to a file.
 writeNix :: MonadIO io => FilePath -> NExpr -> io ()
-writeNix path = writeFile path . (<> "\n") . show . prettyNix
+writeNix path = writeFile path . T.pack . (<> "\n") . show . prettyNix
 
 -- | Gets the .nix filename of a semver. E.g. (0, 1, 2) -> 0.1.2.nix
 toDotNix :: SemVer -> FilePath
