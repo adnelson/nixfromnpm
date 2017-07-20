@@ -3,11 +3,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import qualified Data.Text.Encoding as T
 import Options.Applicative
 import System.Exit
 
-import NixFromNpm.Common hiding (getArgs, (<>))
+import NixFromNpm.Common hiding (getArgs)
 import NixFromNpm.Options (NixFromNpmOptions, parseOptions,
                            validateOptions)
 import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
