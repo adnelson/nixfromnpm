@@ -17,15 +17,16 @@ cabal-version:       >=1.10
 bug-reports:         https://github.com/adnelson/nixfromnpm/issues
 Category:            Tools, Nix
 
-data-files:   nix-libs/nodeLib/default.nix
-            , nix-libs/nodeLib/buildNodePackage.nix
-            , nix-libs/nodeLib/removeImpureDependencies.js
-            , nix-libs/nodeLib/checkPackageJson.js
-            , nix-libs/nodeLib/fetchUrlWithHeaders.nix
-            , nix-libs/nodeLib/installBinaries.py
+data-files:   nix-libs/nodeLib/buildNodePackage.nix
+            , nix-libs/nodeLib/circular_dependencies.md
+            , nix-libs/nodeLib/default.nix
             , nix-libs/nodeLib/fetch.py
-            , nix-libs/nodeLib/npm3.tar.gz
-            , top_packages.txt
+            , nix-libs/nodeLib/fetchUrlWithHeaders.nix
+            , nix-libs/nodeLib/parseNpmAuthTokens.nix
+            , nix-libs/nodeLib/tools/check-package-json
+            , nix-libs/nodeLib/tools/install-binaries
+            , nix-libs/nodeLib/tools/patch-dependencies
+
 
 source-repository head
   type:     git
