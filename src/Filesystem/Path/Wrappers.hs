@@ -4,7 +4,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Filesystem.Path.Wrappers where
 
-import ClassyPrelude hiding (FilePath, unpack, (</>), readFile)
+import ClassyPrelude hiding (FilePath, unpack, (</>), readFile, readFileUtf8,
+                             writeFile, writeFileUtf8)
 import qualified ClassyPrelude as CP
 import Data.Text hiding (map)
 import qualified Data.Text as T
@@ -36,16 +37,24 @@ getDataFileName :: MonadIO io => FilePath -> io FilePath
 getDataFileName = map decodeString . generalize Paths.getDataFileName
 
 -- | Write some stuff to disk.
-writeFile :: MonadIO io => FilePath -> Text -> io ()
-writeFile path = CP.writeFileUtf8 (pathToString path)
+writeFile :: MonadIO io => FilePath -> ByteString -> io ()
+writeFile path = CP.writeFile (pathToString path)
+
+-- | Write some stuff to disk.
+writeFileUtf8 :: MonadIO io => FilePath -> Text -> io ()
+writeFileUtf8 path = CP.writeFileUtf8 (pathToString path)
 
 -- | Read a file from disk.
-readFile :: MonadIO io => FilePath -> io Text
-readFile = generalize CP.readFileUtf8
+readFile :: MonadIO io => FilePath -> io ByteString
+readFile = generalize CP.readFile
+
+-- | Read a file from disk.
+readFileUtf8 :: MonadIO io => FilePath -> io Text
+readFileUtf8 = generalize CP.readFileUtf8
 
 -- | Read a data file, as included by cabal.
 readDataFile :: MonadIO io => FilePath -> io Text
-readDataFile = getDataFileName >=> readFile
+readDataFile = getDataFileName >=> readFileUtf8
 
 -- | Create a symbolic link at `path2` pointing to `path1`.
 createSymbolicLink :: (MonadIO io) => FilePath -> FilePath -> io ()

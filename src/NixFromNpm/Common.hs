@@ -34,7 +34,7 @@ module NixFromNpm.Common (
     module Text.Printf,
     module Control.Monad.Trans.Control,
     module System.Console.ANSI,
-    Name, AuthToken, Record, (//),
+    Name, AuthToken, Record, (//), (<>),
     uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
@@ -45,10 +45,11 @@ import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
                              maximum, maximumBy, (</>), (<>),
                              minimum, try, stripPrefix, ioError,
                              mapM_, sequence_, foldM, forM_, throw, throwIO,
-                             filterM, replicateM, writeFile, readFile)
+                             filterM, replicateM, writeFile, readFile,
+                             writeFileUtf8, readFileUtf8)
 import Control.Exception (throw)
 import qualified Prelude as P
-import Control.Monad.RWS.Strict hiding (Any)
+import Control.Monad.RWS.Strict hiding (Any, (<>))
 import Control.Monad (when)
 import Control.Monad.Trans (MonadIO(..), lift)
 import Control.Monad.Reader (ReaderT(..), MonadReader(..), (<=<), (>=>), ask,
@@ -70,6 +71,7 @@ import qualified Data.HashMap.Strict as H
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust, isJust, isNothing)
+import Data.Monoid ((<>))
 import Data.Either (isRight, isLeft)
 import Data.String.Utils hiding (join)
 import qualified Data.Text as T
