@@ -109,7 +109,7 @@ toRelPath (PackageName name mNamespace) version = do
     -- Simple case: package 'foo@1.2.3' -> './foo/1.2.3.nix'
     Nothing -> subPath
     -- Namespaced: package '@foo/bar@1.2.3' -> './@foo/bar/1.2.3.nix'
-    Just nspace -> fromText ("@" <> nspace) </> subPath
+    Just nspace -> fromText ("/@" <> nspace) </> subPath
 
 -- | Converts distinfo into a nix fetchurl call.
 distInfoToNix :: Maybe Name -- `Just` if we are fetching from a namespace.
