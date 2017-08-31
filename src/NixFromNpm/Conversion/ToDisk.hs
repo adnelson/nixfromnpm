@@ -16,9 +16,8 @@ import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Printf (printf)
-import Shelly (shelly, cp_r)
+import Shelly (shelly, cp_r, rm_rf)
 import System.Exit
-import qualified Turtle
 
 import Data.SemVer
 
@@ -175,13 +174,16 @@ initializeOutput = do
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $
         writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
-      createDirectoryIfMissing (outputPath </> "nodeLib")
-      putStrsLn ["Generating node libraries in ", pathToText outputPath]
-      -- Get the path to the files bundled with nixfromnpm which contain
-      -- nix libraries.
-      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
+      let outputNodeLib = outputPath </> "nodeLib"
 
-      Turtle.cptree nodeLibPath (outputPath </> "nodeLib")
+      putStrsLn ["Generating node libraries in ", pathToText outputPath]
+
+      nixlibs <- getDataFileName "nix-libs"
+      let inputNodeLib = nixlibs </> "nodeLib"
+
+      shelly $ do
+        rm_rf outputNodeLib
+        cp_r inputNodeLib outputNodeLib
 
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
