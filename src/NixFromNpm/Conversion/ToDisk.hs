@@ -14,9 +14,10 @@ import qualified Data.HashSet as HS
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Text (Text)
+import Data.Either (either)
 import qualified Data.Text as T
 import Text.Printf (printf)
-import Shelly (shelly, cp_r, rm_rf)
+import Shelly (shelly, cp_r, rm_rf, run_)
 import System.Exit
 
 import Data.SemVer
@@ -187,6 +188,10 @@ initializeOutput = do
       shelly $ do
         rm_rf outputNodeLib
         cp_r inputNodeLib outputNodeLib
+
+        let tools     = outputNodeLib </> "tools"
+        let toolsText = either id id (toText tools)
+        run_ "chmod" [ "-R", "+x", toolsText ]
 
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
