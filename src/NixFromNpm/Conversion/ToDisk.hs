@@ -18,6 +18,7 @@ import qualified Data.Text as T
 import Text.Printf (printf)
 import Shelly (shelly, cp_r)
 import System.Exit
+import qualified Turtle
 
 import Data.SemVer
 
@@ -179,11 +180,9 @@ initializeOutput = do
       -- Get the path to the files bundled with nixfromnpm which contain
       -- nix libraries.
       nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
-      -- Copy each of these into the target (unless they exist).
-      forItemsInDir_ nodeLibPath $ \path -> do
-        whenM (isFile path) $ do
-          unlessExists (outputPath </> "nodeLib" </> filename path) $
-            copyFile path (outputPath </> "nodeLib" </> filename path)
+
+      Turtle.cptree nodeLibPath (outputPath </> "nodeLib")
+
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
         writeNix defaultNixPath $

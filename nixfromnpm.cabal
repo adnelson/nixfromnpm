@@ -66,6 +66,7 @@ library
                      , hnix >=0.2.3
                      , optparse-applicative
                      , curl
+                     , turtle
                      , temporary
                      , SHA
                      , monad-control
@@ -112,6 +113,7 @@ executable nixfromnpm
                      , hnix >=0.2.3
                      , optparse-applicative
                      , curl
+                     , turtle
                      , temporary
                      , SHA
                      , monad-control
@@ -157,6 +159,7 @@ test-suite unit-tests
                      , hnix >=0.2.3
                      , optparse-applicative
                      , curl
+                     , turtle
                      , temporary
                      , SHA
                      , monad-control
