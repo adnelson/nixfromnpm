@@ -174,12 +174,15 @@ initializeOutput = do
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $
         writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
+
+      -- Get the path to the files bundled with nixfromnpm which
+      -- contain nix libraries.
+      nixlibs <- getDataFileName "nix-libs"
+
+      let inputNodeLib  = nixlibs    </> "nodeLib"
       let outputNodeLib = outputPath </> "nodeLib"
 
       putStrsLn ["Generating node libraries in ", pathToText outputPath]
-
-      nixlibs <- getDataFileName "nix-libs"
-      let inputNodeLib = nixlibs </> "nodeLib"
 
       shelly $ do
         rm_rf outputNodeLib
