@@ -597,9 +597,19 @@ let
         # arg-override function. The function consumes the original
         # argument set.
         #
+        # N.B: the legacy behavior of accepting a set is preserved but
+        # the preferred usage-pattern is to supply a function that
+        # discards its argument; e.g:
+        #
+        # overrideNodePackage (_: { ... })
+        #
         # We don't use the name `override` because this will get stomped on
         # if the derivation is the result of a `callPackage` application.
-        overrideNodePackage = newArgsFun: buildNodePackage (args // (newArgsFun args));
+        overrideNodePackage = newArgs:
+          if builtins.isFunction newArgs
+          then buildNodePackage (args // (newArgs args))
+          else buildNodePackage (args // newArgs);
+
       });
     } // {
       name = if namePrefix == null then throw "Name prefix is null"
