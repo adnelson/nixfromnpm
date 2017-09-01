@@ -4,7 +4,7 @@
 # can ensure future changes to these packages will not break the
 # build.
 
-{ pkgs ? import <nixpkgs> {}, compiler ? "ghc7102" }:
+{ pkgs ? import <nixpkgs> {}, compiler ? "ghc802" }:
 let
   haskellPackages = pkgs.haskell.packages."${compiler}";
 
@@ -45,8 +45,22 @@ let
     license = pkgs.lib.licenses.mit;
   };
 
+  text-render = with haskellPackages; mkDerivation rec {
+    pname = "text-render";
+    version = "0.1.0.3";
+    src = pkgs.fetchurl {
+      url = "https://api.github.com/repos/adnelson/${pname}/tarball/${version}";
+      name = "${pname}-${version}.tar.gz";
+      sha256 = "0kqx4b20ni0nvnx1lj5qh52primpr9c89fw1z3n5w93xd9fjj6jr";
+    };
+    isLibrary = true;
+    buildDepends = [ base mtl parsec text classy-prelude ];
+    description = "A type class for rendering objects as text, pretty-printing, etc";
+    license = pkgs.lib.licenses.mit;
+  };
+
 in
 
 haskellPackages.callPackage ./project.nix {
-  inherit pkgs hnix semver-range;
+  inherit pkgs hnix semver-range text-render;
 }
