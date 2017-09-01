@@ -205,7 +205,7 @@ validateOptions opts@(RawOptions{..}) = do
   tokensCommandLine <- parseNpmTokens roNpmTokens
   npmTokensEnv <- getNpmTokens
   return $ NixFromNpmOptions {
-    nfnoOutputPath = outputPath,
+    nfnoOutputPath = collapse outputPath,
     nfnoExtendPaths = extendPaths,
     nfnoGithubToken = roGithubToken <|> githubTokenEnv,
     nfnoNpmTokens = tokensCommandLine <> npmTokensEnv,

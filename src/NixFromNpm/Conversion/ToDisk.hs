@@ -14,9 +14,10 @@ import qualified Data.HashSet as HS
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Text (Text)
+import Data.Either (either)
 import qualified Data.Text as T
 import Text.Printf (printf)
-import Shelly (shelly, cp_r)
+import Shelly (shelly, cp_r, rm_rf, run_)
 import System.Exit
 
 import Data.SemVer
@@ -174,16 +175,23 @@ initializeOutput = do
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $
         writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
-      createDirectoryIfMissing (outputPath </> "nodeLib")
+
+      -- Get the path to the files bundled with nixfromnpm which
+      -- contain nix libraries.
+      nixlibs <- getDataFileName "nix-libs"
+
+      let inputNodeLib = nixlibs </> "nodeLib"
+      let outputNodeLib = outputPath </> "nodeLib"
+
       putStrsLn ["Generating node libraries in ", pathToText outputPath]
-      -- Get the path to the files bundled with nixfromnpm which contain
-      -- nix libraries.
-      nodeLibPath <- (</> "nodeLib") <$> getDataFileName "nix-libs"
-      -- Copy each of these into the target (unless they exist).
-      forItemsInDir_ nodeLibPath $ \path -> do
-        whenM (isFile path) $ do
-          unlessExists (outputPath </> "nodeLib" </> filename path) $
-            copyFile path (outputPath </> "nodeLib" </> filename path)
+
+      shelly $ do
+        rm_rf outputNodeLib
+        cp_r inputNodeLib outputNodeLib
+
+        let tools = outputNodeLib </> "tools"
+        run_ "chmod" [ "-R", "+x", (pathToText tools) ]
+
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
         writeNix defaultNixPath $
