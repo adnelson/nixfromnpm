@@ -180,7 +180,7 @@ initializeOutput = do
       -- contain nix libraries.
       nixlibs <- getDataFileName "nix-libs"
 
-      let inputNodeLib  = nixlibs    </> "nodeLib"
+      let inputNodeLib = nixlibs </> "nodeLib"
       let outputNodeLib = outputPath </> "nodeLib"
 
       putStrsLn ["Generating node libraries in ", pathToText outputPath]
@@ -189,9 +189,8 @@ initializeOutput = do
         rm_rf outputNodeLib
         cp_r inputNodeLib outputNodeLib
 
-        let tools     = outputNodeLib </> "tools"
-        let toolsText = either id id (toText tools)
-        run_ "chmod" [ "-R", "+x", toolsText ]
+        let tools = outputNodeLib </> "tools"
+        run_ "chmod" [ "-R", "+x", (pathToText tools) ]
 
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
