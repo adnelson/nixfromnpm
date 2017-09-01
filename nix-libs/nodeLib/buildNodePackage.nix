@@ -593,10 +593,13 @@ let
         env = buildNodePackage (args // {includeDevDependencies = true;});
 
         # An 'overrideNodePackage' attribute, which will call
-        # `buildNodePackage` with the given arguments overridden.
+        # `buildNodePackage` with new arguments produced by the given
+        # arg-override function. The function consumes the original
+        # argument set.
+        #
         # We don't use the name `override` because this will get stomped on
         # if the derivation is the result of a `callPackage` application.
-        overrideNodePackage = newArgs: buildNodePackage (args // newArgs);
+        overrideNodePackage = newArgsFun: buildNodePackage (args // (newArgsFun args));
       });
     } // {
       name = if namePrefix == null then throw "Name prefix is null"
