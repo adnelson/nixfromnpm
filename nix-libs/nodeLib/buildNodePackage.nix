@@ -364,6 +364,9 @@ let
 
     buildPhase = concatStringsSep "\n" [
       "runHook preBuild"
+      # Previous NODE_PATH should be empty, but it might have been set
+      # in the custom derivation steps.
+      "export NODE_PATH=$PWD/node_modules:$NODE_PATH"
       ''
       (
         # NPM reads the `HOME` environment variable and fails if it doesn't
