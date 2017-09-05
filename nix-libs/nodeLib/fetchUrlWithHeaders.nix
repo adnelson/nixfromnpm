@@ -64,7 +64,7 @@ stdenv.mkDerivation ({
 
   headerNames = builtins.attrNames headers;
 
-  buildInputs = with pythonPackages; [python requests2];
+  buildInputs = with pythonPackages; [python requests];
   buildCommand = ''
     python ${./fetch.py}
   '';

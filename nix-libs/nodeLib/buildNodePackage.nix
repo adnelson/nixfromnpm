@@ -446,9 +446,9 @@ let
         echo -n "Linking manpages... "
         NUM_MAN_PAGES=0
         mkdir -p $out/share
-        for dir in $out/lib/node_modules/${self.fullName}/man/*; do
+        for dir in $out/lib/node_modules/${self.fullName}/man/*; do         #*/
           mkdir -p $out/share/man/$(basename "$dir")
-          for page in $dir/*; do
+          for page in $dir/*; do                                            #*/
             ln -s $page $out/share/man/$(basename "$dir")
             NUM_MAN_PAGES=$(($NUM_MAN_PAGES + 1))
           done
@@ -493,6 +493,9 @@ let
 
       # Define some environment variables that we will use in the build.
       setVariables = ''
+        # In case this was set by an upstream derivation.
+        unset NODE_PATH
+
         # This creates a string for this package which is unique but
         # deterministic. We can use it to create temporary directories
         # and URLs and be confident there will be no collisions.
