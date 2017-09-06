@@ -89,7 +89,7 @@ in
 
   # If there's a namespace, by default it will be prepended to the package
   # name. Otherwise, a prefix can be given explicitly.
-  namePrefix ? (if namespace == null then "" else "${namespace}-"),
+  namePrefix ? (if namespace == null then "" else "=${namespace}=-"),
 
   # List of (runtime) dependencies.
   deps ? [],

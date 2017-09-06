@@ -27,7 +27,6 @@ data InvalidNodeLib
   | OutputParentNotWritable
   | IsFileNotDirectory
   | NoPackageDir
-  | NoVersionFile
   | NoDefaultNix
   deriving (Show, Eq, Typeable)
 
@@ -110,7 +109,6 @@ validateExtension = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   whenM (not <$> isDirectoryEmpty path) $ do
     assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
-    assert' (doesFileExist (path </> ".nixfromnpm-version")) NoVersionFile
     assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
   return path
 

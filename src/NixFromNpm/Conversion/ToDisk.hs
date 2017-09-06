@@ -147,7 +147,6 @@ preloadPackages = do
     }
 
 -- | Initialize an output directory from scratch. This means:
--- * Creating a .nixfromnpm-version file storing the current version.
 -- * If we aren't extending anything, copying over the nix node
 --   libraries that nixfromnpm provides.
 -- * Creating a default.nix file.
@@ -170,7 +169,6 @@ initializeOutput = do
   putStrsLn ["Initializing  ", pathToText outputPath]
   createDirectoryIfMissing outputPath
   createDirectoryIfMissing (outputPath </> nodePackagesDir)
-  writeFileUtf8 (outputPath </> ".nixfromnpm-version") $ tshow version
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $
