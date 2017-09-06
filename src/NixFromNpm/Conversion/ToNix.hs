@@ -12,6 +12,7 @@ import Data.Fix (Fix(..))
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 import qualified Data.ByteString.Char8 as C8
+import Data.Char (isDigit)
 import Data.Text (Text, replace)
 import qualified Data.Text as T
 
@@ -53,8 +54,15 @@ hasNamespacedDependency rPkg = any hasNs (allDeps rPkg) where
 
 -- | Turns a string into one that can be used as an identifier.
 -- NPM package names can contain dots, so we translate these into dashes.
+-- Names can also start with a number; in this case prefix with an underscore.
 fixName :: Name -> Name
-fixName = replace "." "-"
+fixName name = do
+  -- Replace dots with dashes
+  let name' = replace "." "-" name
+  case T.findIndex isDigit name' of
+    -- First character is a digit; prefix with underscore
+    Just 0 -> "_" <> name'
+    _ -> name'
 
 -- | Converts a package name and semver into an Nix expression.
 -- Example: "foo" and 1.2.3 turns into "foo_1-2-3".
