@@ -11,7 +11,7 @@ let
             inherit (newPkgs.lib) any flip elem hasSuffix hasPrefix;
             # We'll typically have a lot of files in this directory; we only want
             # to take a few of them though.
-            filesToExclude = ["node_modules" "shell.nix" "project.nix" "dist" "scripts"];
+            filesToExclude = ["node_modules" "shell.nix" "project.nix" "dist" "scripts" "README.md" ];
             suffixesToExclude = ["-test"];
             filter = baseName: (!elem baseName filesToExclude) &&
                                (!hasPrefix "." baseName) &&

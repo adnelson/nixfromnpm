@@ -60,7 +60,7 @@ hack on it, you can use it in a `nix-shell`:
 
 ```bash
 $ cd /path/to/nixfromnpm
-$ nix-shell release.nix --attr nixfromnpm.env
+$ nix-shell
 [nix-shell:nixfromnpm]$ cabal build
 [nix-shell:nixfromnpm]$ cabal run -- <arguments>
 ```
