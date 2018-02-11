@@ -52,7 +52,7 @@ Make sure you have nix installed, and `nixpkgs` is in your `NIX_PATH`
 environment variable. Then run:
 
 ```bash
-$ nix-env -f ./nixfromnpm -i
+$ nix-env --install --attr nixfromnpm --file ./release.nix
 ```
 
 If you'd like to try out `nixfromnpm` without installing it, or just
@@ -60,7 +60,8 @@ hack on it, you can use it in a `nix-shell`:
 
 ```bash
 $ cd /path/to/nixfromnpm
-$ nix-shell --pure
+$ nix-shell release.nix --attr nixfromnpm.env
+[nix-shell:nixfromnpm]$ cabal build
 [nix-shell:nixfromnpm]$ cabal run -- <arguments>
 ```
 
