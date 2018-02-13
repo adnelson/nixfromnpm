@@ -1,3 +1,5 @@
+{ nixpkgs ? (import ./nix/17_09.nix) }:
+
 let
 
   config   = { allowUnfree = true; };
@@ -19,10 +21,7 @@ let
 
             src = builtins.filterSource (path: _: filter (baseNameOf path)) ./.;
           in
-            { hnix =
-                haskellPackagesNew.callPackage ./nix/hnix.nix { };
-
-              semver-range = 
+            { semver-range = 
                 haskellPackagesNew.callPackage ./nix/semver-range.nix { };
 
               text-render =
@@ -43,8 +42,6 @@ let
 
     })
   ];
-
-  nixpkgs = import ./nix/17_09.nix;
 
   pkgs = import nixpkgs { inherit config overlays; };
 
