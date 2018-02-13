@@ -61,7 +61,6 @@ hack on it, you can use it in a `nix-shell`:
 ```bash
 $ cd /path/to/nixfromnpm
 $ nix-shell
-[nix-shell:nixfromnpm]$ cabal build
 [nix-shell:nixfromnpm]$ cabal run -- <arguments>
 ```
 
