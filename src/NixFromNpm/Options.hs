@@ -15,7 +15,7 @@ import Data.SemVer (anyVersion)
 import Options.Applicative
 
 import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
-import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
+import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common
@@ -70,8 +70,6 @@ data RawOptions = RawOptions {
   -- ^ Fetch the top `n` npm packages by popularity.
   roAllTop :: Bool,
   -- ^ If true, fetch all the top packages we have defined.
-  roNpm3 :: Bool,
-  -- ^ If true, do not default to npm3 in generated nix files.
   roOverwriteNixLibs :: Bool
   -- ^ If true, allow existing nix libraries in output to be overridden.
 } deriving (Show, Eq)
@@ -93,7 +91,6 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoGithubToken :: Maybe AuthToken, -- ^ Github authentication token.
   nfnoNpmTokens :: Record AuthToken, -- ^ NPM authentication token.
   nfnoRealTime :: Bool, -- ^ Write packages to disk as they are written.
-  nfnoNpm3 :: Bool, -- ^ Use npm3 by default in generated nix files.
   nfnoOverwriteNixLibs :: Bool -- ^ Overwrite existing nix libraries
   } deriving (Show, Eq)
 
@@ -216,7 +213,6 @@ validateOptions opts@(RawOptions{..}) = do
     nfnoPkgPaths = packagePaths,
     nfnoNoDefaultNix = roNoDefaultNix,
     nfnoRealTime = not roNoRealTime,
-    nfnoNpm3 = roNpm3,
     nfnoOverwriteNixLibs = roOverwriteNixLibs
     }
   where
@@ -263,7 +259,6 @@ parseOptions = RawOptions
     <*> noRealTime
     <*> topN
     <*> allTop
-    <*> npm3
     <*> overwriteNixLibs
   where
     packageNames = many $ textOption $ short 'p'
@@ -340,8 +335,5 @@ parseOptions = RawOptions
                             <> metavar "N"
                             <> help "Fetch the top N packages by popularity."))
            <|> pure Nothing
-    npm3 = switch (long "npm3"
-                       <> help "Use npm3 by default in generated nix \
-                               \expressions.")
     overwriteNixLibs = switch (long "overwrite-nix-libs"
                        <> help "Overwrite existing nix libraries in output.")

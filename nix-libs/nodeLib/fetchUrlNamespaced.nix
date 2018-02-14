@@ -1,7 +1,7 @@
-# A python-based fetchurl function, allowing the passage of custom headers.
-# Just calls into `requests` under the hood.
+# A python-based fetchurl function, allowing the passage of an auth
+# header via namespaceTokens.  Just calls into `requests` under the hood.
 {
-  pythonPackages, stdenv
+  pythonPackages, stdenv, namespaceTokens
 }:
 
 
@@ -25,29 +25,25 @@
 , # Meta information, if any.
   meta ? {}
 
-  # Headers to set, if any.
-, headers ? {}
+  # Namespace to use (checked for in namespaceTokens)
+, namespace ? null
 }:
 
 let
+  auth = if namespace != null && builtins.hasAttr namespace namespaceTokens
+         then namespaceTokens.${namespace}
+         else null;
   inherit (stdenv.lib) flip mapAttrs' nameValuePair;
   hasHash = (outputHash != "" && outputHashAlgo != "")
             || md5 != "" || sha1 != "" || sha256 != "";
-
-  # Create an attribute set translating each header name and value into
-  # the header name prefixed with __HTTP_HEADER. When the derivation is
-  # evaluated, the script will pick up these environment variables and use
-  # them to produce the actual headers.
-  headerValues = flip mapAttrs' headers (headerName: headerValue:
-    nameValuePair "__HTTP_HEADER_${headerName}" headerValue);
 in
 
 if !hasHash
 then throw "You must specify the output hash for ${url}"
 else
 
-stdenv.mkDerivation ({
-  inherit url;
+stdenv.mkDerivation {
+  inherit url auth;
   name = if name != "" then name else baseNameOf (toString url);
 
   outputHashAlgo = if outputHashAlgo != "" then outputHashAlgo else
@@ -62,10 +58,8 @@ stdenv.mkDerivation ({
   # traffic, so don't do that.
   preferLocalBuild = true;
 
-  headerNames = builtins.attrNames headers;
-
   buildInputs = with pythonPackages; [python requests];
   buildCommand = ''
     python ${./fetch.py}
   '';
-} // headerValues)
+}

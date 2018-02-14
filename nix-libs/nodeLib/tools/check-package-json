@@ -35,8 +35,8 @@ function exists(path) {
 
 // Ensure that the main entry point exists.
 function checkMainEntryPoint() {
-  var mainEntryPoint = packageObj.main || 'index.js';
-  if ('main' in packageObj) {
+  if (packageObj.main) {
+    var mainEntryPoint = packageObj.main;
     if (!(exists(mainEntryPoint) ||
           exists(mainEntryPoint + ".js") ||
           exists(mainEntryPoint + ".node"))) {

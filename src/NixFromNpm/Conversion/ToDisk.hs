@@ -7,25 +7,25 @@
 {-# LANGUAGE ViewPatterns #-}
 module NixFromNpm.Conversion.ToDisk where
 
-import qualified Prelude as P
+import Data.Either (either)
 import Data.HashMap.Strict (HashMap)
+import Data.Map (Map)
+import Data.SemVer (semver, anyVersion, parseSemVer, fromHaskellVersion)
+import Data.Text (Text)
+import Shelly (shelly, cp_r, rm_rf, run_)
+import System.Environment (lookupEnv)
+import System.Exit (ExitCode(..))
+import Text.Printf (printf)
 import qualified Data.HashMap.Strict as H
 import qualified Data.HashSet as HS
-import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Text (Text)
-import Data.Either (either)
 import qualified Data.Text as T
-import Text.Printf (printf)
-import Shelly (shelly, cp_r, rm_rf, run_)
-import System.Exit
-
-import Data.SemVer
+import qualified Prelude as P
 
 import qualified Paths_nixfromnpm
 import NixFromNpm.Common
-import Nix.Expr
-import Nix.Parser
+import Nix.Expr (NExpr)
+import Nix.Parser (Result(..), parseNixFile)
 import Nix.Pretty (prettyNix)
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     toDotNix,
@@ -36,8 +36,11 @@ import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     packageMapToNix,
                                     resolvedPkgToNix,
                                     nodePackagesDir)
-import NixFromNpm.Options
-import NixFromNpm.Npm.Types
+import NixFromNpm.Options (NixFromNpmOptions(..))
+import NixFromNpm.Npm.Types (BrokenPackageReason(..))
+import NixFromNpm.Npm.Types (ResolvedDependency(..), unpackPSC, VersionInfo(..))
+import NixFromNpm.Npm.Version (NpmVersionRange(..), showPair, showRangePair)
+import NixFromNpm.Npm.PackageMap (simpleName, pmNumVersions, pmConcat)
 import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..),
                                   pmLookup, pmDelete, pmMap,
                                   psToList)
@@ -67,10 +70,10 @@ parseVersionFiles verbose pkgName folder = do
     case parseSemVer (pathToText versionTxt) of
       _ | ext /= Just "nix" -> return Nothing -- not a nix file
       Left _ -> return Nothing -- not a version file
-      Right version -> parseNixString . unpack <$> readFileUtf8 path >>= \case
+      Right version -> parseNixFile (pathToString path) >>= \case
         Failure err -> do
-          putStrsLn ["Warning: expression for ", tshow pkgName, " version ",
-                     pathToText versionTxt, " failed to parse:\n", tshow err]
+          putStrsLn ["Warning: expression at path ", tshow path,
+                     " failed to parse:\n", tshow err]
           return Nothing -- invalid nix, should overwrite
         Success expr -> do
           when verbose $
@@ -111,12 +114,13 @@ writeNodePackagesNix verbose path' = do
 -- | Given the path to a file possibly containing nix expressions, finds all
 -- expressions findable at that path and returns a map of them.
 findExisting :: (MonadBaseControl IO io, MonadIO io)
-             => Maybe Name -- ^ Is `Just` if this is an extension.
+             => Bool -- ^ Verbose
+             -> Maybe Name -- ^ Is `Just` if this is an extension.
              -> FilePath       -- ^ The path to search.
              -> io (PackageMap PreExistingPackage)
              -- ^ Mapping of package names to maps of versions to nix
              --   expressions.
-findExisting maybeName path = do
+findExisting verbose maybeName path = do
   doesDirectoryExist (path </> nodePackagesDir) >>= \case
     False -> case maybeName of
       Just name -> errorC [
@@ -126,7 +130,7 @@ findExisting maybeName path = do
     True -> do
       let wrapper = maybe FromOutput FromExtension maybeName
       putStrsLn ["Searching for existing expressions in ", pathToText path]
-      verMaps <- scanNodePackagesDir True (path </> nodePackagesDir)
+      verMaps <- scanNodePackagesDir verbose (path </> nodePackagesDir)
       let total = pmNumVersions verMaps
       putStrsLn ["Found ", render total, " expressions in ", pathToText path]
       return $ pmMap wrapper verMaps
@@ -135,12 +139,13 @@ findExisting maybeName path = do
 -- finds any existing packages.
 preloadPackages :: NpmFetcher () -- ^ Add the existing packages to the state.
 preloadPackages = do
+  verbose <- asks nfsVerbose
   existing <- asks nfsCacheDepth >>= \case
     n | n < 0 -> return mempty
-      | otherwise -> findExisting Nothing =<< asks nfsOutputPath
+      | otherwise -> findExisting verbose Nothing =<< asks nfsOutputPath
   toExtend <- asks nfsExtendPaths
   libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
-    findExisting (Just name) path
+    findExisting verbose (Just name) path
   let all = existing <> libraries
   modify $ \s -> s {
     resolved = pmMap toFullyDefined all <> resolved s
@@ -155,7 +160,6 @@ initializeOutput :: NpmFetcher ()
 initializeOutput = do
   outputPath <- asks nfsOutputPath
   extensions <- asks nfsExtendPaths
-  npm3 <- asks nfsNpm3
   version <- case fromHaskellVersion Paths_nixfromnpm.version of
     Left err -> fatal err
     Right v -> return v
@@ -171,12 +175,14 @@ initializeOutput = do
   createDirectoryIfMissing (outputPath </> nodePackagesDir)
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
-      unlessExists defaultNixPath $
-        writeNix (outputPath </> "default.nix") $ rootDefaultNix npm3
+      unlessExists defaultNixPath $ do
+        writeNix defaultNixPath rootDefaultNix
 
       -- Get the path to the files bundled with nixfromnpm which
       -- contain nix libraries.
-      nixlibs <- getDataFileName "nix-libs"
+      nixlibs <- liftIO (lookupEnv "NIX_LIBS_DIR") >>= \case
+        Nothing -> getDataFileName "nix-libs"
+        Just libPath -> pure (fromString libPath)
 
       let inputNodeLib = nixlibs </> "nodeLib"
       let outputNodeLib = outputPath </> "nodeLib"
@@ -193,7 +199,7 @@ initializeOutput = do
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
         writeNix defaultNixPath $
-          defaultNixExtending extName extensions npm3
+          defaultNixExtending extName extensions
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
@@ -222,9 +228,8 @@ dumpFromPkgJson path = do
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
         outputPath <- asks nfsOutputPath
-        npm3 <- asks nfsNpm3
         writeNix (path </> "default.nix") $
-          packageJsonDefaultNix outputPath npm3
+          packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()
@@ -300,22 +305,12 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsMaxDevDepth = nfnoDevDepth,
     nfsCacheDepth = nfnoCacheDepth,
     nfsRealTimeWrite = nfnoRealTime,
-    nfsNpm3 = nfnoNpm3,
     nfsOverwriteNixLibs = nfnoOverwriteNixLibs
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages
     initializeOutput
-    packageNames <- case nfnoNpm3 of
-      -- If we're building with npm3, then we'll need to have npm3 in the set.
-      -- Check if we already have it defined, and add it if we don't.
-      True -> H.lookup "npm" <$> gets resolved >>= \case
-        Just _ -> return nfnoPkgNames
-        Nothing -> do
-          warn "No npm package detected; adding npm to packages to build."
-          return $ ("npm", SemVerRange anyVersion) : nfnoPkgNames
-      False -> return nfnoPkgNames
-    forM packageNames $ \(name, range) -> do
+    forM nfnoPkgNames $ \(name, range) -> do
       resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
           warns ["Failed to build ", tshow name, "@", tshow range,

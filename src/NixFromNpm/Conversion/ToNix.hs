@@ -126,18 +126,13 @@ distInfoToNix _ Nothing = Nix.mkPath False "./."
 distInfoToNix maybeNamespace (Just DistInfo{..}) = do
   let fetchurl = case maybeNamespace of
         Nothing -> "pkgs" !. "fetchurl"
-        Just _ -> "fetchUrlWithHeaders"
+        Just _ -> "fetchUrlNamespaced"
       (algo, hash) = case diShasum of
         SHA1 hash' -> ("sha1", hash')
         SHA256 hash' -> ("sha256", hash')
       authBinding = case maybeNamespace of
         Nothing -> []
-        Just namespace -> do
-          let -- Equivalent to "headers.Authorization ="
-            binder = NamedVar ["headers", "Authorization"]
-            token = "namespaceTokens" !. namespace
-            auth = [Plain "Bearer ", Antiquoted token]
-          [binder $ Fix $ NStr $ DoubleQuoted auth]
+        Just namespace -> [bindTo "namespace" (mkStr namespace)]
       bindings = ["url" $= mkStr diUrl, algo $= mkStr hash] <> authBinding
   fetchurl @@ mkNonRecSet bindings
 
@@ -270,7 +265,7 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       maybeIf (hasBroken rPkg) "brokenPackage",
       -- If the package has a namespace then it will need to set headers
       -- when fetching. So add that function as a dependency.
-      maybeIf (isNamespaced rpName) "fetchUrlWithHeaders",
+      maybeIf (isNamespaced rpName) "fetchUrlNamespaced",
       maybeIf (isNamespaced rpName) "namespaceTokens",
       -- If any of the package's dependencies have namespaces, they will appear
       -- in the `namespaces` set, so we'll need that as a dependency.
@@ -316,20 +311,18 @@ importNixpkgs = importWith True "nixpkgs" []
 -- | The default version of nodejs we are using; this should correspond
 -- to a key in the nixpkgs set we're importing.
 defaultNodeJS :: Text
-defaultNodeJS = "nodejs-4_x"
+defaultNodeJS = "nodejs-8_x"
 
 -- | Also used a few times, these are the top-level params to the generated
 -- default.nix files.
-defaultParams :: Bool -- ^ Whether to use npm3 or not
-              -> Params NExpr
-defaultParams npm3 = do
+defaultParams :: Params NExpr
+defaultParams = do
   mkParamset [("pkgs", Just importNixpkgs),
-              ("npm3", Just $ mkBool npm3),
               ("nodejs", Just $ "pkgs" !. defaultNodeJS)]
 
 -- | When passing through arguments, we inherit these things.
 defaultInherits :: [Binding NExpr]
-defaultInherits = [inherit ["pkgs", "npm3", "nodejs"]]
+defaultInherits = [inherit ["pkgs", "nodejs"]]
 
 -- | The name of the subfolder within the output directory that
 -- contains node packages.
@@ -340,8 +333,8 @@ bindRootPath :: Binding NExpr
 bindRootPath = "nodePackagesPath" $= mkPath ("./" </> nodePackagesDir)
 
 -- | The root-level default.nix file, which does not have any extensions.
-rootDefaultNix :: Bool -> NExpr
-rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
+rootDefaultNix :: NExpr
+rootDefaultNix = mkFunction defaultParams body where
   lets = [
       "mkNodeLib" $= importWith False "./nodeLib" ["self" $= "mkNodeLib"]
     , "nodeLib" $= ("mkNodeLib" @@ mkNonRecSet defaultInherits)
@@ -353,10 +346,9 @@ rootDefaultNix npm3 = mkFunction (defaultParams npm3) body where
 -- generating.
 defaultNixExtending :: Name -- ^ Name of first extension.
                     -> Record FilePath -- ^ Extensions being included.
-                    -> Bool -- ^ Whether to use npm3
                     -> NExpr -- ^ A generated nix expression.
-defaultNixExtending extName extensions npm3 = do
-  mkFunction (defaultParams npm3) body where
+defaultNixExtending extName extensions = do
+  mkFunction defaultParams body where
     -- Map over the expression map, creating a binding for each pair.
     lets = flip map (H.toList extensions) $ \(name, path) -> do
       let bindings = defaultInherits <> ["self" $= "nodeLib"]
@@ -370,14 +362,13 @@ defaultNixExtending extName extensions npm3 = do
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.
 packageJsonDefaultNix :: FilePath -- ^ Path to the output directory.
-                      -> Bool -- ^ Whether to use npm3
                       -> NExpr
-packageJsonDefaultNix outputPath npm3 = do
+packageJsonDefaultNix outputPath = do
   let
     libBind = "lib" $= importWith False outputPath defaultInherits
     callPkg = "lib" !. "callPackage"
     call = callPkg @@ mkPath "project.nix" @@ mkNonRecSet []
-  mkFunction (defaultParams npm3) $ mkLets [libBind] call
+  mkFunction defaultParams $ mkLets [libBind] call
 
 bindingsToMap :: [Binding t] -> Record t
 bindingsToMap = foldl' step mempty where
