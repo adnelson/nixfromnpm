@@ -21,8 +21,7 @@ data-files:   nix-libs/nodeLib/buildNodePackage.nix
             , nix-libs/nodeLib/circular_dependencies.md
             , nix-libs/nodeLib/default.nix
             , nix-libs/nodeLib/fetch.py
-            , nix-libs/nodeLib/fetchUrlWithHeaders.nix
-            , nix-libs/nodeLib/parseNpmAuthTokens.nix
+            , nix-libs/nodeLib/fetchUrlNamespaced.nix
             , nix-libs/nodeLib/tools/check-package-json
             , nix-libs/nodeLib/tools/install-binaries
             , nix-libs/nodeLib/tools/patch-dependencies
