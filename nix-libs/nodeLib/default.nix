@@ -164,12 +164,12 @@ rec {
   }:
     let
 
-      callPackage = pkgs.newScope (nodePackages // {
+      callPackage = pkgs.newScope {
         inherit fetchUrlNamespaced fetchUrlWithHeaders namespaceTokens;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
         inherit extras;
         inherit (nodePackages) namespaces;
-      });
+      };
 
       nodePackages = joinSets (map (e: e.nodePackages) extensions) //
                      (import nodePackagesPath {inherit callPackage;});
