@@ -4,15 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveGeneric #-}
-module NixFromNpm.Npm.Types (
-    module NixFromNpm.Npm.Version,
-    module NixFromNpm.Npm.PackageMap,
-    PackageInfo(..), PackageMeta(..), VersionInfo(..),
-    DistInfo(..), DependencyType(..),
-    BrokenPackageReason(..), ResolvedDependency(..),
-    Shasum(..), PossiblyCircularSemVer(..), unpackPSC,
-    sepCirculars, sepCircularMap, CircularSemVer(..)
-  ) where
+module NixFromNpm.Npm.Types where
 
 import qualified ClassyPrelude as CP
 import Data.Aeson

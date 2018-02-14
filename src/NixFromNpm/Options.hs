@@ -15,7 +15,7 @@ import Data.SemVer (anyVersion)
 import Options.Applicative
 
 import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
-import NixFromNpm.Npm.Types (PackageName(..), parsePackageName)
+import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common

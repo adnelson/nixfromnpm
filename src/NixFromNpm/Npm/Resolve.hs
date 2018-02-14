@@ -98,8 +98,10 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- rather than waiting until the end.
   nfsNpm3 :: Bool,
   -- ^ Whether generated packages should use npm3 by default.
-  nfsOverwriteNixLibs :: Bool
+  nfsOverwriteNixLibs :: Bool,
   -- ^ If true, allow existing nix libraries in output to be overridden.
+  nfsVerbose :: Bool
+  -- ^ Control verbosity
   } deriving (Show, Eq)
 
 -- | The state of the NPM fetcher.
@@ -804,7 +806,8 @@ defaultSettings = NpmFetcherSettings {
   nfsRetries = 1,
   nfsRealTimeWrite = False,
   nfsNpm3 = True,
-  nfsOverwriteNixLibs = False
+  nfsOverwriteNixLibs = False,
+  nfsVerbose = False
   }
 
 -- | Pull a ':'-separated list of tokens from the environment and parse
