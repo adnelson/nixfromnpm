@@ -8,7 +8,6 @@ test_result
 test_result*
 *.zip
 *.tar.gz
-!nix-libs/nodeLib/npm3.tar.gz
 *.tgz
 gcli
 test_priv

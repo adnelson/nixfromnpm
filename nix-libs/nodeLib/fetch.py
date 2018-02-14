@@ -3,12 +3,8 @@ import requests
 out = os.environ['out']
 url = os.environ['url']
 headers = {"User-Agent": "nix-fetchurl"}
-header_names = os.environ.get("headerNames", "")
-for name in header_names.split():
-    if "__HTTP_HEADER_{}".format(name) not in os.environ:
-        exit("FATAL: no corresponding value set for header {}"
-             .format(name))
-    headers[name] = os.environ["__HTTP_HEADER_{}".format(name)]
+if os.getenv("auth"):
+    headers["Authorization"] = "Bearer {}".format(os.environ["auth"])
 print('GET {} with headers {}'.format(url, headers))
 response = requests.get(url, headers=headers)
 if response.status_code != 200:

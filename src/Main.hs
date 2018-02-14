@@ -3,7 +3,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Options.Applicative
+import qualified Options.Applicative as O
+import System.Environment (getArgs)
 import System.Exit
 
 import NixFromNpm.Common hiding (getArgs)
@@ -12,11 +13,17 @@ import NixFromNpm.Options (NixFromNpmOptions, parseOptions,
 import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
 import NixFromNpm.Merge (mergeInto, MergeType(..), Source(..), Dest(..))
 
-main :: IO ()
-main = do
-  let opts = info (helper <*> parseOptions)
-             (fullDesc <> progDesc description <> header headerText)
-  parsedOpts <- execParser opts
+customExecParser_ :: O.ParserInfo a -> [String] -> IO a
+customExecParser_ pinfo args = do
+  let result = O.execParserPure O.defaultPrefs pinfo args
+  O.handleParseResult result
+
+mainFromArgs :: [String] -> IO a
+mainFromArgs args = do
+  let pInfo = O.info (O.helper <*> parseOptions)
+                (O.fullDesc <> O.progDesc description <> O.header headerText)
+
+  parsedOpts <- customExecParser_ pInfo args
   validatedOpts <- validateOptions parsedOpts
   exitWith =<< dumpPkgFromOptions validatedOpts
   where
@@ -25,3 +32,6 @@ main = do
                           "features such as de-duplication of shared ",
                           "dependencies and advanced customization."]
     headerText = "nixfromnpm - Create nix expressions from NPM"
+
+main :: IO ()
+main = mainFromArgs =<< getArgs
