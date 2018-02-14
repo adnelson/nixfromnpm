@@ -163,34 +163,17 @@ rec {
     extras ? {}
   }:
     let
-      callPackageWith = pkgSet: path: overridingArgs: let
-        inherit (builtins) intersectAttrs functionArgs;
-        inherit (pkgs.lib) filterAttrs;
-        # The path must be a function; import it here.
-        func = import path;
-        # Get the arguments to the function; e.g. "{a=false; b=true;}", where
-        # a false value is an argument that has no default.
-        funcArgs = functionArgs func;
-        # Take only the arguments that don't have a default.
-        noDefaults = filterAttrs (_: v: v == false) funcArgs;
-        # Intersect this set with the package set to create the arguments to
-        # the function.
-        satisfyingArgs = intersectAttrs noDefaults pkgSet;
-        # Override these arguments with whatever's passed in.
-        actualArgs = satisfyingArgs // overridingArgs;
-        # Call the function with these args to get a derivation.
-        deriv = func actualArgs;
-        in deriv;
 
-      nodePackages = joinSets (map (e: e.nodePackages) extensions) //
-                     (import nodePackagesPath {inherit callPackage;});
-
-      callPackage = callPackageWith {
+      callPackage = pkgs.newScope {
         inherit fetchUrlNamespaced fetchUrlWithHeaders namespaceTokens;
         inherit pkgs nodePackages buildNodePackage brokenPackage;
         inherit extras;
         inherit (nodePackages) namespaces;
       };
+
+      nodePackages = joinSets (map (e: e.nodePackages) extensions) //
+                     (import nodePackagesPath {inherit callPackage;});
+
     in
     {
       inherit callPackage namespaceTokens pkgs node-build-tools;
