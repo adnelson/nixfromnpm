@@ -36,6 +36,19 @@ let
     mv $(find . -type d -mindepth 1 -maxdepth 1) $out
   '';
 
+  # Create a tar wrapper that filters all the 'Ignoring unknown
+  # extended header keyword' noise
+  #
+  # Cribbed from nixpkgs/pkgs/development/node-packages/node-env.nix
+  tarWrapper = pkgs.runCommand "tarWrapper" {} ''
+    mkdir -p $out/bin
+    cat > $out/bin/tar <<EOF
+    #! ${pkgs.stdenv.shell} -e
+    $(type -p tar) "\$@" --warning=no-unknown-keyword
+    EOF
+    chmod +x $out/bin/tar
+  '';
+
   # Checks a derivation's structure; if it doesn't have certain attributes then
   # it isn't a node package and we error. Otherwise return the package.
   verifyNodePackage = pkg:
@@ -635,7 +648,7 @@ let
       # additional specified build inputs. In addition, on darwin we
       # provide XCode, since node-gyp will use it, and on linux we add
       # utillinux.
-      buildInputs = [npm python2 file node-build-tools] ++
+      buildInputs = [ tarWrapper npm python2 file node-build-tools ] ++
                     attrValues _devDependencies ++
                     buildInputs ++
                     (optional stdenv.isLinux pkgs.utillinux) ++
