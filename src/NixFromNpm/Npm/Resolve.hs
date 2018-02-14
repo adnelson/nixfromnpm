@@ -96,8 +96,6 @@ data NpmFetcherSettings = NpmFetcherSettings {
   nfsRealTimeWrite :: Bool,
   -- ^ Whether to write packages in real-time as the expressions are generated,
   -- rather than waiting until the end.
-  nfsNpm3 :: Bool,
-  -- ^ Whether generated packages should use npm3 by default.
   nfsOverwriteNixLibs :: Bool,
   -- ^ If true, allow existing nix libraries in output to be overridden.
   nfsVerbose :: Bool
@@ -805,7 +803,6 @@ defaultSettings = NpmFetcherSettings {
   nfsCacheDepth = 0,
   nfsRetries = 1,
   nfsRealTimeWrite = False,
-  nfsNpm3 = True,
   nfsOverwriteNixLibs = False,
   nfsVerbose = False
   }

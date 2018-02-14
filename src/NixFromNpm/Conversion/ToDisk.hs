@@ -160,7 +160,6 @@ initializeOutput :: NpmFetcher ()
 initializeOutput = do
   outputPath <- asks nfsOutputPath
   extensions <- asks nfsExtendPaths
-  npm3 <- asks nfsNpm3
   version <- case fromHaskellVersion Paths_nixfromnpm.version of
     Left err -> fatal err
     Right v -> return v
@@ -177,7 +176,7 @@ initializeOutput = do
   case H.keys extensions of
     [] -> do -- Then we are creating a new root.
       unlessExists defaultNixPath $ do
-        writeNix defaultNixPath $ rootDefaultNix npm3
+        writeNix defaultNixPath rootDefaultNix
 
       -- Get the path to the files bundled with nixfromnpm which
       -- contain nix libraries.
@@ -200,7 +199,7 @@ initializeOutput = do
     extName:_ -> do -- Then we are extending things.
       unlessExists defaultNixPath $ do
         writeNix defaultNixPath $
-          defaultNixExtending extName extensions npm3
+          defaultNixExtending extName extensions
 
 -- | Actually writes the packages to disk. Takes in the new packages to write,
 -- and the names/paths to the libraries being extended.
@@ -229,9 +228,8 @@ dumpFromPkgJson path = do
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
         outputPath <- asks nfsOutputPath
-        npm3 <- asks nfsNpm3
         writeNix (path </> "default.nix") $
-          packageJsonDefaultNix outputPath npm3
+          packageJsonDefaultNix outputPath
 
 -- | Show all of the broken packages.
 showBrokens :: NpmFetcher ()
@@ -307,22 +305,12 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
     nfsMaxDevDepth = nfnoDevDepth,
     nfsCacheDepth = nfnoCacheDepth,
     nfsRealTimeWrite = nfnoRealTime,
-    nfsNpm3 = nfnoNpm3,
     nfsOverwriteNixLibs = nfnoOverwriteNixLibs
     }
   (status, _) <- runNpmFetchWith settings startState $ do
     preloadPackages
     initializeOutput
-    packageNames <- case nfnoNpm3 of
-      -- If we're building with npm3, then we'll need to have npm3 in the set.
-      -- Check if we already have it defined, and add it if we don't.
-      True -> H.lookup "npm" <$> gets resolved >>= \case
-        Just _ -> return nfnoPkgNames
-        Nothing -> do
-          warn "No npm package detected; adding npm to packages to build."
-          return $ ("npm", SemVerRange anyVersion) : nfnoPkgNames
-      False -> return nfnoPkgNames
-    forM packageNames $ \(name, range) -> do
+    forM nfnoPkgNames $ \(name, range) -> do
       resolveNpmVersionRange name range
         `catch` \(e :: SomeException) -> do
           warns ["Failed to build ", tshow name, "@", tshow range,
