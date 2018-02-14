@@ -1,1 +1,1 @@
-(import ./release.nix).nixfromnpm.env
+args@{...}: (import ./release.nix args).nixfromnpm.env
