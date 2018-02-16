@@ -202,13 +202,19 @@ rec {
         inherit pkgs buildNodePackage brokenPackage extras;
       } // scope);
 
-      callPackage = pkgs.newScope (mkScope { inherit nodePackages; });
+      callPackage = pkgs.newScope (mkScope {
+        inherit nodePackages;
+        inherit (nodePackages) namespaces;
+      });
 
       initialNodePackages = self: 
         let
           oldExtensions = joinSets (map (e: e.nodePackages) extensions);
           packageSet = pkgs.callPackage nodePackagesPath { 
-            callPackage = pkgs.newScope (mkScope { nodePackages = self; });
+            callPackage = pkgs.newScope (mkScope {
+              nodePackages = self;
+              inherit (self) namespaces;
+            });
           };
         in
           oldExtensions // packageSet;
