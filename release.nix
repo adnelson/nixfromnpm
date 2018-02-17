@@ -24,7 +24,10 @@ let
                   dirsToInclude = ["src" "tests" "nix-libs"];
                   filesToInclude = ["LICENSE" "nixfromnpm.cabal"];
                   _filter = path: type: let
-                    subpath = elemAt (splitString "/nixfromnpm/" path) 1;
+                    # NOTE: using PWD here is hacky; means its
+                    # behavior depends on the directory the command is
+                    # being executed from. Fix me!
+                    subpath = elemAt (splitString "${builtins.getEnv "PWD"}/" path) 1;
                     spdir = elemAt (splitString "/" subpath) 0;
                   in elem spdir dirsToInclude ||
                      (type == "regular" && elem subpath filesToInclude);
