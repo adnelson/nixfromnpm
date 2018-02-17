@@ -48,4 +48,4 @@ let
 
 in
 
-  { inherit (pkgs.haskellPackages) nixfromnpm; }
+  { inherit (pkgs.haskellPackages) nixfromnpm; inherit pkgs; }
