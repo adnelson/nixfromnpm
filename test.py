@@ -5,8 +5,7 @@ import unittest
 import tempfile
 import shutil
 import sys
-from io import BytesIO
-from subprocess import check_call, CalledProcessError
+from subprocess import PIPE, Popen
 
 def printerr(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -57,14 +56,15 @@ class NixFromNpmTests(unittest.TestCase):
         if comment:
             print(comment)
         print("Running command: {} ...".format(" ".join(cmd)), end="")
-        with tempfile.TemporaryFile() as log:
-            try:
-                check_call(cmd, stdout=log, stderr=log)
-                print("OK")
-            except CalledProcessError:
-                print("ERROR")
-                print(log.read().decode() or "(no output)")
-                raise
+        proc = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        out, err = proc.communicate()
+        if proc.wait() == 0:
+            print("OK")
+        else:
+            print("ERROR")
+            print(out.decode() or "(no stdout)")
+            print(err.decode() or "(no stderr)")
+            raise Exception("Command {} failed".format(" ".join(cmd)))
 
     def generate_and_build(self, packages, gen_args=None):
         gen_cmd = ["nixfromnpm", "-o", self.output]
@@ -103,7 +103,6 @@ class NixFromNpmTests(unittest.TestCase):
         """Build a package in a namespace"""
         self.generate_and_build([Spec("node", namespace="types")])
 
-    @unittest.skip("known failure")
     def test_extension(self):
         """Test that we can generate an extension"""
         self.generate_and_build([Spec("browserify", version="1.18.0")],
