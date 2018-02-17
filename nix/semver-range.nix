@@ -6,8 +6,8 @@ mkDerivation {
   version = "0.2.6";
   src = fetchgit {
     url = "https://github.com/adnelson/semver-range";
-    sha256 = "0zfj8l5jhbbsjxw851j1qh5csfvvyczp4djvl77jf9k0awhb2p8g";
-    rev = "1da577c3d5648d52961e085d2901e464805e1dff";
+    sha256 = "1nzfzyjy81n2x4zml4yng7vcbbxb4qyiqklc9fvfk7mgxabm1y75";
+    rev = "cc94187eb2af1015cd07fb9215fe051de5841036";
   };
   libraryHaskellDepends = [
     base classy-prelude parsec text unordered-containers
