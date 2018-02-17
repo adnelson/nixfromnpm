@@ -6,8 +6,22 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Build nosetests
-          command: nix-build release.nix -A pkgs.python3Packages.nose
+          name: Build
+          command: nix-build release.nix -A nixfromnpm
       - run:
-          name: Run tests with nosetests
-          command: result/bin/nosetests test.py -v
+          name: Run help command
+          command: result/bin/nixfromnpm --help >/dev/null
+      - run:
+          name: Build lodash
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            PROJECT_DIR=$PWD
+            cd $(mktemp -d)
+            OUTPUT=$PWD/output
+            nixfromnpm -o $OUTPUT -p lodash
+            nix-build $OUTPUT -A nodePackages.lodash
+            nixfromnpm -o $OUTPUT -p lodash
+            if [[ $(ls $OUTPUT/nodePackages/lodash | wc -l) -ne 1 ]]; then
+              echo "A new version of lodash shouldn't have been created" >&2
+              exit 1
+            fi
