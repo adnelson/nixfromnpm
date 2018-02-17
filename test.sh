@@ -1,4 +1,4 @@
-# Test nixfromnpm operation
+#!/usr/bin/env bash
 set -e
 
 nix-build release.nix -A pkgs.python3Packages.nose
