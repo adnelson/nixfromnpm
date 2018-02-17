@@ -6,8 +6,5 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Greeting
-          command: echo Hello, world.
-      - run:
           name: Test
           command: ./test.sh
