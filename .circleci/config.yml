@@ -8,3 +8,6 @@ jobs:
       - run:
           name: Greeting
           command: echo Hello, world.
+      - run:
+          name: Where am I
+          command: ls && pwd
