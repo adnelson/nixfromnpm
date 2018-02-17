@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 set -e
 
 nix-build release.nix -A pkgs.python3Packages.nose
