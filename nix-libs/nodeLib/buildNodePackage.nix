@@ -310,7 +310,7 @@ let
                         (attrValues package.circularDependencies);
         in
         # Combine the results into a single set.
-        foldl (a: b: a // b) {} closure;
+        foldl (a: b: a // b) self.circularDependencies closure;
 
     # Compute any cycles. Remove 'self' from the dependency closure.
     circularDepClosure = removeAttrs (circularClosure {} self) [self.name];
