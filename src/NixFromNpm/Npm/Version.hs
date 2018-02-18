@@ -88,7 +88,7 @@ instance FromJSON NpmVersionRange where
     _ -> Aeson.typeMismatch "string" v
 
 -- | A package name can be passed in directly, or a version range can be
--- specified with a %.
+-- specified with a @.
 parseNameAndRange :: MonadIO m => Text -> m (PackageName, NpmVersionRange)
 parseNameAndRange name = do
   let badFormat err = UnrecognizedVersionFormat (name <> " (" <> err <> ")")
