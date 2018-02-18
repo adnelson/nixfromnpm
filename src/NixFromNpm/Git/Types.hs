@@ -128,11 +128,9 @@ sourceFromServer regname
 
 -- | Get the repo owner and repo name from a URI path.
 ownerRepoFromPath :: String -> Maybe (Name, Name)
-ownerRepoFromPath path = do
-  traceM ("PATH: " <> path)
-  case scan [re|^/([\w_-]+)/([\w_-]+)$|] $ pack path of
-    [(_, [owner, repo])] -> Just (owner, repo)
-    _ -> Nothing
+ownerRepoFromPath path = case scan [re|^/([\w_-]+)/([\w_-]+)$|] $ pack path of
+  [(_, [owner, repo])] -> Just (owner, repo)
+  _ -> Nothing
 
 -- | Parse a git ref from a URI fragment.
 refFromFragment :: String -> Maybe GitRef
