@@ -22,12 +22,6 @@ let
                        attrValues concatStringsSep optionalString filter
                        optionalAttrs;
 
-  # Like `subtractLists` but tests each dependency element in the
-  # minuend list for membership in the subtrahend list using that
-  # dependency's `basicName`.
-  subtractDependencyLists = subtrahend:
-    filter (x: !(elem x.basicName subtrahend));
-
   # Join a list of strings with newlines, filtering out empty lines.
   joinLines = strings: concatStringsSep "\n" (filter (s: s != "") strings);
 
@@ -125,9 +119,7 @@ in
   # List of optional dependencies.
   optionalDependencies ? [],
 
-  # List of optional dependencies to skip. List of strings, where a string
-  # should contain the `name` of the derivation to skip (not a version or
-  # namespace).
+  # List of optional dependencies to skip.
   skipOptionalDependencies ? [],
 
   # List or set of development dependencies (or null). These will only be
@@ -233,7 +225,7 @@ let
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
   self = let
-    filterOptionalDeps = subtractDependencyLists skipOptionalDependencies;
+    filterOptionalDeps = subtractLists skipOptionalDependencies;
 
     # Set of normal dependencies.
     _dependencies =
@@ -249,12 +241,12 @@ let
 
     # Set of peer dependencies.
     _peerDependencies = 
-      toAttrSet (filterOptionalDeps peerDependencies);
+      toAttrSet peerDependencies;
 
     # Dev dependencies will only be included if requested.
     _devDependencies = 
       if !includeDevDependencies then {}
-      else toAttrSet (filterOptionalDeps devDependencies);
+      else toAttrSet devDependencies;
 
     # Dependencies we need to propagate, meaning they need to be
     # available to the package at runtime. We don't include the
