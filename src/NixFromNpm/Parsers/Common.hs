@@ -9,7 +9,7 @@ module NixFromNpm.Parsers.Common (
   ) where
 
 import qualified Prelude as P
-import Text.Parsec hiding (many, (<|>), spaces, parse, State, uncons)
+import Text.Parsec hiding (many, (<|>), spaces, parse, State, uncons, optional)
 import qualified Text.Parsec as Parsec
 
 import NixFromNpm.Common hiding (try)
