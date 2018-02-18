@@ -18,7 +18,7 @@ jobs:
             PATH=$(readlink result)/bin:$PATH
             cd $(mktemp -d)
             nixfromnpm -o output -p lodash
-            nix-build output -A nodePackages.lodash
+            nix-build output -A nodePackages.lodash --max-jobs 2
             nixfromnpm -o output -p lodash
             if [[ $(ls output/nodePackages/lodash | wc -l) -ne 1 ]]; then
               echo "A new version of lodash shouldn't have been created" >&2
@@ -31,7 +31,7 @@ jobs:
             PATH=$(readlink result)/bin:$PATH
             cd $(mktemp -d)
             nixfromnpm -o output -p optimist
-            nix-build output -A nodePackages.optimist
+            nix-build output -A nodePackages.optimist --max-jobs 2
 
       - run:
           name: Build package with dev dependencies
@@ -39,7 +39,7 @@ jobs:
             PATH=$(readlink result)/bin:$PATH
             cd $(mktemp -d)
             nixfromnpm -o output -p coffee-script --dev-depth 1
-            nix-build output -A nodePackages.coffee-script
+            nix-build output -A nodePackages.coffee-script --max-jobs 2
 
       - run:
           name: Build package with a namespace
@@ -47,4 +47,4 @@ jobs:
             PATH=$(readlink result)/bin:$PATH
             cd $(mktemp -d)
             nixfromnpm -o output -p '@types/node'
-            nix-build output -A nodePackages.namespaces.types.node
+            nix-build output -A nodePackages.namespaces.types.node --max-jobs 2
