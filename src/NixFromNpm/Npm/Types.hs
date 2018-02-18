@@ -11,8 +11,8 @@ import Data.Aeson
 import Data.Aeson.Types as Aeson (Parser, typeMismatch)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
-
-import Data.SemVer
+import Data.SemVer (SemVer, SemVerRange)
+import Data.SemVer (parseSemVer, parseSemVerRange, anyVersion)
 
 import NixFromNpm.Common
 import NixFromNpm.Git.Types (getObject, GithubError)

@@ -1,14 +1,16 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE QuasiQuotes #-}
 module NixFromNpm.Npm.PackageMap where
 
 import Data.HashMap.Strict (HashMap)
+import Text.Regex.PCRE.Heavy (re, scan)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
-import Data.SemVer
+import Data.SemVer (SemVer)
 import NixFromNpm.Common
 
 -- | The name of a package, which optionally includes a namespace.
@@ -38,13 +40,20 @@ simpleName :: Name -> PackageName
 simpleName = flip PackageName Nothing
 
 -- | Parse a PackageName from raw text.
+--
+-- This is more loose than the actual set of requirements for package
+-- naming. All we require is that namespaces (if specified) and
+-- package names have at least one character which is not whitespace
+-- or a '@', '%' or '/' character.
+--
+-- See the complete rules at:
+-- https://github.com/npm/validate-npm-package-name#naming-rules
+--
 parsePackageName :: Text -> Either Text PackageName
-parsePackageName name
-  | "@" `isPrefixOf` name = case T.split (\c -> c == '@' || c == '/') name of
-    ["", namespace, basicName] ->
-      return $ PackageName basicName (Just namespace)
-    _ -> Left $ concat ["Invalid name format: ", name]
-  | otherwise = return $ PackageName name Nothing
+parsePackageName name = case scan [re|^(?:@([^\s@/%]+)/)?([^\s@/%]+)$|] name of
+  [(_, ["", package])] -> pure $ PackageName package Nothing
+  [(_, [namespace, package])] -> pure $ PackageName package (Just namespace)
+  _ -> Left $ "Invalid package name " <> tshow name
 
 -- | A record keyed on PackageNames.
 type PRecord = HashMap PackageName

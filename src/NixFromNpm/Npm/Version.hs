@@ -91,8 +91,13 @@ instance FromJSON NpmVersionRange where
 -- specified with a @.
 parseNameAndRange :: MonadIO m => Text -> m (PackageName, NpmVersionRange)
 parseNameAndRange name = do
-  let badFormat err = UnrecognizedVersionFormat (name <> " (" <> err <> ")")
+  let badFormat err =
+        UnrecognizedVersionFormat (name <> " (" <> err <> help <> ")")
+      help = case T.find (== '%') name of
+        Nothing -> ""
+        Just _ -> " (use '@' instead of '%' to indicate a version range)"
 
+  -- TODO use ExceptT for these, or switch to parsec
   let parseName n = case parsePackageName n of
         Left err -> throw $ badFormat err
         Right pkgName -> pure pkgName
@@ -119,4 +124,4 @@ parseNameAndRange name = do
       (,) <$> parseName name' <*> parseRange (joinBy "@" ranges)
 
     -- Anything else is invalid.
-    _ -> throw $ badFormat "Not in format <name> or <name>@<range>"
+    _ -> throw $ badFormat $ "Not in format <name> or <name>@<range>" <> help
