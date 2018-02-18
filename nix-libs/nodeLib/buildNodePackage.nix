@@ -119,9 +119,7 @@ in
   # List of optional dependencies.
   optionalDependencies ? [],
 
-  # List of optional dependencies to skip. List of strings, where a string
-  # should contain the `name` of the derivation to skip (not a version or
-  # namespace).
+  # List of optional dependencies to skip.
   skipOptionalDependencies ? [],
 
   # List or set of development dependencies (or null). These will only be
@@ -227,26 +225,36 @@ let
   # We create a `self` object for self-referential expressions. It
   # bottoms out in a call to `mkDerivation` at the end.
   self = let
+    filterOptionalDeps = subtractLists skipOptionalDependencies;
+
     # Set of normal dependencies.
-    _dependencies = toAttrSet deps;
+    _dependencies =
+      toAttrSet (filterOptionalDeps deps);
+
     # Set of circular dependencies.
-    _circularDependencies = toAttrSet circularDependencies;
+    _circularDependencies =
+      toAttrSet (filterOptionalDeps circularDependencies);
+
     # Set of optional dependencies.
-    _optionalDependencies = toAttrSet optionalDependencies;
+    _optionalDependencies =
+      toAttrSet (filterOptionalDeps optionalDependencies);
+
     # Set of peer dependencies.
-    _peerDependencies = toAttrSet peerDependencies;
+    _peerDependencies = 
+      toAttrSet peerDependencies;
 
     # Dev dependencies will only be included if requested.
-    _devDependencies = if !includeDevDependencies then {}
-                       else toAttrSet devDependencies;
+    _devDependencies = 
+      if !includeDevDependencies then {}
+      else toAttrSet devDependencies;
 
     # Dependencies we need to propagate, meaning they need to be
     # available to the package at runtime. We don't include the
     # circular dependencies here, even though they might be needed at
     # runtime, because we have a "special way" of building them.
-    runtimeDependencies = _dependencies //
-                             _optionalDependencies //
-                             _peerDependencies;
+    runtimeDependencies =  _dependencies
+      // _optionalDependencies
+      // _peerDependencies;
 
     # Names of packages to keep when cleaning up dev dependencies. We
     # put them in a dictionary for fast lookup, but the values are
