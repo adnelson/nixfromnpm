@@ -7,7 +7,7 @@ jobs:
       - checkout
       - run:
           name: Build
-          command: nix-build release.nix -A nixfromnpm --max-jobs $(nproc)
+          command: nix-build release.nix -A nixfromnpm --max-jobs 2
       - run:
           name: Run help command
           command: result/bin/nixfromnpm --help >/dev/null
