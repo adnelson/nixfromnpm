@@ -10,6 +10,7 @@ import qualified Data.Text as T
 
 import NixFromNpm
 import NixFromNpm.Git.Types as Git
+import NixFromNpm.Npm.PackageMap (PackageName(..))
 import NixFromNpm.Npm.Version as Npm
 
 shouldBeR :: (Eq a, Eq b, Show a, Show b) => Either a b -> b -> Expectation
@@ -82,7 +83,30 @@ npmVersionParserSpec = describe "npm version parser" $ do
     parseNpmVersionRange "../foo/bar" `shouldBeJ` LocalPath "../foo/bar"
     parseNpmVersionRange "~/foo/bar" `shouldBeJ` LocalPath "~/foo/bar"
 
+npmNameAndVersionParserSpec :: Spec
+npmNameAndVersionParserSpec = describe "npm name@version parser" $ do
+  it "should parse a name with no version range" $ do
+    (name, range) <- parseNameAndRange "foo"
+    name `shouldBe` "foo"
+    range `shouldBe` SemVerRange anyVersion
+
+  it "should parse a namespaced name with no version range" $ do
+    (name, range) <- parseNameAndRange "@foo/bar"
+    name `shouldBe` PackageName "bar" (Just "foo")
+    range `shouldBe` SemVerRange anyVersion
+
+  it "should parse a name and a version range" $ do
+    (name, range) <- parseNameAndRange "foo@1.2.3"
+    name `shouldBe` "foo"
+    range `shouldBe` SemVerRange (Eq $ semver 1 2 3)
+
+  it "should parse a namespaced name and a version range" $ do
+    (name, range) <- parseNameAndRange "@foo/bar@1.2.3"
+    name `shouldBe` PackageName "bar" (Just "foo")
+    range `shouldBe` SemVerRange (Eq $ semver 1 2 3)
+
 main :: IO ()
 main = hspec $ do
---  npmVersionParserSpec
+  npmVersionParserSpec
+  npmNameAndVersionParserSpec
   gitIdParsingSpec

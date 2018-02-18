@@ -81,7 +81,7 @@ it immediately with `nix-build`.
 
 ```bash
 $ git clone https://github.com/adnelson/nix-node-packages
-$ nixfromnpm -o nix-node-packages -p 'the-package-I-need%the-version-I-need'
+$ nixfromnpm -o nix-node-packages -p 'the-package-I-need@the-version-I-need'
 $ nix-build nix-node-packages -A nodePackages.the-package-I-need_the-version-I-need
 ```
 
@@ -105,21 +105,19 @@ output path does exist, a package will only be fetched if a nix
 expression for it doesn't already exist.
 
 You can also specify a version bound on the packages you are fetching,
-using `%`:
+using `@`:
 
 ```bash
-$ nixfromnpm -p package_name%version_bound -o /some/path
+$ nixfromnpm -p package_name@version_bound -o /some/path
 ```
 
 Any NPM version bound is valid; so for example:
 
 ```bash
-$ nixfromnpm -p foo%0.8.6 -o /some/path
-$ nixfromnpm -p 'foo%>=0.8 <0.9' -o /some/path
-$ nixfromnpm -p 'foo%~1.0.0' -o /some/path
+$ nixfromnpm -p foo@0.8.6 -o /some/path
+$ nixfromnpm -p 'foo@>=0.8 <0.9' -o /some/path
+$ nixfromnpm -p 'foo@~1.0.0' -o /some/path
 ```
-
-(Note that we're using a `%` instead of a `@` to indicate a version range).
 
 #### Generating an expression from a package.json file
 
@@ -249,7 +247,7 @@ the most common ones are:
   * See what version range `nixfromnpm` failed to resolve. E.g. `foo@>=1.2.3-bar <2.3.4-baz.qux`.
   * Use `npm` to manually build the package at the given version bounds. E g. `npm install foo@>=1.2.3-bar <2.3.4-baz.qux`.
   * See what version it ends up building. E.g. `foo@1.2.3-xyz`.
-  * Call `nixfromnpm` on that version. E.g. `nixfromnpm -o /path/to/nix-node-packages -p 'foo%1.2.3-xyz'`.
+  * Call `nixfromnpm` on that version. E.g. `nixfromnpm -o /path/to/nix-node-packages -p 'foo@1.2.3-xyz'`.
   * Replace the call to `brokenPackage` with `foo_1-2-3-xyz`.
 * The build fails with `npm` complaining about HTTP errors. This is usually caused by a dependency that wasn't satified, likely because `nixfromnpm` calculated the wrong dependency. In this case, use steps similar to the above to find out what the actual dependency should be, and modify the package definition to include the correct one.
 * A package build script is attempting to do some hacky bullshit like modifying its dependencies. This, of course, is not kosher in the `nix` view of things. In this case, you'll probably want to `nix-shell` into the package and see what it's trying to do. Figure out how to stop it from doing these things, and supply `prePatch` or `postPatch` steps to apply those changes.

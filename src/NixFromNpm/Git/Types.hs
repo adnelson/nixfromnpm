@@ -73,7 +73,6 @@ instance Show GitIdentifier where
         proto = toLower (show source) <> "://"
     proto <> unpack (account <> "/" <> repo <> ref')
 
-
 data GithubError
   = GithubUnreachable
   | InvalidJsonFromGithub Text
@@ -129,7 +128,7 @@ sourceFromServer regname
 
 -- | Get the repo owner and repo name from a URI path.
 ownerRepoFromPath :: String -> Maybe (Name, Name)
-ownerRepoFromPath path = case scan [re|^/(\w+)/(\w+)$|] $ pack path of
+ownerRepoFromPath path = case scan [re|^/([\w_-]+)/([\w_-]+)$|] $ pack path of
   [(_, [owner, repo])] -> Just (owner, repo)
   _ -> Nothing
 

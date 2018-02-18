@@ -3,22 +3,22 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 module NixFromNpm.Options where
---  RawOptions(..), NixFromNpmOptions(..),
---  parseOptions, validateOptions
---  ) where
+
 import qualified Prelude as P
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.HashMap.Strict as H
 
 import Data.SemVer (anyVersion)
-import Options.Applicative
+import Options.Applicative (Mod, OptionFields, Parser, value, switch)
+import Options.Applicative (help, long, metavar, short, auto, option, strOption)
 
-import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
-import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
-import NixFromNpm.Npm.Version
-import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Common
+import NixFromNpm.Conversion.ToNix (nodePackagesDir)
+import NixFromNpm.Npm.PackageMap (PackageName(..))
+import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
+import NixFromNpm.Npm.Version (NpmVersionError, NpmVersionRange)
+import NixFromNpm.Npm.Version (parseNameAndRange)
 
 -- | Errors about node libraries
 data InvalidNodeLib
@@ -149,25 +149,6 @@ validateJsPkg = absPath >=> \path -> doesDirectoryExist path >>= \case
     assert (isWritable (parent path)) OutputNotWritable
     assert (doesFileExist path) (NoPackageJsonFoundAt path)
     return (parent path)
-
--- | A package name can be passed in directly, or a version range can be
--- specified with a %.
-parseNameAndRange :: MonadIO m => Text -> m (PackageName, NpmVersionRange)
-parseNameAndRange name = do
-  let badFormat err = UnrecognizedVersionFormat (name <> " (" <> err <> ")")
-  case T.split (== '%') name of
-    -- Just a name, no version range
-    [name'] -> case parsePackageName name' of
-      Left err -> throw $ NpmVersionError $ badFormat err
-      Right pkgName -> return (pkgName, SemVerRange anyVersion)
-    -- If a @ occurs in the middle, treat it as a name and range identifier.
-    [name', range] -> case parseNpmVersionRange range of
-      Nothing -> throw $ NpmVersionError (VersionSyntaxError range)
-      Just nrange -> case parsePackageName name' of
-        Left err -> throw $ NpmVersionError $ badFormat err
-        Right pkgName -> return (pkgName, nrange)
-    -- Anything else is invalid.
-    _ -> throw $ NpmVersionError $ badFormat "?"
 
 -- | Get a list of the top n packages. If n is negative, or too large, we'll
 -- return all of the packages we're aware of. If it's too large,
