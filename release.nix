@@ -1,5 +1,4 @@
 { nixpkgs ? (import ./nix/17_09.nix) }:
-
 let
 
   config   = { allowUnfree = true; };
