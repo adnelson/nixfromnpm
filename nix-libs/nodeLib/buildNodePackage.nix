@@ -119,11 +119,6 @@ in
   # List of optional dependencies.
   optionalDependencies ? [],
 
-  # List of optional dependencies to skip. List of strings, where a string
-  # should contain the `name` of the derivation to skip (not a version or
-  # namespace).
-  skipOptionalDependencies ? [],
-
   # List or set of development dependencies (or null). These will only be
   # installed when `includeDevDependencies` is true, which is provided by
   # the `.env` attribute.
@@ -219,7 +214,7 @@ let
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
-  attrsToRemove = ["deps" "flags" "skipOptionalDependencies" "isBroken"
+  attrsToRemove = ["deps" "flags" "isBroken"
                    "passthru" "doCheck" "includeDevDependencies" "version"
                    "namespace" "skipDevDependencyCleanup" "patchDependencies"
                    "circularDependencies" "derivationOverrides"] ++ dependencyTypes;
