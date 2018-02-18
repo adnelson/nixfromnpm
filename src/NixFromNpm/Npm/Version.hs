@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 module NixFromNpm.Npm.Version where
 
 import qualified Data.Text as T
@@ -8,7 +9,6 @@ import qualified Data.Text as T
 import Data.SemVer
 import Data.Aeson
 import qualified Data.Aeson.Types as Aeson
-
 
 import NixFromNpm.Common
 import NixFromNpm.Npm.PackageMap
@@ -86,3 +86,37 @@ instance FromJSON NpmVersionRange where
       Nothing -> return $ InvalidVersion s
       Just range -> return range
     _ -> Aeson.typeMismatch "string" v
+
+-- | A package name can be passed in directly, or a version range can be
+-- specified with a %.
+parseNameAndRange :: MonadIO m => Text -> m (PackageName, NpmVersionRange)
+parseNameAndRange name = do
+  let badFormat err = UnrecognizedVersionFormat (name <> " (" <> err <> ")")
+
+  let parseName n = case parsePackageName n of
+        Left err -> throw $ badFormat err
+        Right pkgName -> pure pkgName
+
+  let parseRange r = case parseNpmVersionRange r of
+        Nothing -> throw $ VersionSyntaxError r
+        Just range -> pure range
+
+  case T.split (== '@') name of
+    -- No namespace, no version range
+    [_] -> (, SemVerRange anyVersion) <$> parseName name
+
+    -- Namespace but no version range
+    ["", _] -> (, SemVerRange anyVersion) <$> parseName name
+
+    -- Namespace and range
+    "" : name' : ranges ->
+      -- In case a '@' appears in the range, treat the range as a list
+      -- and join on '@'
+      (,) <$> parseName ("@" <> name') <*> parseRange (joinBy "@" ranges)
+
+    -- No namespace, but with range
+    name' : ranges ->
+      (,) <$> parseName name' <*> parseRange (joinBy "@" ranges)
+
+    -- Anything else is invalid.
+    _ -> throw $ badFormat "Not in format <name> or <name>@<range>"

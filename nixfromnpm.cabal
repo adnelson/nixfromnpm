@@ -32,25 +32,23 @@ source-repository head
   location: git://github.com/adnelson/nixfromnpm.git
 
 library
-  default-language: Haskell2010
+  default-language:    Haskell2010
   hs-source-dirs:      src
   exposed-modules:     NixFromNpm
+                     , NixFromNpm.Cli
                      , NixFromNpm.Common
                      , NixFromNpm.Options
                      , NixFromNpm.Conversion.ToDisk
                      , NixFromNpm.Git.Types
                      , NixFromNpm.Npm.Version
-                     , NixFromNpm.Merge
+                     , NixFromNpm.Npm.PackageMap
   other-modules:       Filesystem.Path.Wrappers
-                     , NixFromNpm.Parsers.Common
                      , NixFromNpm.HttpTools
                      , NixFromNpm.Conversion.ToNix
                      , NixFromNpm.Npm.Resolve
                      , NixFromNpm.Npm.Types
-                     , NixFromNpm.Npm.PackageMap
                      , Paths_nixfromnpm
-  other-extensions:    LambdaCase
-                     , NoImplicitPrelude
+  other-extensions:    NoImplicitPrelude
   build-depends:       base >=4.8 && < 5.0
                      , classy-prelude
                      , text
@@ -83,7 +81,8 @@ library
   default-language:    Haskell2010
 
 executable nixfromnpm
-  default-language: Haskell2010
+  default-language:    Haskell2010
+  other-extensions:    NoImplicitPrelude
   main-is:             src/Main.hs
   build-depends:       base >=4.8 && < 5.0
                      , optparse-applicative

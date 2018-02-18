@@ -38,6 +38,7 @@ let
                     shellHook = builtins.trace src ((oldDerivation.shellHook or "") + ''
                       export SRC=${src}
                       export CURL_CA_BUNDLE=${newPkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+                      export NIX_LIBS_DIR=$PWD/nix-libs
                     '');
                   });
             };
