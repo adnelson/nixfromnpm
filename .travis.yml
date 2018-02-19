@@ -1,5 +1,0 @@
-language: nix
-
-script: |
-  nix-build release.nix -A pkgs.python3Packages.python
-  result/bin/python3 test.py
