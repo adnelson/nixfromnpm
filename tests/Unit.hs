@@ -10,7 +10,7 @@ import qualified Data.Text as T
 
 import NixFromNpm
 import NixFromNpm.Git.Types as Git
-import NixFromNpm.Npm.PackageMap (PackageName(..))
+import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version as Npm
 
 shouldBeR :: (Eq a, Eq b, Show a, Show b) => Either a b -> b -> Expectation
@@ -51,6 +51,34 @@ gitIdParsingSpec = describe "parse git identifiers" $ do
       parseGitId ("http://github.com/foo/bar#baz"::String) `shouldBeJ`
         GitId Github "foo" "bar" (Just "baz")
 
+npmNameParserSpec :: Spec
+npmNameParserSpec = describe "npm package name parser" $ do
+  it "should parse a name without a namespace" $ do
+    parsePackageName "foo" `shouldBeR` PackageName "foo" Nothing
+
+  it "should parse a name with a namespace" $ do
+    parsePackageName "@foo/bar" `shouldBeR` PackageName "bar" (Just "foo")
+
+  it "should not parse a name with an empty namespace" $ do
+    parsePackageName "@/bar" `shouldSatisfy` isLeft
+
+  it "should not parse a name with a multiple namespaces" $ do
+    parsePackageName "@foo/@bar" `shouldSatisfy` isLeft
+    parsePackageName "@foo/@bar/baz" `shouldSatisfy` isLeft
+
+  describe "allow numbers" $ do
+    it "in package name without a namespace" $ do
+      parsePackageName "bar123" `shouldBeR` "bar123"
+    it "in package name with a namespace" $ do
+      parsePackageName "@foo/bar12" `shouldBeR` PackageName "bar12" (Just "foo")
+    it "in a namespace" $ do
+      parsePackageName "@foo12/bar" `shouldBeR` PackageName "bar" (Just "foo12")
+
+  it "should allow certain special characters" $ do
+    parsePackageName "@foo/bar!" `shouldBeR` PackageName "bar!" (Just "foo")
+
+  it "should not allow other special characters" $ do
+    parsePackageName "@foo/bar@/" `shouldSatisfy` isLeft
 
 npmVersionParserSpec :: Spec
 npmVersionParserSpec = describe "npm version parser" $ do
@@ -105,8 +133,13 @@ npmNameAndVersionParserSpec = describe "npm name@version parser" $ do
     name `shouldBe` PackageName "bar" (Just "foo")
     range `shouldBe` SemVerRange (Eq $ semver 1 2 3)
 
+  it "should warn if the %-format is used" $ do
+    parseNameAndRange "foo%1.2.3" `shouldThrow` \(UnrecognizedVersionFormat msg) -> do
+      "use '@' instead" `isInfixOf` msg
+
 main :: IO ()
 main = hspec $ do
   npmVersionParserSpec
+  npmNameParserSpec
   npmNameAndVersionParserSpec
   gitIdParsingSpec
