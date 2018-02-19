@@ -1,5 +1,7 @@
 # nixfromnpm
 
+![Build status](https://circleci.com/gh/adnelson/nixfromnpm/tree/master.svg?style=shield&circle-token=5449a1733b88cfef7ce7ea5f171990d6001214bb)
+
 Translate NPM packages to Nix expressions.
 
 ### What it does
