@@ -59,15 +59,6 @@ if (process.env.circularDependencies) {
 }
 
 
-/* Remove peer dependencies */
-if (process.env.removePeerDependencies && packageObj.peerDependencies) {
-  console.log("WARNING: removing the following peer dependencies:");
-  for (key in packageObj.peerDependencies) {
-    console.log("  " + key + ": " + packageObj.peerDependencies[key]);
-  }
-  delete packageObj.peerDependencies;
-}
-
 /* Patch dependencies as set by the patchDependencies variable */
 var patches = JSON.parse(process.env.patchDependencies || "{}");
 if (Object.keys(patches).length > 0) {

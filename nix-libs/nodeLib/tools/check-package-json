@@ -83,11 +83,19 @@ function checkDependencies() {
       return
     }
     console.error("OK (found version " + dependencyPackageObj.version + ")");
+
+    // If the package has any peer dependencies, check that they are satisfied
+    if (dependencyPackageObj.peerDependencies) {
+      console.error("Checking peer dependencies of " + name);
+      for (var depName in dependencyPackageObj.peerDependencies) {
+        checkDependency(depName, dependencyPackageObj.peerDependencies[depName]);
+      }
+    };
   }
 
   // Verify that all of the declared dependencies in a package.json file
   // are satisfied by the environment.
-  var depTypes = ["dependencies", "devDependencies", "peerDependencies"];
+  var depTypes = ["dependencies", "devDependencies"];
   for (var depTypeIdx in depTypes) {
     var depType = depTypes[depTypeIdx];
     if (depType === "devDependencies" && process.env.NO_DEV_DEPENDENCIES) {
