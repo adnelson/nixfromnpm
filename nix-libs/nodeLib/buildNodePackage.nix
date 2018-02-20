@@ -112,10 +112,6 @@ in
   # tree.
   circularDependencies ? [],
 
-  # List of peer dependencies. See:
-  # https://nodejs.org/en/blog/npm/peer-dependencies/
-  peerDependencies ? [],
-
   # List of optional dependencies.
   optionalDependencies ? [],
 
@@ -209,8 +205,7 @@ else
 
 let
   # Types of npm dependencies as they appear as keys in a package.json file.
-  dependencyTypes = ["dependencies" "devDependencies" "peerDependencies"
-                     "optionalDependencies"];
+  dependencyTypes = ["dependencies" "devDependencies" "optionalDependencies"];
 
   # These arguments are intended as directives to this function and not
   # to be passed through to mkDerivation. They are removed below.
@@ -228,8 +223,6 @@ let
     _circularDependencies = toAttrSet circularDependencies;
     # Set of optional dependencies.
     _optionalDependencies = toAttrSet optionalDependencies;
-    # Set of peer dependencies.
-    _peerDependencies = toAttrSet peerDependencies;
 
     # Dev dependencies will only be included if requested.
     _devDependencies = if !includeDevDependencies then {}
@@ -239,9 +232,7 @@ let
     # available to the package at runtime. We don't include the
     # circular dependencies here, even though they might be needed at
     # runtime, because we have a "special way" of building them.
-    runtimeDependencies = _dependencies //
-                             _optionalDependencies //
-                             _peerDependencies;
+    runtimeDependencies = _dependencies // _optionalDependencies;
 
     # Names of packages to keep when cleaning up dev dependencies. We
     # put them in a dictionary for fast lookup, but the values are
@@ -341,7 +332,6 @@ let
         ''
           mkdir -p ${dep.modulePath}
           ${link dep}
-          ${concatMapStrings link (attrValues dep.peerDependencies)}
         '')) ++
       ["runHook postConfigure"] ++
       (optional (circulars != []) (let
@@ -436,10 +426,6 @@ let
                      rm -fv node_modules/.bin/$(basename $exec_file)
                  done
                fi
-
-               # Remove any peer dependencies that package might have brought
-               # with it.
-               ${concatMapStrings rm (attrValues dep.peerDependencies)}
              ''
              else ''
                echo "Retaining ${dep.basicName} since it " \
@@ -466,12 +452,6 @@ let
         done
         echo "linked $NUM_MAN_PAGES man pages."
       fi
-
-      # Move peer dependencies to node_modules
-      ${concatMapStrings (dep: ''
-        mkdir -p ${dep.modulePath}
-        mv node_modules/${dep.fullName} $out/lib/${dep.modulePath}
-      '') (attrValues _peerDependencies)}
 
       # Install binaries using the `bin` object in the package.json
       install-binaries
@@ -596,9 +576,6 @@ let
         # The full path to the package's code (i.e. folder containing
         # package.json) within the nix store.
         fullPath = "${self}/lib/node_modules/${self.fullName}";
-
-        # Downstream packages need to have access to peer dependencies.
-        peerDependencies = _peerDependencies;
 
         # The `env` attribute is meant to be used with `nix-shell` (although
         # that's not required). It will build the package with its dev

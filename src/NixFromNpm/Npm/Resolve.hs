@@ -649,7 +649,6 @@ recurOn packageName version deptype deps = do
         app txt (a, b) = (txt <> " " <> a, txt <> " " <> b)
         getDesc Dependency = ("dependency", "dependencies")
         getDesc DevDependency = app "development" (getDesc Dependency)
-        getDesc PeerDependency = app "peer" (getDesc Dependency)
         getDesc OptionalDependency = app "optional" (getDesc Dependency)
         (desc, descPlural) = getDesc deptype
     when (length depList > 0) $ do
@@ -678,7 +677,6 @@ resolveVersionInfo VersionInfo{..} = do
   let recurOn' = recurOn viName viVersion
   startResolving viName viVersion
   deps :: PRecord ResolvedDependency <- recurOn' Dependency viDependencies
-  peerDeps <- recurOn' PeerDependency viPeerDependencies
   optDeps <- recurOn' OptionalDependency viOptionalDependencies
   devDeps <- do
     shouldFetch <- shouldFetchDevs
@@ -694,7 +692,6 @@ resolveVersionInfo VersionInfo{..} = do
       rpDistInfo = viDist,
       rpMeta = viMeta,
       rpDependencies = deps,
-      rpPeerDependencies = peerDeps,
       rpOptionalDependencies = optDeps,
       rpDevDependencies = devDeps
       }

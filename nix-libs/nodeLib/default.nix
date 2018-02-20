@@ -148,7 +148,6 @@ rec {
         passthru.version = "BROKEN";
         passthru.override = _: deriv;
         passthru.recursiveDeps = [];
-        passthru.peerDependencies = {};
       };
     in
     deriv;
@@ -177,7 +176,7 @@ rec {
 
     # Extensions are other node libraries which will be folded into the
     # generated one.
-    # 
+    #
     # This is deprecated, the overrides argument should be used
     # instead and if there are multiple package sets to give they can
     # be composed first with `composeExtensions`.
@@ -207,10 +206,10 @@ rec {
         inherit (nodePackages) namespaces;
       });
 
-      initialNodePackages = self: 
+      initialNodePackages = self:
         let
           oldExtensions = joinSets (map (e: e.nodePackages) extensions);
-          packageSet = pkgs.callPackage nodePackagesPath { 
+          packageSet = pkgs.callPackage nodePackagesPath {
             callPackage = pkgs.newScope (mkScope {
               nodePackages = self;
               inherit (self) namespaces;
