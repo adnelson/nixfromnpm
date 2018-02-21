@@ -93,16 +93,21 @@ let
       fi
     '';
   };
+
   # Directory containing build tools for buildNodePackage
   node-build-tools = pkgs.stdenv.mkDerivation {
     name = "node-build-tools";
-    buildInputs = [pkgs.makeWrapper];
+    buildInputs = [pkgs.makeWrapper nodejs pkgs.python2];
     buildCommand = ''
       mkdir -p $out
       cp -r ${./tools} $out/bin
       chmod -R +w $out/bin
       wrapProgram $out/bin/check-package-json \
         --set SEMVER_PATH ${nodejs}/lib/node_modules/npm/node_modules/semver
+      wrapProgram $out/bin/execute-install-scripts \
+        --prefix PATH : ${dirOf pkgs.python2.interpreter} \
+        --prefix PATH : ${dirOf pkgs.stdenv.shell} \
+        --prefix PATH : ${nodejs}/lib/node_modules/npm/bin/node-gyp-bin
       patchShebangs $out/bin
     '';
   };

@@ -424,7 +424,6 @@ let
         fullName
         installPhase
         meta
-        nodejs
         patchPhase
         src;
 
@@ -451,6 +450,9 @@ let
         # This appends the package name and version to the hash string
         # we defined above, so that it is more human-readable.
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
+
+        # Add gyp to the path in case it's needed
+        export PATH=${nodejs}/lib/node_modules/npm/bin/node-gyp-bin:$PATH
       '';
 
       shellHook = ''

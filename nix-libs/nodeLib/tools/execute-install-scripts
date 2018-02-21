@@ -11,7 +11,7 @@ def runscript(name):
     if scripts.get(name):
         print("Running {} defined in package.json".format(repr(name)))
         sys.stdout.flush()
-        proc = subprocess.Popen(["/bin/sh", "-x"], stdin=subprocess.PIPE)
+        proc = subprocess.Popen(["bash", "-x"], stdin=subprocess.PIPE)
         proc.communicate(input=scripts[name])
         if proc.wait() != 0:
             exit("{} script failed".format(name))
@@ -20,10 +20,8 @@ runscript("preinstall")
 runscript("install")
 
 if os.path.isfile("binding.gyp"):
-   node_gyp = os.path.join(os.environ["nodejs"], "lib", "node_modules",
-                           "npm", "bin", "node-gyp-bin", "node-gyp")
    print("Running node-gyp rebuild due to presence of binding.gyp")
-   if subprocess.call([node_gyp, "rebuild"]) != 0:
+   if subprocess.call(["node-gyp", "rebuild"]) != 0:
       exit("`node-gyp rebuild` failed")
 
 runscript("postinstall")
