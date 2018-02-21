@@ -1,0 +1,16 @@
+#!/usr/bin/env python
+import json, subprocess, os, sys
+
+# In case a build step references the home directory, set it here.
+if not os.getenv("HOME"):
+   os.environ["HOME"] = os.getcwd()
+
+scripts = json.load(open('package.json')).setdefault("scripts", {})
+for key in ("preinstall", "install", "postinstall"):
+    if scripts.get(key):
+        print("Running {} defined in package.json".format(repr(key)))
+        sys.stdout.flush()
+        proc = subprocess.Popen(["/bin/sh", "-x"], stdin=subprocess.PIPE)
+        proc.communicate(input=scripts[key])
+        if proc.wait() != 0:
+            exit("{} script failed".format(key))

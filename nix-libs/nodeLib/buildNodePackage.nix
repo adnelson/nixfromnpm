@@ -365,30 +365,8 @@ let
       # Previous NODE_PATH should be empty, but it might have been set
       # in the custom derivation steps.
       "export NODE_PATH=$PWD/node_modules:$NODE_PATH"
-      ''
-      (
-        # NPM reads the `HOME` environment variable and fails if it doesn't
-        # exist, so set it here.
-        export HOME=$PWD
-        echo npm install ${npmFlags}
-
-        # Try doing the install first. If it fails, first check the
-        # dependencies, and if we don't uncover anything there just rerun it
-        # with verbose output.
-        npm install ${npmFlags} >/dev/null 2>&1 || {
-          echo "Installation of ${name}@${version} failed!"
-          echo "Checking dependencies to see if any aren't satisfied..."
-          check-package-json checkDependencies
-          echo "Dependencies seem ok. Rerunning with verbose logging:"
-          npm install . ${npmFlags} --loglevel=verbose
-          if [[ -d node_modules ]]; then
-            echo "node_modules contains these files:"
-            ls -l node_modules
-          fi
-          exit 1
-        }
-      )
-      ''
+      "check-package-json checkDependencies"
+      "execute-install-scripts"
       # If we have any circular dependencies, they will need to reference
       # the current package at runtime. Make a symlink into the node modules
       # folder which points at where the package will live in $out.
