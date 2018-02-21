@@ -429,8 +429,7 @@ let
 
       patchDependencies = builtins.toJSON patchDependencies;
 
-      # Informs lower scripts not to check dev dependencies
-      NO_DEV_DEPENDENCIES = devDependencies == null;
+      NO_DEV_DEPENDENCIES = !includeDevDependencies;
 
       # Tell mkDerivation to run `setVariables` prior to other phases.
       prePhases = ["setVariables"];
