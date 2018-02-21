@@ -40,7 +40,6 @@ data PackageMeta = PackageMeta {
 data VersionInfo = VersionInfo {
   viName :: PackageName,
   viDependencies :: PRecord NpmVersionRange,
-  viPeerDependencies :: PRecord NpmVersionRange,
   viOptionalDependencies :: PRecord NpmVersionRange,
   viDevDependencies :: PRecord NpmVersionRange,
   viBundledDependencies :: [PackageName],
@@ -61,7 +60,6 @@ data DistInfo = DistInfo {
 -- | Flag for different types of dependencies.
 data DependencyType
   = Dependency    -- ^ Required at runtime.
-  | PeerDependency
   | OptionalDependency
   | DevDependency -- ^ Only required for development.
   deriving (Show, Eq)
@@ -165,7 +163,6 @@ instance FromJSON VersionInfo where
   parseJSON = getObject "version info" >=> \o -> do
     listedDependencies <- getDict "dependencies" o
     devDependencies <- getDict "devDependencies" o
-    peerDependencies <- getDict "peerDependencies" o
     optionalDependencies <- getDict "optionalDependencies" o
     bundledDependencies <- o .:? "bundledDependencies" .!= []
     -- Loop through the bundled dependencies. If any of them are missing
@@ -202,7 +199,6 @@ instance FromJSON VersionInfo where
       Right semver -> return $ VersionInfo {
         viDependencies = dependencies,
         viDevDependencies = devDependencies,
-        viPeerDependencies = peerDependencies,
         viOptionalDependencies = optionalDependencies,
         viBundledDependencies = bundledDependencies,
         viDist = dist,

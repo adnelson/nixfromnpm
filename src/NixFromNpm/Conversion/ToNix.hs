@@ -37,7 +37,6 @@ data ResolvedPkg = ResolvedPkg {
   -- ^ If a token was necessary to fetch the package, include it here.
   rpMeta :: PackageMeta,
   rpDependencies :: PRecord ResolvedDependency,
-  rpPeerDependencies :: PRecord ResolvedDependency,
   rpOptionalDependencies :: PRecord ResolvedDependency,
   rpDevDependencies :: Maybe (PRecord ResolvedDependency)
   } deriving (Show, Eq)
@@ -46,7 +45,7 @@ data ResolvedPkg = ResolvedPkg {
 hasNamespacedDependency :: ResolvedPkg -> Bool
 hasNamespacedDependency rPkg = any hasNs (allDeps rPkg) where
   -- Get all of the dependency sets of the package.
-  allDeps ResolvedPkg{..} = [rpDependencies, rpPeerDependencies,
+  allDeps ResolvedPkg{..} = [rpDependencies,
                              rpOptionalDependencies,
                              maybe mempty id rpDevDependencies]
   -- Look at all of the package names (keys) to see if any are namespaced.
@@ -251,7 +250,6 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
     circDeps = flip map (H.toList circDepMap) $ \(name, CircularSemVer ver) ->
                  toDepExpr name ver
     ---------------------------------------------------------------------------
-    peerDeps = map (uncurry toNixExpr) $ H.toList rpPeerDependencies
     optDeps = map (uncurry toNixExpr) $ H.toList rpOptionalDependencies
     -- Same for dev dependencies.
     devDeps = map (uncurry toNixExpr) . H.toList <$> rpDevDependencies
@@ -288,7 +286,6 @@ resolvedPkgToNix rPkg@ResolvedPkg{..} = mkFunction funcParams body
       bindTo "namespace" <$> map mkStr namespace,
       bindTo "deps" <$> withNodePackages False deps,
       bindTo "circularDependencies" <$> withNodePackages True circDeps,
-      bindTo "peerDependencies" <$> withNodePackages True peerDeps,
       bindTo "optionalDependencies" <$> withNodePackages True optDeps,
       devDepBinding,
       maybeIf (hasBroken rPkg) ("isBroken" $= mkBool True),
