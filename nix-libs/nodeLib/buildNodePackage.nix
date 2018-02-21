@@ -131,9 +131,6 @@ in
   # Bash command to run package tests.
   checkPhase ? defaultCheckPhase,
 
-  # Additional flags passed to npm install. A list of strings.
-  extraNpmFlags ? [],
-
   # Build inputs to propagate in addition to nodejs and non-dev dependencies.
   propagatedBuildInputs ? [],
 
@@ -242,27 +239,6 @@ let
 
     # Required dependencies are those that we haven't filtered yet.
     requiredDependencies = _devDependencies // runtimeDependencies;
-
-    # Flags that we will pass to `npm install`.
-    npmFlags = concatStringsSep " " ([
-      # We point the registry at something that doesn't exist. This will
-      # mean that NPM will fail if any of the dependencies aren't met, as it
-      # will attempt to hit this registry for the missing dependency.
-      "--registry=http://notaregistry.$UNIQNAME.com"
-      # These flags make failure fast, as otherwise NPM will spin for a while.
-      "--fetch-retry-mintimeout=0" "--fetch-retry-maxtimeout=10" "--fetch-retries=0"
-      # This will disable any user-level npm configuration.
-      "--userconfig=/dev/null"
-      # This flag is used for packages which link against the node headers.
-      "--nodedir=${nodejsSources}"
-      # This will tell npm not to run pre/post publish hooks
-      # "--ignore-scripts"
-      ] ++
-      # Use the --production flag if we're not running tests; this will make
-      # npm skip the dev dependencies.
-      (if !doCheck then ["--production"] else []) ++
-      # Add any extra headers that the user has passed in.
-      extraNpmFlags);
 
     patchPhase = joinLines [
       "runHook prePatch"
@@ -448,7 +424,7 @@ let
         fullName
         installPhase
         meta
-        npmFlags
+        nodejs
         patchPhase
         src;
 
