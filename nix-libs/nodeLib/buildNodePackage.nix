@@ -11,6 +11,8 @@
   xcode-wrapper,
   # Scripts that we use during the npm builds.
   node-build-tools,
+  # C header files for node libraries
+  nodejsSources,
 }:
 
 let
@@ -27,14 +29,6 @@ let
 
   # Map a function and concatenate with newlines.
   concatMapLines = list: func: joinLines (map func list);
-
-  # This expression builds the raw C headers and source files for the base
-  # node.js installation. Node packages which use the C API for node need to
-  # link against these files and use the headers.
-  nodejsSources = pkgs.runCommand "node-sources" {} ''
-    tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
-    mv $(find . -type d -mindepth 1 -maxdepth 1) $out
-  '';
 
   # Create a tar wrapper that filters all the 'Ignoring unknown
   # extended header keyword' noise
@@ -162,6 +156,9 @@ in
 
   # Metadata about the package.
   meta ? {},
+
+  # Build step
+  buildStep ? "execute-install-scripts",
 
   # Overrides to the arguments to mkDerivation. This can be used to
   # set custom values for the arguments that buildNodePackage would
@@ -342,7 +339,7 @@ let
       # in the custom derivation steps.
       "export NODE_PATH=$PWD/node_modules:$NODE_PATH"
       "check-package-json checkDependencies"
-      "execute-install-scripts"
+      buildStep
       # If we have any circular dependencies, they will need to reference
       # the current package at runtime. Make a symlink into the node modules
       # folder which points at where the package will live in $out.
@@ -425,6 +422,7 @@ let
         installPhase
         meta
         patchPhase
+        nodejsSources
         src;
 
       patchDependencies = builtins.toJSON patchDependencies;
