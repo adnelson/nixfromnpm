@@ -11,6 +11,8 @@
   xcode-wrapper,
   # Scripts that we use during the npm builds.
   node-build-tools,
+  # C header files for node libraries
+  nodejsSources,
 }:
 
 let
@@ -27,14 +29,6 @@ let
 
   # Map a function and concatenate with newlines.
   concatMapLines = list: func: joinLines (map func list);
-
-  # This expression builds the raw C headers and source files for the base
-  # node.js installation. Node packages which use the C API for node need to
-  # link against these files and use the headers.
-  nodejsSources = pkgs.runCommand "node-sources" {} ''
-    tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
-    mv $(find . -type d -mindepth 1 -maxdepth 1) $out
-  '';
 
   # Create a tar wrapper that filters all the 'Ignoring unknown
   # extended header keyword' noise
@@ -131,9 +125,6 @@ in
   # Bash command to run package tests.
   checkPhase ? defaultCheckPhase,
 
-  # Additional flags passed to npm install. A list of strings.
-  extraNpmFlags ? [],
-
   # Build inputs to propagate in addition to nodejs and non-dev dependencies.
   propagatedBuildInputs ? [],
 
@@ -165,6 +156,9 @@ in
 
   # Metadata about the package.
   meta ? {},
+
+  # Build step
+  buildStep ? "execute-install-scripts",
 
   # Overrides to the arguments to mkDerivation. This can be used to
   # set custom values for the arguments that buildNodePackage would
@@ -242,27 +236,6 @@ let
 
     # Required dependencies are those that we haven't filtered yet.
     requiredDependencies = _devDependencies // runtimeDependencies;
-
-    # Flags that we will pass to `npm install`.
-    npmFlags = concatStringsSep " " ([
-      # We point the registry at something that doesn't exist. This will
-      # mean that NPM will fail if any of the dependencies aren't met, as it
-      # will attempt to hit this registry for the missing dependency.
-      "--registry=http://notaregistry.$UNIQNAME.com"
-      # These flags make failure fast, as otherwise NPM will spin for a while.
-      "--fetch-retry-mintimeout=0" "--fetch-retry-maxtimeout=10" "--fetch-retries=0"
-      # This will disable any user-level npm configuration.
-      "--userconfig=/dev/null"
-      # This flag is used for packages which link against the node headers.
-      "--nodedir=${nodejsSources}"
-      # This will tell npm not to run pre/post publish hooks
-      # "--ignore-scripts"
-      ] ++
-      # Use the --production flag if we're not running tests; this will make
-      # npm skip the dev dependencies.
-      (if !doCheck then ["--production"] else []) ++
-      # Add any extra headers that the user has passed in.
-      extraNpmFlags);
 
     patchPhase = joinLines [
       "runHook prePatch"
@@ -365,30 +338,8 @@ let
       # Previous NODE_PATH should be empty, but it might have been set
       # in the custom derivation steps.
       "export NODE_PATH=$PWD/node_modules:$NODE_PATH"
-      ''
-      (
-        # NPM reads the `HOME` environment variable and fails if it doesn't
-        # exist, so set it here.
-        export HOME=$PWD
-        echo npm install ${npmFlags}
-
-        # Try doing the install first. If it fails, first check the
-        # dependencies, and if we don't uncover anything there just rerun it
-        # with verbose output.
-        npm install ${npmFlags} >/dev/null 2>&1 || {
-          echo "Installation of ${name}@${version} failed!"
-          echo "Checking dependencies to see if any aren't satisfied..."
-          check-package-json checkDependencies
-          echo "Dependencies seem ok. Rerunning with verbose logging:"
-          npm install . ${npmFlags} --loglevel=verbose
-          if [[ -d node_modules ]]; then
-            echo "node_modules contains these files:"
-            ls -l node_modules
-          fi
-          exit 1
-        }
-      )
-      ''
+      "check-package-json checkDependencies"
+      buildStep
       # If we have any circular dependencies, they will need to reference
       # the current package at runtime. Make a symlink into the node modules
       # folder which points at where the package will live in $out.
@@ -470,14 +421,13 @@ let
         fullName
         installPhase
         meta
-        npmFlags
         patchPhase
+        nodejsSources
         src;
 
       patchDependencies = builtins.toJSON patchDependencies;
 
-      # Informs lower scripts not to check dev dependencies
-      NO_DEV_DEPENDENCIES = devDependencies == null;
+      NO_DEV_DEPENDENCIES = !includeDevDependencies;
 
       # Tell mkDerivation to run `setVariables` prior to other phases.
       prePhases = ["setVariables"];
@@ -497,6 +447,9 @@ let
         # This appends the package name and version to the hash string
         # we defined above, so that it is more human-readable.
         export UNIQNAME="''${HASHEDNAME:0:10}-${name}-${version}"
+
+        # Add gyp to the path in case it's needed
+        export PATH=${nodejs}/lib/node_modules/npm/bin/node-gyp-bin:$PATH
       '';
 
       shellHook = ''

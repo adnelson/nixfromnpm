@@ -93,16 +93,21 @@ let
       fi
     '';
   };
+
   # Directory containing build tools for buildNodePackage
   node-build-tools = pkgs.stdenv.mkDerivation {
     name = "node-build-tools";
-    buildInputs = [pkgs.makeWrapper];
+    buildInputs = [pkgs.makeWrapper nodejs pkgs.python2];
     buildCommand = ''
       mkdir -p $out
       cp -r ${./tools} $out/bin
       chmod -R +w $out/bin
       wrapProgram $out/bin/check-package-json \
         --set SEMVER_PATH ${nodejs}/lib/node_modules/npm/node_modules/semver
+      wrapProgram $out/bin/execute-install-scripts \
+        --prefix PATH : ${dirOf pkgs.python2.interpreter} \
+        --prefix PATH : ${dirOf pkgs.stdenv.shell} \
+        --prefix PATH : ${nodejs}/lib/node_modules/npm/bin/node-gyp-bin
       patchShebangs $out/bin
     '';
   };
@@ -120,13 +125,21 @@ let
     #!${pkgs.stdenv.shell}
     exec ${pkgs.python2.interpreter} ${./tools/install-binaries} "$@"
   '';
+
+  # This expression builds the raw C headers and source files for the base
+  # node.js installation. Node packages which use the C API for node need to
+  # link against these files and use the headers.
+  nodejsSources = pkgs.runCommand "node-sources" {} ''
+    tar --no-same-owner --no-same-permissions -xf ${nodejs.src}
+    mv $(find . -type d -mindepth 1 -maxdepth 1) $out
+  '';
 in
 
 rec {
   inherit nodejs;
 
   buildNodePackage = import ./buildNodePackage.nix {
-    inherit pkgs nodejs buildNodePackage xcode-wrapper node-build-tools;
+    inherit pkgs nodejs buildNodePackage xcode-wrapper node-build-tools nodejsSources;
   };
   # A generic package that will fail to build. This is used to indicate
   # packages that are broken, without failing the entire generation of
@@ -198,7 +211,7 @@ rec {
 
       mkScope = scope: ({
         inherit fetchUrlNamespaced fetchUrlWithHeaders namespaceTokens;
-        inherit pkgs buildNodePackage brokenPackage extras;
+        inherit pkgs buildNodePackage brokenPackage extras nodejsSources;
       } // scope);
 
       callPackage = pkgs.newScope (mkScope {
@@ -221,7 +234,7 @@ rec {
       nodePackages = makeExtensible (extends overrides initialNodePackages);
 
     in
-      { inherit callPackage namespaceTokens pkgs node-build-tools;
+      { inherit callPackage namespaceTokens pkgs node-build-tools nodejsSources;
         nodePackages = nodePackages // {inherit nodejs;};
         nodeLib = self args;
       });

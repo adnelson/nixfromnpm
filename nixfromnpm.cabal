@@ -25,6 +25,7 @@ data-files:   nix-libs/nodeLib/buildNodePackage.nix
             , nix-libs/nodeLib/tools/check-package-json
             , nix-libs/nodeLib/tools/install-binaries
             , nix-libs/nodeLib/tools/patch-dependencies
+            , nix-libs/nodeLib/tools/execute-install-scripts
 
 
 source-repository head
