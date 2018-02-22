@@ -55,32 +55,32 @@ function checkDependencies() {
   var semver = require(process.env.SEMVER_PATH);
   // This will be keyed on the dependency name and version, and valued with
   // the error.
-  var errorsFound = {}
+  var errorsFound = {};
+  var warningsFound = {};
 
   // Given the name and version range of a package, check:
   // * That a package with the given name exists in the node_modules folder.
   // * That its version satisfies the given version bounds.
-  function checkDependency(name, versionRange, dependencyType) {
+  function checkDependency(name, versionRange, errorIfMissing, description) {
     process.stderr.write("  " + name + "@" + versionRange + " -> ");
     var dependencyPackageObj;
     var pkgJsonPath = process.cwd() + "/node_modules/" + name + "/package.json";
     var errorKey = name + "@" + versionRange;
+    function err(message) {
+      var prefix = errorIfMissing ? "ERROR" : "WARNING";
+      message = "(" + description + ") " + message;
+      console.error(prefix + ": " + message);
+      (errorIfMissing ? errorsFound : warningsFound)[errorKey] = message;
+    }
     try {
       dependencyPackageObj = JSON.parse(fs.readFileSync(pkgJsonPath));
     } catch (e) {
-      var message = "Not found in node_modules";
-      // Case: the file didn't exist
-      errorsFound[errorKey] = message;
-      console.error("ERROR: " + message);
-      return
+      return err("Not found in node_modules");
     }
     // Check that the version matches
     var version = dependencyPackageObj.version;
     if (!semver.satisfies(version, versionRange)) {
-      var message = "version " + version + " doesn't match range " + versionRange;
-      errorsFound[errorKey] = message
-      console.error("ERROR: " + message);
-      return
+      return err("version " + version + " doesn't match range " + versionRange);
     }
     console.error("OK (found version " + dependencyPackageObj.version + ")");
 
@@ -88,7 +88,8 @@ function checkDependencies() {
     if (dependencyPackageObj.peerDependencies) {
       console.error("Checking peer dependencies of " + name);
       for (var depName in dependencyPackageObj.peerDependencies) {
-        checkDependency(depName, dependencyPackageObj.peerDependencies[depName]);
+        var range = dependencyPackageObj.peerDependencies[depName];
+        checkDependency(depName, range, false, "peer dependency of " + name);
       }
     };
   }
@@ -102,17 +103,24 @@ function checkDependencies() {
       continue;
     }
     if (packageObj[depType]) {
-      console.log("Checking " + depType);
+      console.log("Checking " + depType + " of " + packageObj.name);
       for (var depName in packageObj[depType]) {
-        checkDependency(depName, packageObj[depType][depName], depType);
+        checkDependency(depName, packageObj[depType][depName], true,
+                        "Appears in " + packageObj.name + "'s " + depType);
       }
     }
   }
 
+  if (JSON.stringify(warningsFound) !== "{}") {
+    console.error("Found the following warnings:");
+    for (var depName in warningsFound) {
+      console.error("  " + depName + ":  " + warningsFound[depName]);
+    }
+  }
   if (JSON.stringify(errorsFound) !== "{}") {
     console.error("Found the following errors:");
     for (var depName in errorsFound) {
-      console.error(depName + ":  " + errorsFound[depName]);
+      console.error("  " + depName + ":  " + errorsFound[depName]);
     }
     fail("One or more dependencies were unsatisfied. :(");
   }
