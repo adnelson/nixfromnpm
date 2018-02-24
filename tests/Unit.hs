@@ -156,7 +156,7 @@ metaToNixSpec = describe "converting package meta to nix" $ do
 
   it "should grab the homepage" $ do
     let homepageStr = "http://example.com"
-        mHomepage = parseURI homepageStr
+        mHomepage = parseURI (T.unpack homepageStr)
     let converted = metaToNix (empty {pmHomepage = mHomepage})
     fromJust converted `shouldBe` mkNonRecSet ["homepage" $= mkStr homepageStr]
 
