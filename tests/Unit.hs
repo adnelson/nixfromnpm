@@ -4,11 +4,13 @@ module Main (main) where
 
 import ClassyPrelude hiding ((<>))
 import Data.Either (isRight, isLeft)
+import Nix.Expr
 import Test.Hspec
 import Test.QuickCheck (property, Arbitrary(..), oneof)
 import qualified Data.Text as T
 
 import NixFromNpm
+import NixFromNpm.Common
 import NixFromNpm.Git.Types as Git
 import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version as Npm
@@ -86,7 +88,7 @@ npmVersionParserSpec = describe "npm version parser" $ do
     parseNpmVersionRange "0.0.0" `shouldBeJ` SemVerRange (Eq (semver 0 0 0))
 
   it "should parse a tag" $ do
-    parseNpmVersionRange "xyz" `shouldBeJ` NixFromNpm.Tag "xyz"
+    parseNpmVersionRange "xyz" `shouldBeJ` Npm.Tag "xyz"
 
   it "should parse a git uri" $ do
     let owner = "holidaycheck"
@@ -137,9 +139,50 @@ npmNameAndVersionParserSpec = describe "npm name@version parser" $ do
     parseNameAndRange "foo%1.2.3" `shouldThrow` \(UnrecognizedVersionFormat msg) -> do
       "use '@' instead" `isInfixOf` msg
 
+metaToNixSpec :: Spec
+metaToNixSpec = describe "converting package meta to nix" $ do
+  let empty = PackageMeta Nothing Nothing Nothing mempty mempty
+  it "should return nothing for an empty metadata" $ do
+    metaToNix empty `shouldBe` Nothing
+  it "should grab the description" $ do
+    let description = "Some description"
+    let converted = metaToNix (empty {pmDescription = Just description})
+    fromJust converted `shouldBe` mkNonRecSet ["description" $= mkStr description]
+
+  it "should grab the author" $ do
+    let author = "Some author"
+    let converted = metaToNix (empty {pmAuthor = Just author})
+    fromJust converted `shouldBe` mkNonRecSet ["author" $= mkStr author]
+
+  it "should grab the homepage" $ do
+    let homepageStr = "http://example.com"
+        mHomepage = parseURI homepageStr
+    let converted = metaToNix (empty {pmHomepage = mHomepage})
+    fromJust converted `shouldBe` mkNonRecSet ["homepage" $= mkStr homepageStr]
+
+  it "should grab keywords" $ do
+    let keywords = ["keyword1", "keyword2"]
+    let converted = metaToNix (empty {pmKeywords = fromList keywords})
+    fromJust converted `shouldBe` mkNonRecSet ["keywords" $= mkList (mkStr <$> keywords)]
+
+  describe "platforms" $ do
+    let check ps expr = do
+          let converted = metaToNix (empty {pmPlatforms = fromList ps})
+          fromJust converted `shouldBe` mkNonRecSet ["platforms" $= expr]
+
+    it "should convert a single platform" $ do
+      let platforms = [LinuxPlatform]
+      check platforms (mkDots "pkgs" ["stdenv", "lib", "platforms"] !. "linux")
+
+    it "should convert platforms" $ do
+      let platforms = [LinuxPlatform, OpenBSDPlatform]
+      let withPlatforms = mkWith (mkDots "pkgs" ["stdenv", "lib", "platforms"])
+      check platforms (withPlatforms ("linux" $++ "openbsd"))
+
 main :: IO ()
 main = hspec $ do
   npmVersionParserSpec
   npmNameParserSpec
   npmNameAndVersionParserSpec
   gitIdParsingSpec
+  metaToNixSpec

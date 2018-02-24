@@ -1,7 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
-module NixFromNpm (module NixFromNpm.Common,
-                   module NixFromNpm.Options,
+module NixFromNpm (module NixFromNpm.Options,
                    module Data.SemVer,
                    module NixFromNpm.Npm.Version,
                    module NixFromNpm.Npm.Types,
@@ -12,7 +11,6 @@ module NixFromNpm (module NixFromNpm.Common,
 
 import Data.SemVer
 
-import NixFromNpm.Common
 import NixFromNpm.Options
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.Types

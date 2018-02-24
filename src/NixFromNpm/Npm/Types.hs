@@ -8,7 +8,7 @@ module NixFromNpm.Npm.Types where
 
 import qualified ClassyPrelude as CP
 import Data.Aeson
-import Data.Aeson.Types as Aeson (Parser, typeMismatch)
+import Data.Aeson.Types as Aeson (Parser, typeMismatch, withText)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 import Data.SemVer (SemVer, SemVerRange)
@@ -25,12 +25,33 @@ data PackageInfo = PackageInfo {
   piTags :: Record SemVer
   } deriving (Show, Eq)
 
+-- | Taken from https://nodejs.org/api/process.html#process_process_platform,
+-- and filtered to those that correspond to nixpkgs platforms.
+data NodePlatform
+  = DarwinPlatform
+  | FreeBSDPlatform
+  | OpenBSDPlatform
+  | LinuxPlatform
+  | SunOSPlatform
+  deriving (Show, Eq)
+
+-- | Parse a node platform from a string.
+parseNodePlatform :: Text -> Maybe NodePlatform
+parseNodePlatform = \case
+  "linux" -> pure LinuxPlatform
+  "darwin" -> pure DarwinPlatform
+  "freebsd" -> pure FreeBSDPlatform
+  "openbsd" -> pure OpenBSDPlatform
+  "sunos" -> pure SunOSPlatform
+  _ -> Nothing
+
 -- | Metadata about a package.
 data PackageMeta = PackageMeta {
   pmDescription :: Maybe Text,
   pmAuthor :: Maybe Text,
   pmHomepage :: Maybe URI,
-  pmKeywords :: Vector Text
+  pmKeywords :: Vector Text,
+  pmPlatforms :: Vector NodePlatform
   } deriving (Show, Eq)
 
 -- | Expresses all of the information that a version of a package needs, in
@@ -178,6 +199,8 @@ instance FromJSON VersionInfo where
       let getString = \case {String s -> Just s; _ -> Nothing}
       description <- o .:? "description"
       author <- o .:? "author" <|> pure Nothing
+      maybePlatforms :: Maybe (Vector Text) <- o .:? "os" <|> pure Nothing
+      let platforms = maybe mempty (catMaybes . map parseNodePlatform) maybePlatforms
       homepage <- o .:? "homepage" >>= \case
         Nothing -> return Nothing
         Just (String txt) -> return $ parseURIText txt
@@ -192,7 +215,7 @@ instance FromJSON VersionInfo where
         -- Otherwise, this is an error, but just return an empty array.
         getKeywords _ = mempty
       keywords <- map getKeywords $ o .:? "keywords" .!= Null
-      return $ PackageMeta description author homepage keywords
+      return $ PackageMeta description author homepage keywords platforms
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
       Left _ -> throw $ VersionSyntaxError version

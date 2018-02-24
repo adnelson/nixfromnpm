@@ -135,6 +135,15 @@ distInfoToNix maybeNamespace (Just DistInfo{..}) = do
       bindings = ["url" $= mkStr diUrl, algo $= mkStr hash] <> authBinding
   fetchurl @@ mkNonRecSet bindings
 
+-- | Convert a NodePlatform into a nix variable name
+nodePlatformToNix :: NodePlatform -> Text
+nodePlatformToNix = \case
+  DarwinPlatform -> "darwin"
+  FreeBSDPlatform -> "freebsd"
+  OpenBSDPlatform -> "openbsd"
+  LinuxPlatform -> "linux"
+  SunOSPlatform -> "solaris"
+
 -- | Converts package meta to a nix expression, if it exists.
 metaToNix :: PackageMeta -> Maybe NExpr
 metaToNix PackageMeta{..} = do
@@ -146,7 +155,16 @@ metaToNix PackageMeta{..} = do
     keywords = case pmKeywords of
       ks | null ks -> []
          | otherwise -> ["keywords" $= mkList (toList (map mkStr ks))]
-  case homepage <> description <> keywords <> author of
+    stdenvPlatforms = mkDots "pkgs" ["stdenv", "lib", "platforms"]
+    platforms = case map nodePlatformToNix $ toList pmPlatforms of
+      [] -> []
+      ps -> singleton $ "platforms" $= case ps of
+        -- For a single one, just do pkgs.stdenv.lib.platforms.<platform>
+        [p] -> stdenvPlatforms !. p
+        -- For multiples, use the `with` syntax, and since each is a
+        -- list, join with the concatenation operator.
+        (p:ps) -> mkWith stdenvPlatforms $ foldl' ($++) (mkSym p) (mkSym <$> ps)
+  case homepage <> description <> keywords <> author <> platforms of
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
 
