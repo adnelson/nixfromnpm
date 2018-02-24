@@ -8,7 +8,7 @@ module NixFromNpm.Npm.Types where
 
 import qualified ClassyPrelude as CP
 import Data.Aeson
-import Data.Aeson.Types as Aeson (Parser, typeMismatch, withText)
+import Data.Aeson.Types as Aeson (Parser, typeMismatch, withObject)
 import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
 import Data.SemVer (SemVer, SemVerRange)
@@ -28,22 +28,31 @@ data PackageInfo = PackageInfo {
 -- | Taken from https://nodejs.org/api/process.html#process_process_platform,
 -- and filtered to those that correspond to nixpkgs platforms.
 data NodePlatform
-  = DarwinPlatform
-  | FreeBSDPlatform
-  | OpenBSDPlatform
-  | LinuxPlatform
-  | SunOSPlatform
+  = Darwin
+  | FreeBSD
+  | OpenBSD
+  | Linux
+  | SunOS
   deriving (Show, Eq)
 
+-- | Convert a NodePlatform into text
+nodePlatformToText :: IsString t => NodePlatform -> t
+nodePlatformToText = \case
+  Darwin -> "darwin"
+  FreeBSD -> "freebsd"
+  OpenBSD -> "openbsd"
+  Linux -> "linux"
+  SunOS -> "solaris"
+
 -- | Parse a node platform from a string.
-parseNodePlatform :: Text -> Maybe NodePlatform
+parseNodePlatform :: Alternative f => Text -> f NodePlatform
 parseNodePlatform = \case
-  "linux" -> pure LinuxPlatform
-  "darwin" -> pure DarwinPlatform
-  "freebsd" -> pure FreeBSDPlatform
-  "openbsd" -> pure OpenBSDPlatform
-  "sunos" -> pure SunOSPlatform
-  _ -> Nothing
+  "linux" -> pure Linux
+  "darwin" -> pure Darwin
+  "freebsd" -> pure FreeBSD
+  "openbsd" -> pure OpenBSD
+  "sunos" -> pure SunOS
+  _ -> empty
 
 -- | Metadata about a package.
 data PackageMeta = PackageMeta {
@@ -53,6 +62,34 @@ data PackageMeta = PackageMeta {
   pmKeywords :: Vector Text,
   pmPlatforms :: Vector NodePlatform
   } deriving (Show, Eq)
+
+-- | Default (empty) package metadata.
+emptyPackageMeta :: PackageMeta
+emptyPackageMeta = PackageMeta Nothing Nothing Nothing mempty mempty
+
+instance FromJSON PackageMeta where
+  parseJSON = withObject "PackageMeta" $ \o -> do
+    let getString = \case {String s -> Just s; _ -> Nothing}
+    description <- o .:? "description"
+    author <- o .:? "author" <|> pure Nothing
+    maybePlatforms :: Maybe (Vector Text) <- o .:? "os" <|> pure Nothing
+    let platforms = maybe mempty (catMaybes . map parseNodePlatform) maybePlatforms
+    homepage <- o .:? "homepage" >>= \case
+      Nothing -> return Nothing
+      Just (String txt) -> return $ parseURIText txt
+      Just (Array stuff) -> case toList $ catMaybes (getString <$> stuff) of
+        [] -> return Nothing
+        (uri:_) -> return $ parseURIText uri
+    let
+      -- If keywords are a string, split on commas and strip whitespace.
+      getKeywords (String s) = fromList $ T.strip <$> T.split (==',') s
+      -- If an array, just take the array.
+      getKeywords (Array a) = catMaybes $ map getString a
+      -- Otherwise, this is an error, but just return an empty array.
+      getKeywords _ = mempty
+    keywords <- map getKeywords $ o .:? "keywords" .!= Null
+    return $ PackageMeta description author homepage keywords platforms
+
 
 -- | Expresses all of the information that a version of a package needs, in
 -- the abstract (e.g. using version ranges instead of explicit versions).
@@ -181,7 +218,7 @@ getDict key obj = case H.lookup key obj of
   _ -> return mempty
 
 instance FromJSON VersionInfo where
-  parseJSON = getObject "version info" >=> \o -> do
+  parseJSON = withObject "version info" $ \o -> do
     listedDependencies <- getDict "dependencies" o
     devDependencies <- getDict "devDependencies" o
     optionalDependencies <- getDict "optionalDependencies" o
@@ -195,27 +232,7 @@ instance FromJSON VersionInfo where
     dist <- o .:? "dist"
     pkgName <- o .: "name"
     version <- o .: "version"
-    packageMeta <- do
-      let getString = \case {String s -> Just s; _ -> Nothing}
-      description <- o .:? "description"
-      author <- o .:? "author" <|> pure Nothing
-      maybePlatforms :: Maybe (Vector Text) <- o .:? "os" <|> pure Nothing
-      let platforms = maybe mempty (catMaybes . map parseNodePlatform) maybePlatforms
-      homepage <- o .:? "homepage" >>= \case
-        Nothing -> return Nothing
-        Just (String txt) -> return $ parseURIText txt
-        Just (Array stuff) -> case toList $ catMaybes (getString <$> stuff) of
-          [] -> return Nothing
-          (uri:_) -> return $ parseURIText uri
-      let
-        -- If keywords are a string, split on commas and strip whitespace.
-        getKeywords (String s) = fromList $ T.strip <$> T.split (==',') s
-        -- If an array, just take the array.
-        getKeywords (Array a) = catMaybes $ map getString a
-        -- Otherwise, this is an error, but just return an empty array.
-        getKeywords _ = mempty
-      keywords <- map getKeywords $ o .:? "keywords" .!= Null
-      return $ PackageMeta description author homepage keywords platforms
+    packageMeta <- parseJSON (Object o)
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
     case parseSemVer version of
       Left _ -> throw $ VersionSyntaxError version
