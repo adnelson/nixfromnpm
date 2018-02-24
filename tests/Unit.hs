@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE QuasiQuotes #-}
 module Main (main) where
 
 import ClassyPrelude hiding ((<>))
