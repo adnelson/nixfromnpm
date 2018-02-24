@@ -1,14 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE QuasiQuotes #-}
 module Main (main) where
 
 import ClassyPrelude hiding ((<>))
 import Data.Either (isRight, isLeft)
+import Data.Aeson (Value(..), decode)
+import Nix.Expr
 import Test.Hspec
 import Test.QuickCheck (property, Arbitrary(..), oneof)
+import NeatInterpolation (text)
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 
 import NixFromNpm
+import NixFromNpm.Common hiding (decode)
 import NixFromNpm.Git.Types as Git
 import NixFromNpm.Npm.PackageMap (PackageName(..), parsePackageName)
 import NixFromNpm.Npm.Version as Npm
@@ -86,7 +93,7 @@ npmVersionParserSpec = describe "npm version parser" $ do
     parseNpmVersionRange "0.0.0" `shouldBeJ` SemVerRange (Eq (semver 0 0 0))
 
   it "should parse a tag" $ do
-    parseNpmVersionRange "xyz" `shouldBeJ` NixFromNpm.Tag "xyz"
+    parseNpmVersionRange "xyz" `shouldBeJ` Npm.Tag "xyz"
 
   it "should parse a git uri" $ do
     let owner = "holidaycheck"
@@ -137,9 +144,89 @@ npmNameAndVersionParserSpec = describe "npm name@version parser" $ do
     parseNameAndRange "foo%1.2.3" `shouldThrow` \(UnrecognizedVersionFormat msg) -> do
       "use '@' instead" `isInfixOf` msg
 
+parsePackageMetadataSpec :: Spec
+parsePackageMetadataSpec = describe "parse package metadata JSON" $ do
+  let unsafeDecode = fromJust . decode . BL.fromStrict . T.encodeUtf8
+  let meta = emptyPackageMeta
+  it "should parse a description" $ do
+    let pkgJSON = unsafeDecode [text|{"description": "hey there"}|]
+    pkgJSON `shouldBe` meta {pmDescription = Just "hey there"}
+
+  it "should parse keywords" $ do
+    let pkgJSON = unsafeDecode [text|{"keywords": ["awesome", "amazing"]}|]
+    pkgJSON `shouldBe` meta {pmKeywords = fromList ["awesome", "amazing"]}
+
+  it "should parse keywords separated by commas" $ do
+    let pkgJSON = unsafeDecode [text|{"keywords": "awesome, amazing"}|]
+    pkgJSON `shouldBe` meta {pmKeywords = fromList ["awesome", "amazing"]}
+
+  it "should parse platforms" $ do
+    let pkgJSON = unsafeDecode [text|{"os": ["darwin", "linux"]}|]
+    pkgJSON `shouldBe` meta {pmPlatforms = fromList [Darwin, Linux]}
+
+  it "should ignore platforms it doesn't recognize" $ do
+    let pkgJSON = unsafeDecode [text|{"os": ["darwin", "weird"]}|]
+    pkgJSON `shouldBe` meta {pmPlatforms = fromList [Darwin]}
+
+  it "should parse multiple keys" $ do
+    let pkgJSON = unsafeDecode [text|{
+      "description": "hey there",
+      "keywords": ["awesome", "amazing"],
+      "os": ["darwin", "weird"]
+    }|]
+    pkgJSON `shouldBe` meta {
+      pmDescription = Just "hey there",
+      pmKeywords = fromList ["awesome", "amazing"],
+      pmPlatforms = fromList [Darwin]
+      }
+
+
+metaToNixSpec :: Spec
+metaToNixSpec = describe "converting package meta to nix" $ do
+  let meta = emptyPackageMeta
+  it "should return nothing for an empty metadata" $ do
+    metaToNix meta `shouldBe` Nothing
+
+  it "should grab the description" $ do
+    let description = "Some description"
+    let converted = metaToNix (meta {pmDescription = Just description})
+    fromJust converted `shouldBe` mkNonRecSet ["description" $= mkStr description]
+
+  it "should grab the author" $ do
+    let author = "Some author"
+    let converted = metaToNix (meta {pmAuthor = Just author})
+    fromJust converted `shouldBe` mkNonRecSet ["author" $= mkStr author]
+
+  it "should grab the homepage" $ do
+    let homepageStr = "http://example.com"
+        mHomepage = parseURI (T.unpack homepageStr)
+    let converted = metaToNix (meta {pmHomepage = mHomepage})
+    fromJust converted `shouldBe` mkNonRecSet ["homepage" $= mkStr homepageStr]
+
+  it "should grab keywords" $ do
+    let keywords = ["keyword1", "keyword2"]
+    let converted = metaToNix (meta {pmKeywords = fromList keywords})
+    fromJust converted `shouldBe` mkNonRecSet ["keywords" $= mkList (mkStr <$> keywords)]
+
+  describe "platforms" $ do
+    let check ps expr = do
+          let converted = metaToNix (meta {pmPlatforms = fromList ps})
+          fromJust converted `shouldBe` mkNonRecSet ["platforms" $= expr]
+
+    it "should convert a single platform" $ do
+      let platforms = [Linux]
+      check platforms (mkDots "pkgs" ["stdenv", "lib", "platforms"] !. "linux")
+
+    it "should convert platforms" $ do
+      let platforms = [Linux, OpenBSD]
+      let withPlatforms = mkWith (mkDots "pkgs" ["stdenv", "lib", "platforms"])
+      check platforms (withPlatforms ("linux" $++ "openbsd"))
+
 main :: IO ()
 main = hspec $ do
   npmVersionParserSpec
   npmNameParserSpec
   npmNameAndVersionParserSpec
   gitIdParsingSpec
+  metaToNixSpec
+  parsePackageMetadataSpec

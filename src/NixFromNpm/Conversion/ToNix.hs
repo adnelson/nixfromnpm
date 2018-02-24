@@ -146,7 +146,16 @@ metaToNix PackageMeta{..} = do
     keywords = case pmKeywords of
       ks | null ks -> []
          | otherwise -> ["keywords" $= mkList (toList (map mkStr ks))]
-  case homepage <> description <> keywords <> author of
+    stdenvPlatforms = mkDots "pkgs" ["stdenv", "lib", "platforms"]
+    platforms = case map nodePlatformToText $ toList pmPlatforms of
+      [] -> []
+      ps -> singleton $ "platforms" $= case ps of
+        -- For a single one, just do pkgs.stdenv.lib.platforms.<platform>
+        [p] -> stdenvPlatforms !. p
+        -- For multiples, use the `with` syntax, and since each is a
+        -- list, join with the concatenation operator.
+        (p:ps) -> mkWith stdenvPlatforms $ foldl' ($++) (mkSym p) (mkSym <$> ps)
+  case homepage <> description <> keywords <> author <> platforms of
     [] -> Nothing
     bindings -> Just $ mkNonRecSet bindings
 

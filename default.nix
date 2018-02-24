@@ -4,6 +4,7 @@
 , network-uri, optparse-applicative, parsec, pcre-heavy, QuickCheck
 , semver-range, SHA, shelly, stdenv, system-filepath, temporary
 , text, text-render, transformers, unix, unordered-containers
+, neat-interpolation
 }:
 mkDerivation {
   pname = "nixfromnpm";
@@ -31,6 +32,7 @@ mkDerivation {
     monad-control mtl network-uri optparse-applicative parsec
     pcre-heavy QuickCheck semver-range SHA shelly system-filepath
     temporary text text-render transformers unix unordered-containers
+    neat-interpolation
   ];
   description = "Generate nix expressions from npm packages";
   license = stdenv.lib.licenses.mit;
