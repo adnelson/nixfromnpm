@@ -27,24 +27,26 @@ import NixFromNpm.Common
 import Nix.Expr (NExpr)
 import Nix.Parser (Result(..), parseNixFile)
 import Nix.Pretty (prettyNix)
-import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
-                                    toDotNix,
-                                    writeNix,
-                                    rootDefaultNix,
-                                    defaultNixExtending,
-                                    packageJsonDefaultNix,
-                                    packageMapToNix,
-                                    resolvedPkgToNix,
-                                    nodePackagesDir)
+import NixFromNpm.Conversion.ToNix (ResolvedPkg(..))
+import NixFromNpm.Conversion.ToNix (defaultNixExtending, packageJsonDefaultNix)
+import NixFromNpm.Conversion.ToNix (nodePackagesDir)
+import NixFromNpm.Conversion.ToNix (packageMapToNix, resolvedPkgToNix)
+import NixFromNpm.Conversion.ToNix (toDotNix, writeNix, rootDefaultNix)
 import NixFromNpm.Options (NixFromNpmOptions(..))
 import NixFromNpm.Npm.Types (BrokenPackageReason(..))
 import NixFromNpm.Npm.Types (ResolvedDependency(..), unpackPSC, VersionInfo(..))
 import NixFromNpm.Npm.Version (NpmVersionRange(..), showPair, showRangePair)
 import NixFromNpm.Npm.PackageMap (simpleName, pmNumVersions, pmConcat)
-import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..),
-                                  pmLookup, pmDelete, pmMap,
-                                  psToList)
-import NixFromNpm.Npm.Resolve
+import NixFromNpm.Npm.PackageMap (PackageMap, PackageName(..))
+import NixFromNpm.Npm.PackageMap (pmLookup, pmDelete, pmMap, psToList)
+import NixFromNpm.Npm.Resolve (NpmFetcher, FullyDefinedPackage(..))
+import NixFromNpm.Npm.Resolve (PreExistingPackage(..), BrokenPackageReport(..))
+import NixFromNpm.Npm.Resolve (resolveNpmVersionRange, getBroken, bprReason)
+import NixFromNpm.Npm.Resolve (resolved, addBroken, versionInfoToResolved)
+import NixFromNpm.Npm.Resolve (startState, runNpmFetchWith, brokenPackages)
+import NixFromNpm.Npm.Resolve (toFullyDefined, writePackage, extractPkgJson)
+import NixFromNpm.Npm.Resolve (withoutPackage, setting)
+import NixFromNpm.Npm.Settings (NpmFetcherSettings(..), defaultSettings)
 
 -- | The npm lookup utilities will produce a bunch of fully defined packages.
 -- However, the only packages that we want to write are the new ones; that
@@ -101,7 +103,7 @@ scanNodePackagesDir verbose nodePackagesDir = pmConcat <$> do
 
 -- | Given a nodePackages folder, create a default.nix which contains all
 -- of the packages in that folder.
-writeNodePackagesNix :: MonadIO io => Bool -> FilePath -> io ()
+writeNodePackagesNix :: Bool -> FilePath -> NpmFetcher ()
 writeNodePackagesNix verbose path' = do
   path <- absPath path'
   whenM (not <$> doesDirectoryExist (path </> nodePackagesDir)) $ do
@@ -113,11 +115,10 @@ writeNodePackagesNix verbose path' = do
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 -- expressions findable at that path and returns a map of them.
-findExisting :: (MonadBaseControl IO io, MonadIO io)
-             => Bool -- ^ Verbose
+findExisting :: Bool -- ^ Verbose
              -> Maybe Name -- ^ Is `Just` if this is an extension.
              -> FilePath       -- ^ The path to search.
-             -> io (PackageMap PreExistingPackage)
+             -> NpmFetcher (PackageMap PreExistingPackage)
              -- ^ Mapping of package names to maps of versions to nix
              --   expressions.
 findExisting verbose maybeName path = do
@@ -139,11 +140,11 @@ findExisting verbose maybeName path = do
 -- finds any existing packages.
 preloadPackages :: NpmFetcher () -- ^ Add the existing packages to the state.
 preloadPackages = do
-  verbose <- asks nfsVerbose
-  existing <- asks nfsCacheDepth >>= \case
+  verbose <- setting nfsVerbose
+  existing <- setting nfsCacheDepth >>= \case
     n | n < 0 -> return mempty
-      | otherwise -> findExisting verbose Nothing =<< asks nfsOutputPath
-  toExtend <- asks nfsExtendPaths
+      | otherwise -> findExisting verbose Nothing =<< setting nfsOutputPath
+  toExtend <- setting nfsExtendPaths
   libraries <- fmap concat $ forM (H.toList toExtend) $ \(name, path) -> do
     findExisting verbose (Just name) path
   let all = existing <> libraries
@@ -158,14 +159,14 @@ preloadPackages = do
 -- * Creating a nodePackages folder.
 initializeOutput :: NpmFetcher ()
 initializeOutput = do
-  outputPath <- asks nfsOutputPath
-  extensions <- asks nfsExtendPaths
+  outputPath <- setting nfsOutputPath
+  extensions <- setting nfsExtendPaths
   version <- case fromHaskellVersion Paths_nixfromnpm.version of
     Left err -> fatal err
     Right v -> return v
   let defaultNixPath = outputPath </> "default.nix"
       -- skip the action if the path exists and overwrite is disabled.
-      unlessExists path action = asks nfsOverwriteNixLibs >>= \case
+      unlessExists path action = setting nfsOverwriteNixLibs >>= \case
         True -> action
         False -> doesFileExist path >>= \case
           True -> return ()
@@ -227,7 +228,7 @@ dumpFromPkgJson path = do
         -- Convert this to a ResolvedPkg by resolving its dependencies.
         rPkg <- withoutPackage name version $ versionInfoToResolved verinfo
         writeNix (path </> "project.nix") $ resolvedPkgToNix rPkg
-        outputPath <- asks nfsOutputPath
+        outputPath <- setting nfsOutputPath
         writeNix (path </> "default.nix") $
           packageJsonDefaultNix outputPath
 
@@ -295,7 +296,7 @@ dumpPkgFromOptions opts
       putStrLn "No packages given, nothing to do..."
       return $ ExitFailure 1
 dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
-  let settings = defaultSettings {
+  settings <- defaultSettings >>= \s -> pure s {
     nfsGithubAuthToken = nfnoGithubToken,
     nfsNpmAuthTokens = nfnoNpmTokens,
     nfsRegistries = nfnoRegistries,
@@ -317,11 +318,11 @@ dumpPkgFromOptions (opts@NixFromNpmOptions{..}) = do
                  ": ", tshow e]
           addBroken name range (Reason $ show e)
           return $ semver 0 0 0
-      whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
+      whenM (not <$> setting nfsRealTimeWrite) writeNewPackages
     forM nfnoPkgPaths $ \path -> do
       dumpFromPkgJson path
-      whenM (not <$> asks nfsRealTimeWrite) writeNewPackages
-    writeNodePackagesNix False =<< asks nfsOutputPath
+      whenM (not <$> setting nfsRealTimeWrite) writeNewPackages
+    writeNodePackagesNix False =<< setting nfsOutputPath
     showBrokens
     checkForBroken nfnoPkgNames
   return status

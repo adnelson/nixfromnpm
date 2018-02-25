@@ -20,7 +20,6 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Numeric (showHex)
 import System.IO.Temp (openTempFile, createTempDirectory)
-import Network.Curl (Long)
 import Data.List (tails)
 
 import qualified Data.ByteString.Char8 as B
@@ -47,6 +46,7 @@ import NixFromNpm.Npm.Types (VersionInfo(..), PossiblyCircularSemVer(..),
                              PackageInfo(..), BrokenPackageReason(..),
                              DependencyType(..), ResolvedDependency(..),
                              DistInfo(..), Shasum(..))
+import NixFromNpm.Npm.Settings
 import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.PackageMap
 
@@ -68,39 +68,6 @@ data PreExistingPackage
 
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined = Existing
-
--- | Settings that affect the behavior of the NPM fetcher.
-data NpmFetcherSettings = NpmFetcherSettings {
-  nfsRegistries :: [URI],
-  -- ^ List of URIs that we can use to query for NPM packages, in order of
-  -- preference.
-  nfsNpmAuthTokens :: Record AuthToken,
-  -- ^ Used for authorization when fetching a package from a private npm.
-  -- The keys are namespaces.
-  nfsGithubAuthToken :: Maybe AuthToken,
-  -- ^ Used for authorization when fetching a package from github.
-  nfsRequestTimeout :: Long,
-  -- ^ Request timeout.
-  nfsRetries :: Int,
-  -- ^ Number of times to retry HTTP requests.
-  nfsExtendPaths :: Record FilePath,
-  -- ^ Libraries we're extending.
-  nfsOutputPath :: FilePath,
-  -- ^ Path we're outputting generated expressions to.
-  nfsMaxDevDepth :: Int,
-  -- ^ Maximum dev dependency fetch depth.
-  nfsCacheDepth :: Int,
-  -- ^ Depth at which to start using the cache. If this is 0, then we will
-  -- always use the cache if we can. If it's 1, then the top-level package
-  -- will not be cached, but lower-level packages will. Et cetera.
-  nfsRealTimeWrite :: Bool,
-  -- ^ Whether to write packages in real-time as the expressions are generated,
-  -- rather than waiting until the end.
-  nfsOverwriteNixLibs :: Bool,
-  -- ^ If true, allow existing nix libraries in output to be overridden.
-  nfsVerbose :: Bool
-  -- ^ Control verbosity
-  } deriving (Show, Eq)
 
 -- | The state of the NPM fetcher.
 data NpmFetcherState = NpmFetcherState {
@@ -135,6 +102,10 @@ data BrokenPackageReport = BrokenPackageReport {
 -- | The monad for fetching from NPM.
 type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
 
+-- | Apply a function to the current settings to retrieve a setting.
+setting :: (NpmFetcherSettings -> a) -> NpmFetcher a
+setting = asks
+
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
 npmGetHttp :: URI -- ^ URI to hit
@@ -143,8 +114,8 @@ npmGetHttp :: URI -- ^ URI to hit
 npmGetHttp uri headers = do
   let defaultHeaders = [("Connection", "Close"),
                         ("User-Agent", "nixfromnpm-fetcher")]
-  timeout <- asks nfsRequestTimeout
-  retries <- asks nfsRetries
+  timeout <- setting nfsRequestTimeout
+  retries <- setting nfsRetries
   putStrsLn ["Hitting URI ", uriToText uri]
   getHttpWith timeout retries (headers <> defaultHeaders) uri
 
@@ -179,7 +150,7 @@ _getPackageInfo pkgName registryUri = do
   authHeader <- case pkgName of
     PackageName name Nothing -> return [] -- no namespace, no auth
     PackageName name (Just namespace) -> do
-      H.lookup namespace <$> asks nfsNpmAuthTokens >>= \case
+      H.lookup namespace <$> setting nfsNpmAuthTokens >>= \case
         Nothing -> return []
         Just token -> do
           putStrsLn ["Using token ", tshow token, " for namespace ", namespace]
@@ -217,7 +188,7 @@ getPackageInfo name = do
               NoMatchingPackage _ -> tryToFetch registries
               NoMatchingVersion _ -> tryToFetch registries
               err -> throw err
-      info <- tryToFetch =<< asks nfsRegistries
+      info <- tryToFetch =<< setting nfsRegistries
       storePackageInfo name info
       return info
 
@@ -330,7 +301,7 @@ fetchHttp uri = do
 githubCurl :: FromJSON a => URI -> NpmFetcher a
 githubCurl uri = do
   -- Add in the github auth token if it is provided.
-  extraHeaders <- asks nfsGithubAuthToken >>= \case
+  extraHeaders <- setting nfsGithubAuthToken >>= \case
     Nothing -> return []
     Just token -> return [("Authorization", "token " <> token)]
   let headers = extraHeaders <>
@@ -666,7 +637,7 @@ currentDepth = map (\trace -> length trace - 1) $ gets packageStackTrace
 
 -- | Tells us whether we should fetch development dependencies.
 shouldFetchDevs :: NpmFetcher Bool
-shouldFetchDevs = (<) <$> currentDepth <*> asks nfsMaxDevDepth
+shouldFetchDevs = (<) <$> currentDepth <*> setting nfsMaxDevDepth
 
 -- | A VersionInfo is an abstraction of an NPM package. This will resolve
 -- the version info into an actual package (recurring on the dependencies)
@@ -696,7 +667,7 @@ resolveVersionInfo VersionInfo{..} = do
       rpDevDependencies = devDeps
       }
   -- Write to disk if real-time is enabled.
-  whenM (asks nfsRealTimeWrite) $ do
+  whenM (setting nfsRealTimeWrite) $ do
     writePackage viName viVersion $ resolvedPkgToNix rPkg
   -- Store this version's info.
   addPackage viName viVersion $ NewPackage rPkg
@@ -708,7 +679,7 @@ outputDirOf :: PackageName -- ^ Name of the package
             -> NpmFetcher FilePath -- ^ Path to where that package's
                                    -- nix expressions will be stored
 outputDirOf (PackageName pkgName namespace) = do
-  outputDir <- asks nfsOutputPath
+  outputDir <- setting nfsOutputPath
   let folderName = case namespace of
         Nothing -> fixName pkgName
         Just namespace -> concat ["@", namespace, "/", fixName pkgName]
@@ -784,59 +755,6 @@ resolveByTag tag pkgName = do
                          tshow version, ", but no such version of ",
                          tshow pkgName, " exists."]
       Just versionInfo -> versionInfoToSemVer versionInfo
-
--- | Default settings. The one caveat here is that there's no good way
--- to default the output path, so that will throw an error if it's not
--- set.
-defaultSettings :: NpmFetcherSettings
-defaultSettings = NpmFetcherSettings {
-  nfsRequestTimeout = 10,
-  nfsNpmAuthTokens = mempty,
-  nfsGithubAuthToken = Nothing,
-  nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
-  nfsOutputPath = error "default setings provide no output path",
-  nfsExtendPaths = mempty,
-  nfsMaxDevDepth = 1,
-  nfsCacheDepth = 0,
-  nfsRetries = 1,
-  nfsRealTimeWrite = False,
-  nfsOverwriteNixLibs = False,
-  nfsVerbose = False
-  }
-
--- | Pull a ':'-separated list of tokens from the environment and parse
--- them. Return empty if the environment variable isn't set.
-getNpmTokens :: MonadIO io => io (Record AuthToken)
-getNpmTokens = getEnv "NPM_AUTH_TOKENS" >>= \case
-  Nothing -> return mempty
-  Just tokens -> parseNpmTokens (T.split (==':') tokens)
-
--- | The tokens should come in the form of NAMESPACE=TOKEN. This will
--- take all of the strings of that shape and stick them into a record.
-parseNpmTokens :: MonadIO io => [Text] -> io (Record AuthToken)
-parseNpmTokens = foldM step mempty where
-  step tokenMap token = case T.split (=='=') token of
-    [namespace, tokenText] -> do
-      let tok :: AuthToken
-          tok = encodeUtf8 tokenText
-      return $ H.insert namespace (encodeUtf8 tokenText) tokenMap
-    _ -> do
-      warns ["Invalid NPM token: ", token]
-      return tokenMap
-
--- | Use the environment variables to provide better default settings.
-settingsFromEnv :: IO NpmFetcherSettings
-settingsFromEnv = do
-  npmTokensEnv <- getNpmTokens
-  githubTokenEnv <- map encodeUtf8 <$> getEnv "GITHUB_TOKEN"
-  output <- getEnv "NIXFROMNPM_OUTPUT" >>= \case
-    Nothing -> (</> "nixfromnpm_output") <$> getCurrentDirectory
-    Just dir -> return $ fromText dir
-  return $ defaultSettings {
-        nfsNpmAuthTokens = npmTokensEnv,
-        nfsGithubAuthToken = githubTokenEnv,
-        nfsOutputPath = output
-        }
 
 -- | Starting state, with all of the collections empty.
 startState :: NpmFetcherState

@@ -16,7 +16,7 @@ import Options.Applicative (help, long, metavar, short, auto, option, strOption)
 import NixFromNpm.Common
 import NixFromNpm.Conversion.ToNix (nodePackagesDir)
 import NixFromNpm.Npm.PackageMap (PackageName(..))
-import NixFromNpm.Npm.Resolve (getNpmTokens, parseNpmTokens)
+import NixFromNpm.Npm.Settings (getNpmTokens, parseNpmTokens)
 import NixFromNpm.Npm.Version (NpmVersionError, NpmVersionRange)
 import NixFromNpm.Npm.Version (parseNameAndRange)
 

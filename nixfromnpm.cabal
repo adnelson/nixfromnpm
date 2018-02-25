@@ -44,6 +44,7 @@ library
                      , NixFromNpm.Npm.PackageMap
                      , NixFromNpm.Npm.Types
                      , NixFromNpm.Npm.Version
+                     , NixFromNpm.Npm.Settings
                      , NixFromNpm.Options
   other-modules:       Filesystem.Path.Wrappers
                      , NixFromNpm.HttpTools
