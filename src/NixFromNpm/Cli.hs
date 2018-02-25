@@ -10,7 +10,6 @@ import NixFromNpm.Common hiding (getArgs)
 import NixFromNpm.Options (NixFromNpmOptions, parseOptions,
                            validateOptions)
 import NixFromNpm.Conversion.ToDisk (dumpPkgFromOptions)
-import NixFromNpm.Merge (mergeInto, MergeType(..), Source(..), Dest(..))
 
 -- | Execute an argument parser with a list of arguments.
 customExecParser_ :: O.ParserInfo a -> [String] -> IO a
