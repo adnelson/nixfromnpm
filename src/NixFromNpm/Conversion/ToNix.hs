@@ -338,7 +338,7 @@ nodePackagesDir = "nodePackages"
 bindRootPath :: Binding NExpr
 bindRootPath = "nodePackagesPath" $= mkPath ("./" </> nodePackagesDir)
 
--- | The root-level default.nix file, which does not have any extensions.
+-- | The root-level default.nix file.
 rootDefaultNix :: NExpr
 rootDefaultNix = mkFunction defaultParams body where
   lets = [
@@ -347,23 +347,6 @@ rootDefaultNix = mkFunction defaultParams body where
     ]
   genPackages = "nodeLib" !. "generatePackages"
   body = mkLets lets $ genPackages @@ (mkNonRecSet [bindRootPath])
-
--- | Creates the `default.nix` file that is the top-level expression we are
--- generating.
-defaultNixExtending :: Name -- ^ Name of first extension.
-                    -> Record FilePath -- ^ Extensions being included.
-                    -> NExpr -- ^ A generated nix expression.
-defaultNixExtending extName extensions = do
-  mkFunction defaultParams body where
-    -- Map over the expression map, creating a binding for each pair.
-    lets = flip map (H.toList extensions) $ \(name, path) -> do
-      let bindings = defaultInherits <> ["self" $= "nodeLib"]
-      -- Equiv. to `name = import /path {inherit pkgs nodejs; self = nodeLib;}`
-      name $= importWith False path bindings
-    args = [bindRootPath,
-            "extensions" $= mkList (map mkSym (H.keys extensions))]
-    generatePackages = mkSym extName !. "nodeLib" !. "generatePackages"
-    body = mkLets lets $ generatePackages @@ mkNonRecSet args
 
 -- | Create a `default.nix` file for a particular package.json; this simply
 -- imports the package as defined in the given path, and calls into it.

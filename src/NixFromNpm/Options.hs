@@ -35,8 +35,6 @@ instance Exception InvalidNodeLib
 data InvalidOption
   = NpmVersionError NpmVersionError
   | InvalidNodeLib FilePath InvalidNodeLib
-  | InvalidExtensionSyntax Text
-  | DuplicatedExtensionName Name FilePath FilePath
   | InvalidURI Text
   | NoPackageJsonFoundAt FilePath
   | NotPathToPackageJson FilePath
@@ -54,7 +52,6 @@ data RawOptions = RawOptions {
   roNoCache :: Bool,          -- ^ Build all expressions from scratch.
   roCacheDepth :: Int,        -- ^ Depth at which to use cache.
   roDevDepth :: Int,          -- ^ Dev dependency depth.
-  roExtendPaths :: [Text],    -- ^ Extend existing expressions.
   roTest :: Bool,             -- ^ Fetch only; don't write expressions.
   roRegistries :: [Text],     -- ^ List of registries to query.
   roTimeout :: Int,           -- ^ Number of seconds after which to timeout.
@@ -84,7 +81,6 @@ data NixFromNpmOptions = NixFromNpmOptions {
   nfnoNoDefaultNix :: Bool,      -- ^ Disable creation of default.nix file.
   nfnoCacheDepth :: Int,         -- ^ Dependency depth at which to use cache.
   nfnoDevDepth :: Int,           -- ^ Dev dependency depth.
-  nfnoExtendPaths :: Record FilePath, -- ^ Extend existing expressions.
   nfnoTest :: Bool,              -- ^ Fetch only; don't write expressions.
   nfnoRegistries :: [URI],      -- ^ List of registries to query.
   nfnoTimeout :: Int,            -- ^ Number of seconds after which to timeout.
@@ -98,20 +94,9 @@ data NixFromNpmOptions = NixFromNpmOptions {
 textOption :: Mod OptionFields String -> Parser Text
 textOption opts = pack <$> strOption opts
 
--- | Validates an extension folder. The folder must exist, and must contain
--- a default.nix and a node packages directory, and a .nixfromnpm-version file
--- which indicates the version of nixfromnpm used to build it.
-validateExtension :: FilePath -> IO FilePath
-validateExtension = absPath >=> \path -> do
-  let assert' test err = assert test (InvalidNodeLib path err)
-  whenM (not <$> isDirectoryEmpty path) $ do
-    assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
-    assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
-  return path
-
 -- | Validate an output folder. An output folder EITHER must not exist, but
 -- its parent directory does and is writable, OR it does exist, is writable,
--- and follows the extension format.
+-- and follows the correct format.
 validateOutput :: FilePath -> IO FilePath
 validateOutput = absPath >=> \path -> do
   -- Small wrapper function arround the assertion, taking a monadic
@@ -119,9 +104,13 @@ validateOutput = absPath >=> \path -> do
   let assert' test err = assert test (InvalidNodeLib path err)
   doesDirectoryExist path >>= \case
     -- If the directory exists, it must be writable and follow the
-    -- extension format.
-    True -> do assert' (isWritable path) OutputNotWritable
-               validateExtension path
+    -- correct format.
+    True -> do
+      assert' (isWritable path) OutputNotWritable
+      whenM (not <$> isDirectoryEmpty path) $ do
+        assert' (doesFileExist (path </> "default.nix")) NoDefaultNix
+        assert' (doesDirectoryExist (path </> nodePackagesDir)) NoPackageDir
+      return path
     False -> do
       -- If it doesn't exist, look at the parent path, which must
       -- exist and be writable so that we can create the output
@@ -170,7 +159,6 @@ validateOptions opts@(RawOptions{..}) = do
       Nothing -> return []
       Just n -> getTopN (Just n)
   packageNames <- mapM parseNameAndRange roPkgNames
-  extendPaths <- getExtensions roExtendPaths
   packagePaths <- mapM (validateJsPkg . fromText) roPkgPaths
   outputPath <- validateOutput . fromText . stripTrailingSlash $ roOutputPath
   registries <- mapM validateUrl $ (roRegistries <>
@@ -182,7 +170,6 @@ validateOptions opts@(RawOptions{..}) = do
   npmTokensEnv <- getNpmTokens
   return $ NixFromNpmOptions {
     nfnoOutputPath = collapse outputPath,
-    nfnoExtendPaths = extendPaths,
     nfnoGithubToken = roGithubToken <|> githubTokenEnv,
     nfnoNpmTokens = tokensCommandLine <> npmTokensEnv,
     nfnoCacheDepth = if roNoCache then -1 else roCacheDepth,
@@ -204,20 +191,6 @@ validateOptions opts@(RawOptions{..}) = do
     validateUrl rawUrl = case parseURI (unpack rawUrl) of
       Nothing -> throw $ InvalidURI rawUrl
       Just uri -> return uri
-    -- Parses the NAME=PATH extension directives.
-    getExtensions :: [Text] -> IO (Record FilePath)
-    getExtensions = foldM step mempty where
-      step extensions nameEqPath = case T.split (== '=') nameEqPath of
-        [name, path] -> append name path
-        [path] -> append (pathToText $ basename $ fromText path) path
-        _ -> throw $ InvalidExtensionSyntax nameEqPath
-        where
-          append name path = case H.lookup name extensions of
-            Nothing -> do validPath <- validateExtension $ fromText path
-                          return $ H.insert name validPath extensions
-            Just path' -> throw $ DuplicatedExtensionName name
-                                    (fromText path) path'
-
 
 -- | Parses the raw command-line options into the intermediate form that is
 -- used to construct a NixFromNpmOptions object.
@@ -230,7 +203,6 @@ parseOptions = RawOptions
     <*> noCache
     <*> cacheDepth
     <*> devDepth
-    <*> extendPaths
     <*> isTest
     <*> registries
     <*> timeout
@@ -274,12 +246,6 @@ parseOptions = RawOptions
                               <> metavar "DEPTH"
                               <> help cacheHelp
                               <> value 0)
-    extendHelp = ("Use expressions at PATH, optionally called NAME. (supports "
-                  <> "multiples)")
-    extendPaths = many (textOption (long "extend"
-                                    <> short 'e'
-                                    <> metavar "[NAME=]PATH"
-                                    <> help extendHelp))
     isTest = switch (long "test"
                      <> help "Don't write expressions; just test")
     timeout = option auto (long "timeout"
