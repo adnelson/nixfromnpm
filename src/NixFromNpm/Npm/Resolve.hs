@@ -51,20 +51,15 @@ import NixFromNpm.Npm.Version
 import NixFromNpm.Npm.PackageMap
 
 -- | Things which can be converted into nix expressions: either they
--- are actual nix expressions themselves (which can be either
--- existing in the output, or existing in an extension), or they are
--- new packages which we have discovered.
+-- are actual nix expressions themselves, or they are new packages
+-- which we have discovered.
 data FullyDefinedPackage
   = NewPackage ResolvedPkg
   | Existing PreExistingPackage
   deriving (Show, Eq)
 
--- | The type of pre-existing packages, which can either come from the
--- output path, or come from an extension
-data PreExistingPackage
-  = FromOutput NExpr
-  | FromExtension Name NExpr
-  deriving (Show, Eq)
+-- | The type of pre-existing packages, which come from the output path.
+newtype PreExistingPackage = FromOutput NExpr deriving (Show, Eq)
 
 toFullyDefined :: PreExistingPackage -> FullyDefinedPackage
 toFullyDefined = Existing
@@ -83,8 +78,6 @@ data NpmFetcherSettings = NpmFetcherSettings {
   -- ^ Request timeout.
   nfsRetries :: Int,
   -- ^ Number of times to retry HTTP requests.
-  nfsExtendPaths :: Record FilePath,
-  -- ^ Libraries we're extending.
   nfsOutputPath :: FilePath,
   -- ^ Path we're outputting generated expressions to.
   nfsMaxDevDepth :: Int,
@@ -603,8 +596,6 @@ resolveDep name range = H.lookup name <$> gets resolved >>= \case
         Existing (FromOutput _) -> ["already had version ", versionDots,
                                    " in output directory (use --no-cache",
                                    " to override)"]
-        Existing (FromExtension name _) -> ["version ", versionDots,
-                                            " provided by extension ", name]
       return bestVersion
   -- We haven't yet found any versions of this package.
   Nothing -> _resolveDep name range
@@ -795,7 +786,6 @@ defaultSettings = NpmFetcherSettings {
   nfsGithubAuthToken = Nothing,
   nfsRegistries = [fromJust $ parseURI "https://registry.npmjs.org"],
   nfsOutputPath = error "default setings provide no output path",
-  nfsExtendPaths = mempty,
   nfsMaxDevDepth = 1,
   nfsCacheDepth = 0,
   nfsRetries = 1,

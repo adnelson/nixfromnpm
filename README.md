@@ -140,32 +140,6 @@ $ nixfromnpm -f /path/to/package.json -o /path/to/dependency/set
 You can give multiple `-f` arguments to build multiple expressions on
 disk, and it can be used alongside `-p` arguments as well.
 
-#### Extending package libraries
-
-If there is an existing set of packages located in `/path/to/library`,
-you might want to build a new set of packages without modifying the
-existing set. For example, it might be read-only, or you might want to
-separate private packages from public. You can do this with
-extensions:
-
-
-```bash
-$ nixfromnpm -p package -o /some/path --extend /path/to/library
-# OR
-$ nixfromnpm -f /path/to/package -o /some/path --extend /path/to/library
-```
-
-This will discover all of the packages in `/path/to/library` and make
-them available in the generated expressions at `/some/path`, but will
-not modify the library at all. Extensions can also be specified with
-`-e`
-
-You can pass in multiple libraries with multiple invocations of
-`--extend`, but the libraries must have distinct base names
-(e.g. `/path/lib1`, `/path/lib2`). If two libraries share a base name,
-you can rename them with a `NAME=PATH` syntax, e.g. `-E
-lib1=/path1/lib -E lib2=/path2/lib`.
-
 #### Development Dependencies
 
 NPM packages differentiate between dependencies needed at runtime and
