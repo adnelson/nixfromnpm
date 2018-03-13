@@ -18,17 +18,4 @@ def runscript(name):
 
 runscript("preinstall")
 runscript("install")
-
-if os.path.isfile("binding.gyp"):
-   print("Running node-gyp rebuild due to presence of binding.gyp")
-   sys.stdout.flush()
-   if not os.getenv("nodejsSources"):
-      exit("nodejsSources environment variable must be set")
-   cmd = ["node-gyp", "rebuild", "--silly", "--nodedir",
-          os.environ["nodejsSources"]]
-   code = subprocess.call(cmd)
-   if code != 0:
-      print("Command `{}` failed with exit code {}".format(" ".join(cmd), code))
-      exit(code)
-
 runscript("postinstall")
