@@ -106,8 +106,7 @@ let
         --set SEMVER_PATH ${nodejs}/lib/node_modules/npm/node_modules/semver
       wrapProgram $out/bin/execute-install-scripts \
         --prefix PATH : ${dirOf pkgs.python2.interpreter} \
-        --prefix PATH : ${dirOf pkgs.stdenv.shell} \
-        --prefix PATH : ${nodejs}/lib/node_modules/npm/bin/node-gyp-bin
+        --prefix PATH : ${dirOf pkgs.stdenv.shell}
       patchShebangs $out/bin
     '';
   };
