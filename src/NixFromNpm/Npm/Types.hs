@@ -234,11 +234,14 @@ instance FromJSON VersionInfo where
     version <- o .: "version"
     packageMeta <- parseJSON (Object o)
     scripts :: Record Value <- getDict "scripts" o <|> fail "couldn't get scripts"
+    -- Remove any keys which appear in `optionalDependencies` from
+    -- the dependencies and devdependencies sets.
+    let rmOptionals = flip H.difference optionalDependencies
     case parseSemVer version of
       Left _ -> throw $ VersionSyntaxError version
       Right semver -> return $ VersionInfo {
-        viDependencies = dependencies,
-        viDevDependencies = devDependencies,
+        viDependencies = rmOptionals dependencies,
+        viDevDependencies = rmOptionals devDependencies,
         viOptionalDependencies = optionalDependencies,
         viBundledDependencies = bundledDependencies,
         viDist = dist,
