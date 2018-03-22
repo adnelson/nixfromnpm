@@ -1,0 +1,3 @@
+[submodule "tests/node-addon-tutorial"]
+	path = tests/node-addon-tutorial
+	url = https://github.com/justadudewhohacks/node-addon-tutorial

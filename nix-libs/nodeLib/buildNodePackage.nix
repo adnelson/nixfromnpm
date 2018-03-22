@@ -16,13 +16,13 @@
 }:
 
 let
-  inherit (pkgs) stdenv python2 file;
+  inherit (pkgs) stdenv python2 file darwin;
   inherit (pkgs.lib) showVal optional foldl;
   inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
                        intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues concatStringsSep optionalString filter
-                       optionalAttrs;
+                       optionalAttrs optionals;
 
   # Join a list of strings with newlines, filtering out empty lines.
   joinLines = strings: concatStringsSep "\n" (filter (s: s != "") strings);
@@ -577,7 +577,7 @@ let
                     attrValues _devDependencies ++
                     buildInputs ++
                     (optional stdenv.isLinux pkgs.utillinux) ++
-                    (optional stdenv.isDarwin xcode-wrapper);
+                    (optionals stdenv.isDarwin [darwin.cctools xcode-wrapper]);
     } // optionalAttrs stdenv.isLinux {
       LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
     } // derivationOverrides;
