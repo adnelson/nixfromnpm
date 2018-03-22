@@ -58,3 +58,11 @@ jobs:
             cd $(mktemp -d)
             nixfromnpm -o output -f "$PACKAGE_DIR"
             nix-build $PACKAGE_DIR --max-jobs 2
+
+      - run:
+          name: Build package with an optional dependency (that will fail on linux)
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            cd $(mktemp -d)
+            nixfromnpm -o output -p 'sane@2.5.0'
+            nix-build output -A nodePackages.sane_2-5-0 --max-jobs 2

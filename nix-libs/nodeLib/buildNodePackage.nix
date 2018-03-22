@@ -215,8 +215,13 @@ let
     _dependencies = toAttrSet deps;
     # Set of circular dependencies.
     _circularDependencies = toAttrSet circularDependencies;
-    # Set of optional dependencies.
-    _optionalDependencies = toAttrSet optionalDependencies;
+
+    # Since optional dependencies are optional, ignore the ones that fail
+    _optionalDependencies = mapAttrs (_: result: result.value) (
+        filterAttrs (_: result: result.success) (
+          mapAttrs (_: builtins.tryEval) (toAttrSet optionalDependencies)
+        )
+      );
 
     # Dev dependencies will only be included if requested.
     _devDependencies = if !includeDevDependencies then {}
