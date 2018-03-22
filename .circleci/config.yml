@@ -48,3 +48,11 @@ jobs:
             cd $(mktemp -d)
             nixfromnpm -o output -p '@types/node'
             nix-build output -A nodePackages.namespaces.types.node --max-jobs 2
+
+      - run:
+          name: Build package with gyp bindings
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            cd $(mktemp -d)
+            nixfromnpm -o output -p fsevents@1.0.17
+            nix-build output -A nodePackages.fsevents --max-jobs 2
