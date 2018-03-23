@@ -48,3 +48,13 @@ jobs:
             cd $(mktemp -d)
             nixfromnpm -o output -p '@types/node'
             nix-build output -A nodePackages.namespaces.types.node --max-jobs 2
+
+      - run:
+          name: Build package with a gyp binding
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            git submodule update --init tests/node-addon-tutorial
+            PACKAGE_DIR=$PWD/tests/node-addon-tutorial/VectorExample
+            cd $(mktemp -d)
+            nixfromnpm -o output -f "$PACKAGE_DIR"
+            nix-build $PACKAGE_DIR --max-jobs 2
