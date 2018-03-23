@@ -18,7 +18,7 @@
 let
   inherit (pkgs) stdenv python2 file darwin;
   inherit (pkgs.lib) showVal optional foldl;
-  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip
+  inherit (stdenv.lib) fold removePrefix hasPrefix subtractLists flip isList
                        intersectLists isAttrs listToAttrs nameValuePair hasAttr
                        mapAttrs filterAttrs attrNames elem concatMapStrings
                        attrValues concatStringsSep optionalString filter
@@ -215,8 +215,16 @@ let
     _dependencies = toAttrSet deps;
     # Set of circular dependencies.
     _circularDependencies = toAttrSet circularDependencies;
-    # Set of optional dependencies.
-    _optionalDependencies = toAttrSet optionalDependencies;
+
+    # Since optional dependencies are optional, ignore the ones that fail
+    tryOrNull = p: let r = builtins.tryEval "${p}"; in if r.success then p else null;
+
+    _optionalDependencies =
+      if isList optionalDependencies
+      then toAttrSet (filter (x: x != null) (map tryOrNull optionalDependencies))
+      else if isAttrs optionalDependencies
+      then toAttrSet (filterAttrs (_: x: x != null) (mapAttrs (_: tryOrNull) optionalDependencies))
+      else toAttrSet optionalDependencies;
 
     # Dev dependencies will only be included if requested.
     _devDependencies = if !includeDevDependencies then {}
