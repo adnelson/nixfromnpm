@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -12,6 +13,7 @@ module NixFromNpm.Common (
     module Control.Applicative,
     module Control.Exception.Lifted,
     module Control.Monad,
+    module Control.Monad.Catch,
     module Control.Monad.Except,
     module Control.Monad.Identity,
     module Control.Monad.Reader,
@@ -35,10 +37,13 @@ module NixFromNpm.Common (
     module Control.Monad.Trans.Control,
     module System.Console.ANSI,
     Name, AuthToken, Record, (//), (<>),
-    uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
+    uriToText, uriToString, putStrsLn, putStrs, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
     partitionEither, throw, eitherToMaybe
+#if !MIN_VERSION_mono_traversable(1,0,7)
+    , dropSuffix
+#endif
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -46,8 +51,10 @@ import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
                              minimum, try, stripPrefix, ioError,
                              mapM_, sequence_, foldM, forM_, throw, throwIO,
                              filterM, replicateM, writeFile, readFile,
-                             writeFileUtf8, readFileUtf8)
+                             writeFileUtf8, readFileUtf8, catch, catches,
+                             Handler)
 import Control.Exception (throw)
+import Control.Monad.Catch (catch, catches, Handler(..))
 import qualified Prelude as P
 import Control.Monad.RWS.Strict hiding (Any, (<>))
 import Control.Monad (when)
@@ -141,11 +148,13 @@ putStrsLn = putStrLn . concat
 putStrs :: MonadIO m => [Text] -> m ()
 putStrs = putStr . concat
 
+#if !MIN_VERSION_mono_traversable(1,0,7)
 -- | Strip the given suffix from the given string.
 dropSuffix :: Text -> Text -> Text
 dropSuffix suffix input = case T.stripSuffix suffix input of
   Nothing -> input
   Just stripped -> stripped
+#endif
 
 -- | Return a Just value if the argument is True, else Nothing.
 maybeIf :: Bool -> a -> Maybe a

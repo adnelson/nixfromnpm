@@ -1,12 +1,16 @@
-{ nixpkgs ? (import ./nix/17_09.nix) }:
+{
+  nixpkgs ? import ./nix/17_09.nix,
+  compiler ? null,
+}:
 let
-
   config   = { allowUnfree = true; };
 
   overlays = [
-    (newPkgs: oldPkgs: {
+    (newPkgs: oldPkgs: rec {
 
-      haskellPackages = oldPkgs.haskellPackages.override {
+      origHaskellPackages = if compiler == null then oldPkgs.haskellPackages
+                            else oldPkgs.haskell.packages."${compiler}";
+      haskellPackages = origHaskellPackages.override {
         overrides = haskellPackagesNew: haskellPackagesOld:
             { semver-range =
                 haskellPackagesNew.callPackage ./nix/semver-range.nix { };

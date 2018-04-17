@@ -47,11 +47,13 @@ library
                      , NixFromNpm.Options
   other-modules:       Filesystem.Path.Wrappers
                      , NixFromNpm.HttpTools
+                     , NixFromNpm.Merge
                      , NixFromNpm.Npm.Resolve
                      , Paths_nixfromnpm
   other-extensions:    NoImplicitPrelude
   build-depends:       base >=4.8 && < 5.0
                      , classy-prelude
+                     , mono-traversable
                      , text
                      , bytestring
                      , mtl
@@ -79,6 +81,7 @@ library
                      , semver-range >=0.2.7
                      , data-fix
                      , pcre-heavy
+                     , exceptions
   default-language:    Haskell2010
 
 executable nixfromnpm
@@ -98,6 +101,7 @@ test-suite unit-tests
                      , OverloadedStrings
   build-depends:       base >=4.8 && < 5.0
                      , classy-prelude
+                     , mono-traversable
                      , aeson
                      , bytestring
                      , hnix
