@@ -66,15 +66,24 @@ $ nix-shell
 [nix-shell:nixfromnpm]$ cabal run -- <arguments>
 ```
 
-#### Customizing `nixpkgs` version
+#### Customizing `nixpkgs` and GHC versions
 
 By default, we pin the version of `nixpkgs` in order to maintain a
 reliable build. However, if you'd like to build off of `nixpkgs` in
 your `NIX_PATH` or some other custom location:
 
 ```bash
-$ nix-build release.nix -A nixfromnpm --arg nixpkgs '<nixpkgs>'
+$ nix-env -f release.nix -iA nixfromnpm --arg nixpkgs '<nixpkgs>'
 ```
+
+The GHC version can also be set explicitly, although of course, the
+package is not guaranteed to build with any arbitrary GHC version:
+
+```bash
+$ nix-env -f release.nix -iA nixfromnpm --argstr compiler ghc802
+```
+
+Note that the above options also apply to `nix-build`, `nix-shell`, etc.
 
 ### Usage
 

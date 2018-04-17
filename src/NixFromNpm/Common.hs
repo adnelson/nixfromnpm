@@ -13,6 +13,7 @@ module NixFromNpm.Common (
     module Control.Applicative,
     module Control.Exception.Lifted,
     module Control.Monad,
+    module Control.Monad.Catch,
     module Control.Monad.Except,
     module Control.Monad.Identity,
     module Control.Monad.Reader,
@@ -50,8 +51,10 @@ import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
                              minimum, try, stripPrefix, ioError,
                              mapM_, sequence_, foldM, forM_, throw, throwIO,
                              filterM, replicateM, writeFile, readFile,
-                             writeFileUtf8, readFileUtf8)
+                             writeFileUtf8, readFileUtf8, catch, catches,
+                             Handler)
 import Control.Exception (throw)
+import Control.Monad.Catch (catch, catches, Handler(..))
 import qualified Prelude as P
 import Control.Monad.RWS.Strict hiding (Any, (<>))
 import Control.Monad (when)

@@ -81,6 +81,7 @@ library
                      , semver-range >=0.2.7
                      , data-fix
                      , pcre-heavy
+                     , exceptions
   default-language:    Haskell2010
 
 executable nixfromnpm
