@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -35,10 +36,13 @@ module NixFromNpm.Common (
     module Control.Monad.Trans.Control,
     module System.Console.ANSI,
     Name, AuthToken, Record, (//), (<>),
-    uriToText, uriToString, putStrsLn, putStrs, dropSuffix, maybeIf, failC,
+    uriToText, uriToString, putStrsLn, putStrs, maybeIf, failC,
     errorC, joinBy, mapJoinBy, getEnv, modifyMap, unsafeParseURI,
     parseURIText, withColor, withUL, warn, warns, assert, fatal, fatalC,
     partitionEither, throw, eitherToMaybe
+#if !MIN_VERSION_mono_traversable(1,0,7)
+    , dropSuffix
+#endif
   ) where
 
 import ClassyPrelude hiding (assert, asList, find, FilePath, bracket,
@@ -141,11 +145,13 @@ putStrsLn = putStrLn . concat
 putStrs :: MonadIO m => [Text] -> m ()
 putStrs = putStr . concat
 
+#if !MIN_VERSION_mono_traversable(1,0,7)
 -- | Strip the given suffix from the given string.
 dropSuffix :: Text -> Text -> Text
 dropSuffix suffix input = case T.stripSuffix suffix input of
   Nothing -> input
   Just stripped -> stripped
+#endif
 
 -- | Return a Just value if the argument is True, else Nothing.
 maybeIf :: Bool -> a -> Maybe a

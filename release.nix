@@ -1,6 +1,5 @@
-{ nixpkgs ? (import ./nix/17_09.nix) }:
+{ nixpkgs ? import ./nix/17_09.nix }:
 let
-
   config   = { allowUnfree = true; };
 
   overlays = [

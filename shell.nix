@@ -1,1 +1,2 @@
-args@{...}: (import ./release.nix args).nixfromnpm.env
+{nixpkgs ? import ./nix/17_09.nix}:
+  (import ./release.nix {inherit nixpkgs;}).nixfromnpm.env

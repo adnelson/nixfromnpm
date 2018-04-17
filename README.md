@@ -66,6 +66,16 @@ $ nix-shell
 [nix-shell:nixfromnpm]$ cabal run -- <arguments>
 ```
 
+#### Customizing `nixpkgs` version
+
+By default, we pin the version of `nixpkgs` in order to maintain a
+reliable build. However, if you'd like to build off of `nixpkgs` in
+your `NIX_PATH` or some other custom location:
+
+```bash
+$ nix-build release.nix -A nixfromnpm --arg nixpkgs '<nixpkgs>'
+```
+
 ### Usage
 
 #### Using the `nix-node-packages` repo
