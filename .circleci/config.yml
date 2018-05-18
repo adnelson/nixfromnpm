@@ -46,7 +46,7 @@ jobs:
           command: |
             PATH=$(readlink result)/bin:$PATH
             cd $(mktemp -d)
-            nixfromnpm -o output -p @webassembly/wast-printer --dev-depth 1
+            nixfromnpm -o output -p @webassemblyjs/wast-printer --dev-depth 1
             nix-build output -A nodePackages.namespaces.webassemblyjs.wast-parser --max-jobs 2
 
       - run:
