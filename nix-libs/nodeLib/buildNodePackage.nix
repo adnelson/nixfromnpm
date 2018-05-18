@@ -329,7 +329,10 @@ let
                    "'package' directory. Don't know how to handle this :("
               exit 1
             fi
-            mv package node_modules/${dep.fullName}
+
+            mkdir -p node_modules/${dep.fullName}
+            cp -rP package/. node_modules/${dep.fullName}
+            rm -rf ./package
           fi
         ''))
         # Symlink all of the transitive dependencies of the circular packages.
