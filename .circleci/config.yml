@@ -42,6 +42,14 @@ jobs:
             nix-build output -A nodePackages.coffee-script --max-jobs 2
 
       - run:
+          name: Build a scoped package with scoped circular dependencies
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            cd $(mktemp -d)
+            nixfromnpm -o output -p @webassemblyjs/wast-printer --dev-depth 1
+            nix-build output -A nodePackages.namespaces.webassemblyjs.wast-parser --max-jobs 2
+
+      - run:
           name: Build package with a namespace
           command: |
             PATH=$(readlink result)/bin:$PATH
