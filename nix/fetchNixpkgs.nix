@@ -1,6 +1,6 @@
 { rev                             # The Git revision of nixpkgs to fetch
 , sha256                          # The SHA256 of the downloaded data
-, outputSha256 ? null             # The SHA256 output hash
+, outputSha256 ? null             # The SHA256 fixed-output hash
 , system ? builtins.currentSystem # This is overridable if necessary
 }:
 
@@ -10,7 +10,7 @@ if (0 <= builtins.compareVersions builtins.nixVersion "1.12")
 then (
   builtins.fetchTarball {
     url = "https://github.com/NixOS/nixpkgs/archive/${rev}.tar.gz";
-    inherit sha256;
+    sha256 = outputSha256;
   })
 
 # This hack should at least work for Nix 1.11
