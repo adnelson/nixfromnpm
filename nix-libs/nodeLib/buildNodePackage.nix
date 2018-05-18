@@ -442,8 +442,23 @@ let
 
       # Define some environment variables that we will use in the build.
       setVariables = ''
-        # In case this was set by an upstream derivation.
+        # In case these were set by an upstream derivation.
+        #
+        # Upstream unsets only `NODE_PATH`, we have added
+        # the unset of `NIX_LDFLAGS` because:
+        #
+        # With a large number of deps, these env vars can
+        # be large (>128k), such that leaving them exported and
+        # attempting to invoke shell commands can lead to
+        # misleading "Argument list too long" errors, which
+        # actually indicate that kernel-limited env space has
+        # been exceeded. If unsetting `NIX_LDFLAGS` is problematic
+        # or cannot be upstreamed, an alternate approach is to
+        # toggle the exported property on the large env variables
+        # and/or trying to use something like `passAsFile`.
+
         unset NODE_PATH
+        unset NIX_LDFLAGS
 
         # This creates a string for this package which is unique but
         # deterministic. We can use it to create temporary directories
