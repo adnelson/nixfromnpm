@@ -5,6 +5,7 @@
 module NixFromNpm.Npm.Version where
 
 import qualified Data.Text as T
+import qualified Data.HashMap.Strict as H
 
 import Data.SemVer
 import Data.Aeson
@@ -85,6 +86,18 @@ instance FromJSON NpmVersionRange where
     String s -> case parseNpmVersionRange s of
       Nothing -> return $ InvalidVersion s
       Just range -> return range
+    -- NOTE: I couldn't find a mention of this format for specifying
+    -- versions in the official package.json documentation. However,
+    -- this was encountered in the wild:
+    --
+    --   https://github.com/adnelson/nixfromnpm/issues/138
+    --
+    -- Making a special case for it here seems pretty harmless,
+    -- especially if it was at one point supported. Alternatively, we
+    -- could allow parsing dev dependencies and such-like to fail.
+    Object m -> case H.lookup "version" m of
+      Just v -> parseJSON v
+      Nothing -> fail "no 'version' key found in dependency object"
     _ -> Aeson.typeMismatch "string" v
 
 -- | A package name can be passed in directly, or a version range can be
