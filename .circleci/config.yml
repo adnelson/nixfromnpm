@@ -74,3 +74,11 @@ jobs:
             cd $(mktemp -d)
             nixfromnpm -o output -p 'sane@2.5.0'
             nix-build output -A nodePackages.sane_2-5-0 --max-jobs 2
+
+      - run:
+          name: Build package which uses an undocumented format for specifying dependencies
+          command: |
+            PATH=$(readlink result)/bin:$PATH
+            cd $(mktemp -d)
+            nixfromnpm -o output -p deep-diff
+            nix-build output -A nodePackages.deep-diff --max-jobs 2
