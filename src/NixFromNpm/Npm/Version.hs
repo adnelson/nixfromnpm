@@ -5,6 +5,7 @@
 module NixFromNpm.Npm.Version where
 
 import qualified Data.Text as T
+import qualified Data.HashMap.Strict as H
 
 import Data.SemVer
 import Data.Aeson
@@ -85,6 +86,9 @@ instance FromJSON NpmVersionRange where
     String s -> case parseNpmVersionRange s of
       Nothing -> return $ InvalidVersion s
       Just range -> return range
+    Object m -> case H.lookup "version" m of
+      Just v -> parseJSON v
+      Nothing -> fail "no 'version' key found in dependency object"
     _ -> Aeson.typeMismatch "string" v
 
 -- | A package name can be passed in directly, or a version range can be
