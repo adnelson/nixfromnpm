@@ -1,5 +1,5 @@
 {
-  nixpkgs ? import ./nix/17_09.nix,
+  nixpkgs ? import ./nix/nixpkgs.nix,
   compiler ? null
 }:
-  (import ./release.nix {inherit nixpkgs compiler;}).nixfromnpm.env
+  (import ./release.nix { inherit nixpkgs compiler; }).nixfromnpm.env

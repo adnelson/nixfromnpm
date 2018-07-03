@@ -1,5 +1,5 @@
 {
-  nixpkgs ? import ./nix/17_09.nix,
+  nixpkgs ? import ./nix/nixpkgs.nix,
   compiler ? null,
 }:
 let
@@ -7,9 +7,9 @@ let
 
   overlays = [
     (newPkgs: oldPkgs: rec {
-
       origHaskellPackages = if compiler == null then oldPkgs.haskellPackages
                             else oldPkgs.haskell.packages."${compiler}";
+
       haskellPackages = origHaskellPackages.override {
         overrides = haskellPackagesNew: haskellPackagesOld:
             { semver-range =
@@ -17,6 +17,8 @@ let
 
               text-render =
                 haskellPackagesNew.callPackage ./nix/text-render.nix { };
+
+              hnix = haskellPackagesOld.hnix_0_4_0;
 
               nixfromnpm =
                 let
@@ -27,13 +29,11 @@ let
                   dirsToInclude = ["src" "tests" "nix-libs"];
                   filesToInclude = ["LICENSE" "nixfromnpm.cabal"];
                   _filter = path: type: let
-                    # NOTE: using PWD here is hacky; means its
-                    # behavior depends on the directory the command is
-                    # being executed from. Fix me!
-                    subpath = elemAt (splitString "${builtins.getEnv "PWD"}/" path) 1;
+                    subpath = elemAt (splitString "${toString ./.}/" path) 1;
                     spdir = elemAt (splitString "/" subpath) 0;
-                  in elem spdir dirsToInclude ||
-                     (type == "regular" && elem subpath filesToInclude);
+                  in
+                  elem spdir dirsToInclude ||
+                  (type == "regular" && elem subpath filesToInclude);
                 in
                 newPkgs.haskell.lib.overrideCabal
                   (haskellPackagesNew.callPackage ./default.nix { })
