@@ -68,7 +68,7 @@ library
                      , system-filepath
                      , network-uri
                      , directory
-                     , hnix >=0.2.3
+                     , hnix >=0.4.0
                      , optparse-applicative
                      , curl
                      , temporary
