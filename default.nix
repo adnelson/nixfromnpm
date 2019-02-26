@@ -1,10 +1,11 @@
 { mkDerivation, aeson, ansi-terminal, base, bytestring
 , classy-prelude, containers, curl, data-default, data-fix
-, directory, exceptions, hnix, hspec, lifted-base, MissingH
-, monad-control, mono-traversable, mtl, neat-interpolation
-, network-uri, optparse-applicative, parsec, pcre-heavy, QuickCheck
-, semver-range, SHA, shelly, stdenv, system-filepath, temporary
-, text, text-render, transformers, unix, unordered-containers
+, directory, exceptions, hnix, hspec, lifted-base, megaparsec
+, MissingH, monad-control, mono-traversable, mtl
+, neat-interpolation, network-uri, optparse-applicative, parsec
+, pcre-heavy, QuickCheck, regex-tdfa, regex-tdfa-text, semver-range
+, SHA, shelly, stdenv, system-filepath, temporary, text
+, text-render, transformers, unix, unordered-containers
 }:
 mkDerivation {
   pname = "nixfromnpm";
@@ -16,10 +17,10 @@ mkDerivation {
   libraryHaskellDepends = [
     aeson ansi-terminal base bytestring classy-prelude containers curl
     data-default data-fix directory exceptions hnix lifted-base
-    MissingH monad-control mono-traversable mtl network-uri
-    optparse-applicative parsec pcre-heavy semver-range SHA shelly
-    system-filepath temporary text text-render transformers unix
-    unordered-containers
+    megaparsec MissingH monad-control mono-traversable mtl network-uri
+    optparse-applicative parsec pcre-heavy regex-tdfa regex-tdfa-text
+    semver-range SHA shelly system-filepath temporary text text-render
+    transformers unix unordered-containers
   ];
   executableHaskellDepends = [ base optparse-applicative ];
   testHaskellDepends = [
