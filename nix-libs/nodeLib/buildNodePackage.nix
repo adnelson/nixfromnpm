@@ -295,6 +295,7 @@ let
       # Symlink dependencies for node modules.
       link = dep: ''
         if ! [[ -e node_modules/${dep.fullName} ]]; then
+          mkdir -p ${dep.modulePath}
           ln -sv ${dep.fullPath} ${dep.modulePath}
           if [[ -d ${dep}/bin ]]; then
             find -L ${dep}/bin -maxdepth 1 -type f -executable \
@@ -308,12 +309,7 @@ let
       '';
     in concatStringsSep "\n" (
       ["runHook preConfigure"] ++
-      (flip map (attrValues requiredDependencies) (dep:
-        # Create symlinks (or copies) of all of the required dependencies.
-        ''
-          mkdir -p ${dep.modulePath}
-          ${link dep}
-        '')) ++
+      (flip map (attrValues requiredDependencies) link) ++
       ["runHook postConfigure"] ++
       (optional (circulars != []) (let
        in concatStringsSep "\n" [
