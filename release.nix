@@ -18,8 +18,6 @@ let
               text-render =
                 haskellPackagesNew.callPackage ./nix/text-render.nix { };
 
-              hnix = haskellPackagesOld.hnix_0_4_0;
-
               nixfromnpm =
                 let
                   inherit (newPkgs.lib) any flip elem hasSuffix hasPrefix elemAt splitString;
