@@ -56,43 +56,7 @@ let
 
   fetchUrlWithHeaders = fetchUrlNamespaced;
 
-  xcode-wrapper = let
-    xcodeBaseDir = if getEnv "XCODE_BASE_DIR" != ""
-                   then getEnv "XCODE_BASE_DIR"
-                   else "/Applications/Xcode.app";
-  in pkgs.stdenv.mkDerivation {
-    name = "xcode-wrapper";
-    buildCommand = ''
-      # Wrap ln -s with logic checking that target exists.
-      link() {
-        if [[ -e $1 ]]; then
-          ln -s "$1" $2
-        elif [[ $2 == if_exists ]]; then
-          echo "WARNING: $1 doesn't exist, something might not work." >&2
-        else
-          echo "Error: $1 does not exist. Check that XCode is installed." >&2
-          exit 1
-        fi
-      }
-      mkdir -p $out/bin
-      cd $out/bin
-      link /usr/bin/xcode-select
-      link /usr/bin/security
-      link /usr/bin/codesign
-      link /usr/bin/xcodebuild
-      link /usr/bin/xcrun
-      link "${xcodeBaseDir}/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator" if_exists
-
-      cd $out
-      link "${xcodeBaseDir}/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs" if_exists
-
-      # Check that xcodebuild can run, as a canary for a working result
-      if ! $out/bin/xcodebuild -version; then
-        echo "xcodebuild does not seem to be working. :(" >&2
-        exit 1
-      fi
-    '';
-  };
+  xcode-wrapper = pkgs.xcbuild;
 
   # Directory containing build tools for buildNodePackage
   node-build-tools = pkgs.stdenv.mkDerivation {
