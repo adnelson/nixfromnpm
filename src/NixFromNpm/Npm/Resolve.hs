@@ -1,9 +1,11 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 module NixFromNpm.Npm.Resolve where
 
 --------------------------------------------------------------------------
@@ -33,6 +35,9 @@ import Shelly (shelly, run, run_, Sh, errExit, lastExitCode, lastStderr,
                silently)
 import Network.URI (escapeURIString, isUnreserved)
 import Nix.Expr
+#if MIN_VERSION_hnix(0,6,0)
+import Nix.Render (MonadFile)
+#endif
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.SemVer
 
@@ -127,6 +132,10 @@ data BrokenPackageReport = BrokenPackageReport {
 
 -- | The monad for fetching from NPM.
 type NpmFetcher = RWST NpmFetcherSettings () NpmFetcherState IO
+
+#if MIN_VERSION_hnix(0,6,0)
+instance MonadFile NpmFetcher
+#endif
 
 -- | Wraps the curl function to fetch from HTTP, setting some headers and
 -- telling it to follow redirects.
