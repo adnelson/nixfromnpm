@@ -1,8 +1,13 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 module NixFromNpm.Merge where
+
+#if MIN_VERSION_hnix(0,6,0)
+import Nix.Render (MonadFile)
+#endif
 
 import NixFromNpm.Common
 import NixFromNpm.Conversion.ToDisk (writeNodePackagesNix)
@@ -16,7 +21,12 @@ newtype Dest = Dest FilePath
 
 -- | Merges one folder containing expressions into another. After the merge,
 -- generates a new nodePackages/default.nix in the target directory.
-mergeInto :: (MonadIO io, MonadBaseControl IO io)
+mergeInto ::
+#if MIN_VERSION_hnix(0,6,0)
+             (MonadIO io, MonadBaseControl IO io, MonadFile io)
+#else
+             (MonadIO io, MonadBaseControl IO io)
+#endif
           => MergeType -- ^ If DryRun, it will just report what it would have
                        -- otherwise done.
           -> Source -- ^ Source path, containing store objects

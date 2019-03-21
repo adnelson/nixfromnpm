@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -27,6 +28,9 @@ import NixFromNpm.Common
 import Nix.Expr (NExpr)
 import Nix.Parser (Result(..), parseNixFile)
 import Nix.Pretty (prettyNix)
+#if MIN_VERSION_hnix(0,6,0)
+import Nix.Render (MonadFile)
+#endif
 import NixFromNpm.Conversion.ToNix (ResolvedPkg(..),
                                     toDotNix,
                                     writeNix,
@@ -58,7 +62,12 @@ takeNewPackages startingRec = do
 
 -- | Given the path to a package, finds all of the .nix files which parse
 --   correctly.
-parseVersionFiles :: MonadIO io
+parseVersionFiles ::
+#if MIN_VERSION_hnix(0,6,0)
+                     (MonadIO io, MonadFile io)
+#else
+                     MonadIO io
+#endif
                   => Bool        -- ^ Verbose output.
                   -> PackageName -- ^ Name of the package this is a version of.
                   -> FilePath    -- ^ Folder with .nix files for this package.
@@ -83,7 +92,13 @@ parseVersionFiles verbose pkgName folder = do
 
 -- | Given a directory containing npm nix expressions, parse it into a
 -- packagemap of parsed nix expressions.
-scanNodePackagesDir :: MonadIO io => Bool -> FilePath -> io (PackageMap NExpr)
+scanNodePackagesDir ::
+#if MIN_VERSION_hnix(0,6,0)
+  (MonadIO io, MonadFile io)
+#else
+  MonadIO io
+#endif
+  => Bool -> FilePath -> io (PackageMap NExpr)
 scanNodePackagesDir verbose nodePackagesDir = pmConcat <$> do
   forItemsInDir nodePackagesDir $ \dir -> do
     doesDirectoryExist dir >>= \case
@@ -100,7 +115,13 @@ scanNodePackagesDir verbose nodePackagesDir = pmConcat <$> do
 
 -- | Given a nodePackages folder, create a default.nix which contains all
 -- of the packages in that folder.
-writeNodePackagesNix :: MonadIO io => Bool -> FilePath -> io ()
+writeNodePackagesNix ::
+#if MIN_VERSION_hnix(0,6,0)
+  (MonadIO io, MonadFile io)
+#else
+  MonadIO io
+#endif
+  => Bool -> FilePath -> io ()
 writeNodePackagesNix verbose path' = do
   path <- absPath path'
   whenM (not <$> doesDirectoryExist (path </> nodePackagesDir)) $ do
@@ -112,7 +133,12 @@ writeNodePackagesNix verbose path' = do
 
 -- | Given the path to a file possibly containing nix expressions, finds all
 -- expressions findable at that path and returns a map of them.
-findExisting :: (MonadBaseControl IO io, MonadIO io)
+findExisting ::
+#if MIN_VERSION_hnix(0,6,0)
+                (MonadBaseControl IO io, MonadIO io, MonadFile io)
+#else
+                (MonadBaseControl IO io, MonadIO io)
+#endif
              => Bool -- ^ Verbose
              -> FilePath       -- ^ The path to search.
              -> io (PackageMap PreExistingPackage)
